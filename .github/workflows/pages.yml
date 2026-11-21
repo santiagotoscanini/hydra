@@ -23,6 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The site sits behind a CDN that caches .css and .js. Without this, a
+      # deploy serves new HTML with the previous stylesheet for a while.
+      - name: Stamp asset URLs with the commit
+        run: sed -i -E "s#(style\.css|app\.js)\"#\1?v=${GITHUB_SHA::8}\"#g" site/index.html site/docs/index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
