@@ -398,7 +398,15 @@ func printPlan(t *target, p *plan.Plan) {
 		}
 		w.Flush()
 		if n == 0 {
-			fmt.Println("  (nothing runs here)")
+			local := false
+			for _, s := range p.Services {
+				local = local || s.Local
+			}
+			if local {
+				fmt.Println("  (what runs here points at no other service)")
+			} else {
+				fmt.Println("  (nothing runs here)")
+			}
 		}
 		for _, s := range p.Services {
 			if s.Prepare != "" {

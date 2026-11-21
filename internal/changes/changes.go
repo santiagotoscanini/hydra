@@ -9,17 +9,6 @@ import (
 	"strings"
 )
 
-// FromGit returns repo-relative paths that differ between the merge base of
-// baseRef and the worktree's current state: committed, staged, unstaged and
-// untracked changes.
-func FromGit(dir, baseRef string) ([]string, error) {
-	mb, err := git(dir, "merge-base", baseRef, "HEAD")
-	if err != nil {
-		return nil, fmt.Errorf("merge-base %s HEAD: %w", baseRef, err)
-	}
-	return FromBase(dir, strings.TrimSpace(mb))
-}
-
 // FromBase returns paths that differ between commit base and the worktree's
 // current state, untracked files included.
 func FromBase(dir, base string) ([]string, error) {

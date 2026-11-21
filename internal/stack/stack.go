@@ -27,7 +27,7 @@ type Layer struct {
 	Name   string // branch name, or the directory name when detached
 	Root   string // worktree root
 	Parent string // what the layer is diffed against: a branch name or the base ref
-	Base   string // merge-base commit between Parent and this worktree's HEAD
+	Base   string // the commit where this worktree's HEAD left Parent
 }
 
 // Options tune parent detection.
@@ -107,7 +107,12 @@ func Chain(root string, opt Options) ([]Layer, []string, error) {
 		if parent != nil {
 			parentRef = parent.Branch
 		}
-		base, err := git(w.Root, "merge-base", parentRef, "HEAD")
+		var base string
+		if parent != nil {
+			base, err = git(w.Root, "merge-base", parentRef, "HEAD")
+		} else {
+			base, err = forkPoint(w.Root, opt.BaseRef)
+		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: merge-base %s HEAD: %w", w.Root, parentRef, err)
 		}
@@ -177,7 +182,7 @@ func findParent(w Worktree, wts []Worktree, main string, opt Options) (*Worktree
 		}
 	}
 
-	mbBase, err := git(w.Root, "merge-base", opt.BaseRef, "HEAD")
+	mbBase, err := forkPoint(w.Root, opt.BaseRef)
 	if err != nil {
 		return nil, "", err
 	}
@@ -221,7 +226,33 @@ func sharesPastBase(dir, branch, base string) bool {
 	if err != nil {
 		return false
 	}
-	return !isAncestor(dir, strings.TrimSpace(mb), base)
+	for _, ref := range baseRefs(dir, base) {
+		if isAncestor(dir, strings.TrimSpace(mb), ref) {
+			return false
+		}
+	}
+	return true
+}
+
+// baseRefs returns the base ref and, when it is a local branch that tracks
+// one, its remote-tracking branch. The local branch is often behind: agents
+// cut worktrees from origin/main after a fetch that nobody pulled. Measured
+// against the local branch alone, every commit merged in between would count
+// as the worktree's own work and start services it never touched.
+func baseRefs(dir, baseRef string) []string {
+	refs := []string{baseRef}
+	up, err := git(dir, "rev-parse", "--verify", "--quiet", "--symbolic-full-name", baseRef+"@{upstream}")
+	if err == nil && up != "" {
+		refs = append(refs, up)
+	}
+	return refs
+}
+
+// forkPoint returns the commit where HEAD left the base ref: the newest
+// commit HEAD shares with the base branch or its remote-tracking branch.
+func forkPoint(dir, baseRef string) (string, error) {
+	// With two refs, merge-base compares HEAD with their hypothetical merge.
+	return git(dir, append([]string{"merge-base", "HEAD"}, baseRefs(dir, baseRef)...)...)
 }
 
 // createdFrom reads "branch: Created from X" from the branch's reflog.

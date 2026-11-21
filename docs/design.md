@@ -76,7 +76,7 @@ know (checked on v1.124).
 
 ```yaml
 x-hydra:
-  base_ref: main          # changes = diff against merge-base(main, HEAD) + untracked
+  base_ref: main          # changes = diff against where HEAD left main (or its upstream) + untracked
   slot_stride: 200        # slot N listens on port + N*200 (slot 0 = baseline)
   max_slots: 20
   reserved_ports: [6379, 7233, 54321]  # shared infra; no slot may land here

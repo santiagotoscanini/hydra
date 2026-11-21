@@ -153,3 +153,54 @@ func TestParentThatMovedOn(t *testing.T) {
 		t.Errorf("got %s, want b1<main b2<b1", got)
 	}
 }
+
+// The local base branch is behind its remote: a worktree cut from origin/main
+// forked there, and what was merged in between isn't its work.
+func TestBaseBranchBehindItsRemote(t *testing.T) {
+	_, wt := repo(t)
+	run := func(d string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = d
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	main := wt("main")
+	local := run(main, "rev-parse", "HEAD")
+	// Someone else's merged commit, fetched but not pulled.
+	run(main, "commit", "-q", "--allow-empty", "-m", "merged upstream")
+	remote := run(main, "rev-parse", "HEAD")
+	run(main, "reset", "-q", "--hard", local)
+	run(main, "remote", "add", "origin", "/nonexistent")
+	run(main, "update-ref", "refs/remotes/origin/main", remote)
+	run(main, "config", "branch.main.remote", "origin")
+	run(main, "config", "branch.main.merge", "refs/heads/main")
+
+	run(main, "worktree", "add", "-q", "-b", "d", wt("d"), "origin/main")
+	run(wt("d"), "commit", "-q", "--allow-empty", "-m", "d's work")
+
+	chain, _, err := Chain(wt("d"), Options{BaseRef: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(chain); got != "d<main" {
+		t.Fatalf("got %s, want d<main", got)
+	}
+	if chain[0].Base != remote {
+		t.Errorf("base = %s, want origin/main %s (local main is %s)", chain[0].Base, remote, local)
+	}
+
+	// A stack keeps working when its base is the remote's commit.
+	run(main, "worktree", "add", "-q", "-b", "e", wt("e"), "d")
+	chain, _, err = Chain(wt("e"), Options{BaseRef: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := names(chain); got != "d<main e<d" {
+		t.Errorf("got %s, want d<main e<d", got)
+	}
+}
