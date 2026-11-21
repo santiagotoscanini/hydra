@@ -11,6 +11,18 @@ baseline API and database, and a schema change gets its own database.
 Status: exploration; the wrapper works against a real stack. Planning lives in the TickTick list
 "Hydra".
 
+## Install
+
+```sh
+brew tap santiagotoscanini/tap
+brew install --HEAD santiagotoscanini/tap/hydra    # builds main
+brew upgrade --fetch-HEAD santiagotoscanini/tap/hydra
+```
+
+Working on hydra itself: `make link` puts this checkout's build on PATH as
+`hydra` (and unlinks Homebrew's), `make build` refreshes it, `make unlink`
+goes back.
+
 ## Usage
 
 Hydra wraps process-compose. Add `x-hydra` fields to the existing
@@ -18,7 +30,6 @@ Hydra wraps process-compose. Add `x-hydra` fields to the existing
 at which service), then run `hydra` wherever you'd run `process-compose`:
 
 ```sh
-go build -o bin/ ./cmd/...
 hydra              # main checkout: everything; worktree: only what it changed
 hydra plan         # what runs here, on which ports, wired to what, and why
 hydra up web       # also run web in this worktree

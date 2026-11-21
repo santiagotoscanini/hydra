@@ -17,11 +17,8 @@ import (
 // watchCommand is the command line of the hydra-watch process for t. It must
 // come out the same on every render, or each update would restart it.
 func watchCommand(t *target, o options) (string, error) {
-	exe, err := os.Executable()
+	exe, err := stableExecutable()
 	if err != nil {
-		return "", err
-	}
-	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		return "", err
 	}
 	args := []string{exe, "watch", "--root", t.checkout.Root, "-f", t.file}
@@ -39,6 +36,25 @@ func watchCommand(t *target, o options) (string, error) {
 		quoted[i] = shQuote(a)
 	}
 	return "exec " + strings.Join(quoted, " "), nil
+}
+
+// stableExecutable returns a path to this binary that survives upgrades:
+// the `hydra` on PATH when it is this same binary (Homebrew's
+// /opt/homebrew/bin/hydra, or a `make link` symlink), rather than the
+// versioned Cellar directory it resolves to.
+func stableExecutable() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if onPath, err := exec.LookPath("hydra"); err == nil {
+		a, errA := os.Stat(onPath)
+		b, errB := os.Stat(exe)
+		if errA == nil && errB == nil && os.SameFile(a, b) {
+			return filepath.Abs(onPath)
+		}
+	}
+	return exe, nil
 }
 
 // watchCmd runs inside a worktree's process-compose project. Every interval
