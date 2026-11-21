@@ -1,0 +1,67 @@
+# A made-up monorepo: one database, one API, one worker, two frontends that
+# both talk to the API. Every service is the `mocksvc` binary, which answers
+# GET / with its name and slot plus whatever its upstreams answer, so a curl
+# shows the whole chain a request went through.
+#
+# Plain `process-compose up` still runs this file; the x-hydra keys are
+# ignored. Hydra reads them to decide what a worktree runs and how it is wired.
+version: "0.5"
+
+x-hydra:
+  base_ref: main
+  slot_stride: 100 # slot N listens on port + N*100; keep base ports within 100 of each other
+  host: 127.0.0.1
+  port_env: PORT
+  global_paths: # a change here means every service runs from the worktree
+    - go.work
+    - pnpm-lock.yaml
+
+processes:
+  db:
+    command: bin/mocksvc # paths resolve from the repo root
+    x-hydra:
+      port: 20030
+      paths: ["db/**"]
+      url: "postgres://{host}:{port}/app" # what upstreams receive
+      # A worktree that touches db/ gets its own (mock) database.
+      # Mark `shared: true` to always use the baseline one instead.
+
+  api:
+    command: bin/mocksvc # paths resolve from the repo root
+    depends_on:
+      db: { condition: process_started }
+    x-hydra:
+      port: 20010
+      paths: ["apps/api/**", "packages/shared/**"]
+      upstreams:
+        DATABASE_URL: db
+
+  worker:
+    command: bin/mocksvc # paths resolve from the repo root
+    depends_on:
+      db: { condition: process_started }
+    x-hydra:
+      port: 20020
+      paths: ["apps/worker/**", "packages/shared/**"]
+      upstreams:
+        DATABASE_URL: db
+
+  web-a:
+    command: bin/mocksvc # paths resolve from the repo root
+    depends_on:
+      api: { condition: process_started }
+    x-hydra:
+      port: 20000
+      paths: ["apps/web-a/**", "packages/ui/**"]
+      upstreams:
+        API_URL: api
+
+  web-b:
+    command: bin/mocksvc # paths resolve from the repo root
+    depends_on:
+      api: { condition: process_started }
+    x-hydra:
+      port: 20001
+      paths: ["apps/web-b/**", "packages/ui/**"]
+      upstreams:
+        API_URL: api

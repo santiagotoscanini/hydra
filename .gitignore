@@ -1,0 +1,4 @@
+bin/
+.hydra/
+.hydra.local.yaml
+.process-compose/

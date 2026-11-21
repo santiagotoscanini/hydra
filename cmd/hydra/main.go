@@ -1,0 +1,421 @@
+// Command hydra wraps process-compose so each git worktree runs only the
+// services it changed and points everything else at the baseline (the main
+// checkout).
+//
+//	hydra [process-compose args]   run process-compose with the rendered file
+//	hydra plan  [flags]            show what this checkout runs and how it is wired
+//	hydra render [flags] [-o FILE] print or write the rendered file
+//	hydra slots [free [PATH]]      list worktree slots, or free one
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"text/tabwriter"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/santiagotoscanini/hydra/internal/changes"
+	"github.com/santiagotoscanini/hydra/internal/config"
+	"github.com/santiagotoscanini/hydra/internal/gitx"
+	"github.com/santiagotoscanini/hydra/internal/plan"
+	"github.com/santiagotoscanini/hydra/internal/render"
+	"github.com/santiagotoscanini/hydra/internal/slots"
+	"github.com/santiagotoscanini/hydra/internal/stack"
+)
+
+const usage = `hydra: run only what a worktree changed, point the rest at the baseline.
+
+Use it in place of process-compose; arguments pass through:
+  hydra                    start this checkout (TUI)
+  hydra up -D              start it in the background
+  hydra up web             also run web here, even if unchanged
+  hydra attach | down | process ...
+
+In the main checkout everything runs, as plain process-compose would. In a
+worktree only the services it changed run, on that worktree's own ports, with
+their upstreams pointing at the baseline or at each other.
+
+Hydra's own commands:
+  hydra plan   [flags]           show what this checkout runs and how it is wired
+  hydra render [flags] [-o FILE] print (or write) the rendered process-compose file
+  hydra slots                    list worktree slots
+  hydra slots free [PATH]        free a worktree's slot (default: this one)
+
+Flags for plan and render:
+  -f FILE          stack file (default <checkout>/process-compose.yaml)
+  --root DIR       checkout to plan for (default: the one containing the cwd)
+  --slot N         pretend to be worktree slot N (0 = baseline)
+  --changed PATHS  comma-separated changed paths instead of asking git
+  --with SVC       also run SVC here (repeatable, comma-separated ok)
+  --without SVC    never run SVC here (repeatable)
+  --route S.U=T    point service S's upstream U at T = baseline|local
+
+A git-ignored .hydra.local.yaml in the checkout adds the same settings:
+  with: [web]
+  without: [worker]
+  routes:
+    web: { api: baseline }
+`
+
+func main() {
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, "hydra:", err)
+		os.Exit(1)
+	}
+}
+
+func run(args []string) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "help", "-h", "--help":
+			fmt.Print(usage)
+			return nil
+		case "plan", "render":
+			return planOrRender(args[0], args[1:])
+		case "slots":
+			return slotsCmd(args[1:])
+		case "watch":
+			return watchCmd(args[1:])
+		}
+	}
+	return wrap(args)
+}
+
+type multi []string
+
+func (m *multi) String() string { return strings.Join(*m, ",") }
+func (m *multi) Set(v string) error {
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			*m = append(*m, p)
+		}
+	}
+	return nil
+}
+
+// target is everything needed to plan one checkout.
+type target struct {
+	checkout gitx.Checkout
+	file     string
+	stack    *config.Stack
+}
+
+func resolve(root, file string) (*target, error) {
+	if root == "" {
+		root = "."
+	}
+	co, err := gitx.Find(root)
+	if err != nil {
+		return nil, err
+	}
+	if file == "" {
+		file = defaultFile(co)
+	}
+	st, err := config.Load(file)
+	if err != nil {
+		return nil, err
+	}
+	return &target{checkout: co, file: file, stack: st}, nil
+}
+
+// defaultFile is the checkout's process-compose.yaml, or the main
+// checkout's when a worktree has none of its own (the file is often personal
+// and git-excluded, so a fresh worktree lacks it).
+func defaultFile(co gitx.Checkout) string {
+	own := filepath.Join(co.Root, "process-compose.yaml")
+	if _, err := os.Stat(own); err == nil || co.IsMain() {
+		return own
+	}
+	return filepath.Join(co.Main, "process-compose.yaml")
+}
+
+// options are the knobs shared by plan, render and the wrapper.
+type options struct {
+	slot    int // -1: decide from the checkout
+	changed []string
+	with    []string
+	without []string
+	routes  []string
+}
+
+// build plans the checkout. The main checkout gets the baseline plan unless
+// a slot is forced.
+func (t *target) build(o options) (*plan.Plan, error) {
+	slot := o.slot
+	if slot < 0 {
+		if t.checkout.IsMain() {
+			slot = 0
+		} else {
+			s, err := slots.Acquire(t.checkout.CommonDir, t.checkout.Root, t.stack.Hydra.MaxSlots)
+			if err != nil {
+				return nil, err
+			}
+			slot = s
+		}
+	}
+	if slot == 0 {
+		return plan.BaselinePlan(t.stack), nil
+	}
+
+	req := plan.Request{Slot: slot, With: o.with, Without: o.without, Routes: plan.Routes{}}
+	lf, err := readLocal(filepath.Join(t.checkout.Root, ".hydra.local.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	if lf != nil {
+		req.With = append(req.With, lf.With...)
+		req.Without = append(req.Without, lf.Without...)
+		for svc, ups := range lf.Routes {
+			for up, v := range ups {
+				tg, err := plan.ParseTarget(v)
+				if err != nil {
+					return nil, fmt.Errorf(".hydra.local.yaml: %w", err)
+				}
+				req.Routes.Set(svc, up, tg)
+			}
+		}
+	}
+	for _, r := range o.routes { // flags beat the file
+		svc, up, tg, err := plan.ParseRoute(r)
+		if err != nil {
+			return nil, err
+		}
+		req.Routes.Set(svc, up, tg)
+	}
+
+	var warnings []string
+	if len(o.changed) > 0 {
+		req.Changed = o.changed
+	} else {
+		req.Layers, warnings, err = t.layers()
+		if err != nil {
+			return nil, err
+		}
+	}
+	p, err := plan.Build(t.stack, req)
+	if p != nil {
+		p.Warnings = append(warnings, p.Warnings...)
+	}
+	return p, err
+}
+
+// layers finds the stack of worktrees this checkout sits on and what each
+// one changed relative to its parent.
+func (t *target) layers() ([]plan.Layer, []string, error) {
+	chain, warnings, err := stack.Chain(t.checkout.Root, stack.Options{
+		BaseRef: t.stack.Hydra.BaseRef,
+		ParentOverride: func(root string) string {
+			lf, _ := readLocal(filepath.Join(root, ".hydra.local.yaml"))
+			if lf == nil {
+				return ""
+			}
+			return lf.Parent
+		},
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("finding the worktree stack: %w", err)
+	}
+	var out []plan.Layer
+	for _, l := range chain {
+		changed, err := changes.FromBase(l.Root, l.Base)
+		if err != nil {
+			return nil, nil, fmt.Errorf("detecting changes in %s: %w", l.Root, err)
+		}
+		out = append(out, plan.Layer{Name: shortBranch(l.Name), Root: l.Root, Changed: changed})
+	}
+	return out, warnings, nil
+}
+
+// shortBranch keeps messages readable with long branch names:
+// "santiago/fla-710-a-customer-approves-their-share" -> "fla-710-a-customer-appro…".
+func shortBranch(b string) string {
+	if i := strings.LastIndex(b, "/"); i >= 0 {
+		b = b[i+1:]
+	}
+	if r := []rune(b); len(r) > 26 {
+		b = string(r[:25]) + "…"
+	}
+	return b
+}
+
+func (t *target) render(p *plan.Plan, watch string) ([]byte, error) {
+	return render.Render(t.stack, p, render.Options{Dir: t.checkout.Root, Watch: watch})
+}
+
+func planOrRender(cmd string, args []string) error {
+	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
+	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
+	file := fs.String("f", "", "")
+	root := fs.String("root", "", "")
+	out := fs.String("o", "", "")
+	slot := fs.Int("slot", -1, "")
+	var o options
+	var changed, with, without, routes multi
+	fs.Var(&changed, "changed", "")
+	fs.Var(&with, "with", "")
+	fs.Var(&without, "without", "")
+	fs.Var(&routes, "route", "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	o = options{slot: *slot, changed: changed, with: with, without: without, routes: routes}
+
+	t, err := resolve(*root, *file)
+	if err != nil {
+		return err
+	}
+	p, err := t.build(o)
+	if err != nil {
+		return err
+	}
+	if cmd == "plan" {
+		printPlan(t, p)
+		return nil
+	}
+	data, err := t.render(p, "")
+	if err != nil {
+		return err
+	}
+	if *out == "" {
+		_, err = os.Stdout.Write(data)
+		return err
+	}
+	return writeFile(*out, data)
+}
+
+func slotsCmd(args []string) error {
+	co, err := gitx.Find(".")
+	if err != nil {
+		return err
+	}
+	if len(args) > 0 && args[0] == "free" {
+		root := co.Root
+		if len(args) > 1 {
+			if root, err = filepath.Abs(args[1]); err != nil {
+				return err
+			}
+		}
+		return slots.Release(co.CommonDir, root)
+	}
+	entries, err := slots.List(co.CommonDir)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Println("no worktree slots taken")
+	}
+	for _, e := range entries {
+		mark := " "
+		if e.Root == co.Root {
+			mark = "*"
+		}
+		fmt.Printf("%s %2d  %s\n", mark, e.Slot, e.Root)
+	}
+	return nil
+}
+
+type localFile struct {
+	// Parent is the branch this worktree is stacked on, when git ancestry
+	// can't tell (or tells wrong). The base ref (main) means "not stacked".
+	Parent  string                       `yaml:"parent"`
+	With    []string                     `yaml:"with"`
+	Without []string                     `yaml:"without"`
+	Routes  map[string]map[string]string `yaml:"routes"`
+}
+
+func readLocal(path string) (*localFile, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var lf localFile
+	if err := yaml.Unmarshal(data, &lf); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return &lf, nil
+}
+
+func writeFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func printPlan(t *target, p *plan.Plan) {
+	kind := "worktree"
+	if p.Slot == 0 {
+		kind = "baseline"
+	}
+	fmt.Printf("%s, slot %d: %s\n", kind, p.Slot, t.checkout.Root)
+	stacked := len(p.Layers) > 1
+	if stacked {
+		names := []string{t.stack.Hydra.BaseRef}
+		for _, l := range p.Layers {
+			names = append(names, fmt.Sprintf("%s (%d changed)", l.Name, len(l.Changed)))
+		}
+		fmt.Printf("stack: %s\n", strings.Join(names, " <- "))
+	}
+	fmt.Println()
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "SERVICE\tRUNS\tPORT\tWHY")
+	for _, s := range p.Services {
+		where := "baseline"
+		if s.Local {
+			where = "here"
+			if s.Disabled {
+				where = "here (off)"
+			}
+		}
+		port := "-"
+		if s.Port != 0 {
+			port = fmt.Sprint(s.Port)
+		}
+		if stacked && s.Local {
+			where += " from " + s.Layer
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, where, port, s.Why)
+	}
+	w.Flush()
+
+	if p.Slot > 0 {
+		fmt.Println("\nwiring:")
+		w = tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		n := 0
+		for _, s := range p.Services {
+			for _, u := range s.Upstreams {
+				n++
+				fmt.Fprintf(w, "  %s\t%s\t-> %s (%s)\t%s\t%s\n", s.Name, u.Env, u.Service, u.Target, u.Value, u.Why)
+			}
+		}
+		w.Flush()
+		if n == 0 {
+			fmt.Println("  (nothing runs here)")
+		}
+		for _, s := range p.Services {
+			if s.Prepare != "" {
+				cmd := s.Prepare
+				if r := []rune(cmd); len(r) > 90 {
+					cmd = string(r[:89]) + "…"
+				}
+				fmt.Printf("  %s first runs: %s\n", s.Name, cmd)
+			}
+		}
+	}
+	for _, s := range p.Services {
+		if s.Local && s.Disabled && p.Slot > 0 {
+			fmt.Printf("\n%s is disabled in process-compose; start it from the TUI (F7) or with `hydra process start %s`.\n", s.Name, s.Name)
+		}
+	}
+	for _, warn := range p.Warnings {
+		fmt.Println("\nwarning:", warn)
+	}
+}
