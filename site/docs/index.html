@@ -3,32 +3,26 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Docs · Hydra</title>
-<meta name="description" content="How Hydra decides what a git worktree runs, every x-hydra option, and the command line.">
+<title>Docs · hydra</title>
+<meta name="description" content="How hydra decides what a git worktree runs, every x-hydra option, and the command line.">
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <script>try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}</script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="../style.css">
 </head>
 <body>
 
-<header class="header wide">
-  <div class="wrap">
-    <a class="brand" href="../" aria-label="Hydra home">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20.5V12"/><path d="M12 14c0-4.5-6.5-3-6.5-8"/><path d="M12 14c0-4.5 6.5-3 6.5-8"/><path d="M12 12V6"/><circle cx="5.5" cy="4.5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="4.5" r="1.6" fill="currentColor" stroke="none"/><circle cx="18.5" cy="4.5" r="1.6" fill="currentColor" stroke="none"/></svg>
-      Hydra
-    </a>
-    <nav class="nav">
-      <a href="./" aria-current="page">Docs</a>
-      <a href="https://github.com/santiagotoscanini/hydra">GitHub</a>
-      <button class="icon-btn" data-theme-toggle aria-label="Switch between light and dark theme">
-        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
-        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/></svg>
-      </button>
-    </nav>
-  </div>
+<div class="page">
+
+<header class="top">
+  <a class="name" href="../">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20.5V12"/><path d="M12 14c0-4.5-6.5-3-6.5-8"/><path d="M12 14c0-4.5 6.5-3 6.5-8"/><path d="M12 12V6"/><circle cx="5.5" cy="4.5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="4.5" r="1.6" fill="currentColor" stroke="none"/><circle cx="18.5" cy="4.5" r="1.6" fill="currentColor" stroke="none"/></svg>
+    hydra
+  </a>
+  <nav>
+    <a href="./" aria-current="page">docs</a>
+    <a href="https://github.com/santiagotoscanini/hydra">source</a>
+    <button class="theme" data-theme-toggle aria-label="Switch between light and dark"><span class="to-dark">dark</span><span class="to-light">light</span></button>
+  </nav>
 </header>
 
 <div class="docs">
@@ -59,17 +53,16 @@
 <main class="doc">
 
   <div id="intro">
-    <div class="eyebrow">Documentation</div>
-    <h1>Hydra</h1>
-    <p class="intro">Hydra wraps <a href="https://github.com/F1bonacc1/process-compose">process-compose</a>. One <b>baseline</b> stack runs in your main checkout. Each git worktree starts only the services it changed and points everything else at the baseline.</p>
-    <p style="margin-top:16px">It exists for working on several branches at once, often with a coding agent in each worktree. Five copies of a full stack cost five times the memory and fight over the same ports. With Hydra, a frontend-only branch runs one extra process.</p>
+    <h1>hydra docs</h1>
+    <p class="intro">hydra wraps <a href="https://github.com/F1bonacc1/process-compose">process-compose</a>. One <b>baseline</b> stack runs in your main checkout. Each git worktree starts only the services it changed and points everything else at the baseline.</p>
+    <p style="margin-top:16px">It exists for working on several branches at once, often with a coding agent in each worktree. Five copies of a full stack cost five times the memory and fight over the same ports. With hydra, a frontend-only branch runs one extra process.</p>
   </div>
 
   <section id="install">
     <h2>Install</h2>
-    <p>Hydra needs git and process-compose. The Homebrew formula installs process-compose for you.</p>
-    <div class="window">
-      <div class="window-bar">Homebrew<button class="copy" aria-label="Copy these commands"><svg class="clip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg><svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></div>
+    <p>hydra needs git and process-compose. The Homebrew formula installs process-compose for you.</p>
+    <div class="code">
+      <div class="file">Homebrew<button class="copy">copy</button></div>
 <pre data-lang="sh">
 $ brew tap santiagotoscanini/tap
 $ brew install --HEAD santiagotoscanini/tap/hydra
@@ -82,9 +75,9 @@ $ brew upgrade --fetch-HEAD santiagotoscanini/tap/hydra    # later, to update
   <section id="quickstart">
     <h2>Quick start</h2>
     <h3>1. Describe your services</h3>
-    <p>Add <code>x-hydra</code> keys to the <code>process-compose.yaml</code> you already have: a block at the top level, and one on each process that a worktree may run. process-compose ignores keys it doesn't know, so the file still works without Hydra.</p>
-    <div class="window">
-      <div class="window-bar">process-compose.yaml<button class="copy" aria-label="Copy this file"><svg class="clip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg><svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button></div>
+    <p>Add <code>x-hydra</code> keys to the <code>process-compose.yaml</code> you already have: a block at the top level, and one on each process that a worktree may run. process-compose ignores keys it doesn't know, so the file still works without hydra.</p>
+    <div class="code">
+      <div class="file">process-compose.yaml<button class="copy">copy</button></div>
 <pre data-lang="yaml">
 version: "0.5"
 
@@ -140,11 +133,11 @@ processes:
         NEXT_PUBLIC_SITE_URL: web
 </pre>
     </div>
-    <p>Each service has to read its port and its upstreams from the environment variables named here. Hydra sets those variables; it doesn't proxy traffic.</p>
+    <p>Each service has to read its port and its upstreams from the environment variables named here. hydra sets those variables; it doesn't proxy traffic.</p>
 
     <h3>2. Start the baseline</h3>
     <p>In the main checkout, <code>hydra</code> runs the whole file, exactly as <code>process-compose</code> would.</p>
-    <div class="window">
+    <div class="code">
 <pre data-lang="sh">
 $ cd ~/code/shop
 $ hydra
@@ -152,7 +145,7 @@ $ hydra
     </div>
 
     <h3>3. Start a worktree</h3>
-    <div class="window">
+    <div class="code">
 <pre data-lang="sh">
 $ git worktree add ../shop-checkout -b feat/checkout
 $ cd ../shop-checkout
@@ -161,8 +154,8 @@ $ hydra             # run it
 </pre>
     </div>
     <p>A fresh worktree has changed nothing, so nothing runs in it yet. Edit a file under <code>apps/web</code> and <code>web</code> starts on port 3200, pointed at the baseline API on 8080.</p>
-    <div class="window">
-      <div class="window-bar">hydra plan</div>
+    <div class="code">
+      <div class="file">hydra plan</div>
 <pre data-lang="text">
 worktree, slot 1: ~/code/shop-checkout
 
@@ -179,7 +172,7 @@ wiring:
   web  NEXT_PUBLIC_SITE_URL  -> web (local)        http://127.0.0.1:3200  default: web running here
 </pre>
     </div>
-    <div class="note"><b>Ignore Hydra's files.</b> Add <code>.process-compose/</code> and <code>.hydra.local.yaml</code> to your <code>.gitignore</code>. If your <code>process-compose.yaml</code> is itself git-ignored, a worktree without one uses the main checkout's.</div>
+    <div class="note"><b>Ignore hydra's files.</b> Add <code>.process-compose/</code> and <code>.hydra.local.yaml</code> to your <code>.gitignore</code>. If your <code>process-compose.yaml</code> is itself git-ignored, a worktree without one uses the main checkout's.</div>
   </section>
 
   <section id="concepts">
@@ -189,7 +182,7 @@ wiring:
       <tr><td><b>Baseline</b></td><td>The stack running in the main checkout. It runs every service on its normal port.</td></tr>
       <tr><td><b>Worktree</b></td><td>Any other checkout made with <code>git worktree add</code>. It runs only what it changed.</td></tr>
       <tr><td><b>Slot</b></td><td>A number per worktree. The baseline is slot 0. Slot N listens on each port plus N × <code>slot_stride</code>.</td></tr>
-      <tr><td><b>Upstream</b></td><td>An environment variable of one service that says where another service lives. Hydra fills it with the local copy's address or the baseline's.</td></tr>
+      <tr><td><b>Upstream</b></td><td>An environment variable of one service that says where another service lives. hydra fills it with the local copy's address or the baseline's.</td></tr>
       <tr><td><b>Shared</b></td><td>A service that only ever runs in the baseline, such as a database or a tunnel.</td></tr>
       <tr><td><b>Follow</b></td><td>A service that runs in a worktree whenever a local service depends on it, such as <code>pnpm install</code>.</td></tr>
       <tr><td><b>Stand-in</b></td><td>A placeholder process for a baseline service that a local one depends on. It runs nothing and only waits for the baseline's copy to be ready.</td></tr>
@@ -198,7 +191,7 @@ wiring:
 
   <section id="how">
     <h2>How it works</h2>
-    <p>Hydra runs no services itself. It works out what should run in this checkout, writes an ordinary process-compose file for it, and hands that file to process-compose. In a worktree, <code>hydra</code> does this:</p>
+    <p>hydra runs no services itself. It works out what should run in this checkout, writes an ordinary process-compose file for it, and hands that file to process-compose. In a worktree, <code>hydra</code> does this:</p>
     <ol>
       <li>Lists the files the worktree changed and picks the services to run here.</li>
       <li>Takes a slot for the worktree, which it keeps across runs.</li>
@@ -211,7 +204,7 @@ wiring:
   <section id="changes">
     <h2>What counts as changed</h2>
     <p>A worktree changed a service when a file that differs from where its branch left <code>main</code> matches one of the service's <code>paths</code>. Committed, staged, unstaged and new files all count. Git-ignored files don't.</p>
-    <div class="window">
+    <div class="code">
 <pre data-lang="sh">
 $ git diff --name-only $(git merge-base HEAD main origin/main)   # committed, staged, unstaged
 $ git ls-files --others --exclude-standard                       # new files
@@ -254,13 +247,13 @@ $ git ls-files --others --exclude-standard                       # new files
       <li>The branch it was created from, read from its reflog, if that branch is checked out in a worktree and still shares commits with it past <code>main</code>. This holds after the parent gets new commits.</li>
       <li>Otherwise, the deepest checked-out branch whose tip it contains.</li>
     </ol>
-    <p>Branches that only share history are not parents. Two siblings cut from the same commit look, from ancestry alone, the same as a parent that moved on, so Hydra doesn't guess. A branch made with <code>git checkout -b b2</code> while on <code>b1</code> records "Created from HEAD"; once <code>b1</code> gets new commits, give <code>b2</code> a <code>parent: b1</code>.</p>
+    <p>Branches that only share history are not parents. Two siblings cut from the same commit look, from ancestry alone, the same as a parent that moved on, so hydra doesn't guess. A branch made with <code>git checkout -b b2</code> while on <code>b1</code> records "Created from HEAD"; once <code>b1</code> gets new commits, give <code>b2</code> a <code>parent: b1</code>.</p>
     <p><code>hydra plan</code> prints the stack it found and why each service runs where it does.</p>
   </section>
 
   <section id="generated">
     <h2>The generated file</h2>
-    <p><code>hydra render</code> prints what Hydra hands to process-compose. Compared with your file:</p>
+    <p><code>hydra render</code> prints what hydra hands to process-compose. Compared with your file:</p>
     <ul>
       <li>Only the services that run here are kept, with the <code>x-hydra</code> keys removed.</li>
       <li>Each service's <code>environment</code> gains its port variable, its upstream variables, and <code>HYDRA_SERVICE</code>, <code>HYDRA_SLOT</code> and <code>HYDRA_UPSTREAMS</code>.</li>
@@ -269,14 +262,14 @@ $ git ls-files --others --exclude-standard                       # new files
       <li>A stand-in replaces every baseline process that a local one depends on. It copies only the readiness probe or ready log line, so <code>process_healthy</code> waits for the baseline's database instead of starting a second one. Stopping the worktree never runs the baseline's shutdown commands.</li>
       <li>A <code>hydra-prepare-&lt;service&gt;</code> step runs before each service that has <code>prepare</code>.</li>
     </ul>
-    <p>Hydra relies on the process environment winning over <code>.env</code> files. That holds for Next.js and for godotenv; check it for other loaders.</p>
+    <p>hydra relies on the process environment winning over <code>.env</code> files. That holds for Next.js and for godotenv; check it for other loaders.</p>
   </section>
 
   <section id="slots">
     <h2>Slots and ports</h2>
     <p>Slots live in <code>hydra-slots.json</code> inside the repository's shared <code>.git</code> directory, guarded by a file lock. A worktree keeps its slot across runs, and the entry of a deleted worktree is dropped.</p>
-    <p>When the config loads, Hydra works out every service's port for every slot up to <code>max_slots</code> and fails if two of them meet or if one lands on a reserved port. Pick a <code>slot_stride</code> larger than the distance between your closest base ports, and list the ports of shared infrastructure in <code>reserved_ports</code>.</p>
-    <div class="window">
+    <p>When the config loads, hydra works out every service's port for every slot up to <code>max_slots</code> and fails if two of them meet or if one lands on a reserved port. Pick a <code>slot_stride</code> larger than the distance between your closest base ports, and list the ports of shared infrastructure in <code>reserved_ports</code>.</p>
+    <div class="code">
 <pre data-lang="sh">
 $ hydra slots              # which worktree has which slot
 $ hydra slots free         # free this worktree's slot
@@ -316,7 +309,7 @@ $ hydra slots free         # free this worktree's slot
     </table></div>
     <h3>Values that aren't URLs</h3>
     <p>"Where a service lives" is not always a port. A worker that reads jobs from a queue lives at a queue name. Give it a <code>url</code> built from the slot, and whoever enqueues jobs gets the right name:</p>
-    <div class="window">
+    <div class="code">
 <pre data-lang="yaml">
 worker:
   x-hydra:
@@ -360,8 +353,8 @@ web:
   <section id="local">
     <h2>Per-worktree settings</h2>
     <p>A git-ignored <code>.hydra.local.yaml</code> at the root of a worktree adjusts what that worktree runs. The watcher re-reads it, and the stack file, on every tick, so edits apply without a restart.</p>
-    <div class="window">
-      <div class="window-bar">.hydra.local.yaml</div>
+    <div class="code">
+      <div class="file">.hydra.local.yaml</div>
 <pre data-lang="yaml">
 parent: b1               # the branch this worktree is stacked on
 with: [web]              # also run these here, changed or not
@@ -383,7 +376,7 @@ routes:
   <section id="routing">
     <h2>Routing</h2>
     <p>By default an upstream points at the worktree's copy if that service runs in the worktree, and at the baseline's otherwise. A route overrides that for one service and one target:</p>
-    <div class="window">
+    <div class="code">
 <pre data-lang="sh">
 $ hydra plan --route web.api=baseline    # web here, but against the baseline API
 $ hydra plan --route web.api=local       # also starts api here
@@ -435,31 +428,24 @@ $ hydra plan --route web.api=local       # also starts api here
   <section id="limits">
     <h2>Limits</h2>
     <ul>
-      <li><b>The database is shared.</b> A branch that adds a migration still uses the baseline's database, and Hydra warns about it. A database per worktree is planned.</li>
+      <li><b>The database is shared.</b> A branch that adds a migration still uses the baseline's database, and hydra warns about it. A database per worktree is planned.</li>
       <li><b>Scheduled jobs.</b> A worker that sets up its own schedules on startup does so in every worktree it runs in.</li>
       <li><b>Hard-coded ports.</b> A service has to read its port and its upstreams from the environment. A port written into code or a dev script needs a small patch first.</li>
       <li><b>Paths are written by hand.</b> They aren't derived from a dependency graph yet, so a shared package has to be listed on each service that imports it.</li>
       <li><b>Tested with process-compose v1.124</b> on macOS.</li>
     </ul>
-    <div class="next">
-      <a href="https://github.com/santiagotoscanini/hydra"><span>Source</span><b>santiagotoscanini/hydra</b></a>
-      <a href="https://github.com/santiagotoscanini/hydra/blob/main/docs/design.md"><span>Design notes</span><b>Open problems and decisions</b></a>
-    </div>
+    <p>More: <a href="https://github.com/santiagotoscanini/hydra">the source</a> and the <a href="https://github.com/santiagotoscanini/hydra/blob/main/docs/design.md">design notes</a>, which cover open problems and decisions.</p>
   </section>
 
 </main>
 </div>
 
-<footer class="footer">
-  <div class="wrap" style="max-width:1280px">
-    <span>Hydra</span>
-    <div class="right">
-      <a href="../">Home</a>
-      <a href="https://github.com/santiagotoscanini/hydra">GitHub</a>
-      <a href="https://github.com/F1bonacc1/process-compose">process-compose</a>
-    </div>
-  </div>
+<hr>
+<footer class="foot">
+  <p><a href="../">home</a> · <a href="https://github.com/santiagotoscanini/hydra">source</a> · <a href="https://github.com/F1bonacc1/process-compose">process-compose</a></p>
 </footer>
+
+</div>
 
 <script src="../app.js"></script>
 </body>
