@@ -56,6 +56,11 @@ git ls-files --others --exclude-standard                       # new files
 branch cut from a freshly fetched `origin/main` forked there, and the commits
 merged in between aren't its work.
 
+`main` here is the repository's default branch, read from git: the one
+`origin` calls its default (`git symbolic-ref refs/remotes/origin/HEAD`),
+else a local `main` or `master`, else the branch the main checkout is on.
+`base_ref` in the top-level `x-hydra` block names another.
+
 Services left to the baseline run whatever the main checkout has checked
 out. Pull there when a worktree needs newer baseline code.
 
@@ -125,6 +130,67 @@ branch it was created from (read from its reflog), if that branch is checked
 out in a worktree; else the deepest checked-out branch whose tip it contains.
 Branches that only share history (siblings) are not parents. `hydra plan`
 prints the stack it found and why each service runs where it does.
+
+### One copy for every worktree
+
+A worktree that changed only the API has nothing in front of it: the
+frontend still runs in main and calls main's API. Starting a second frontend
+in every such worktree works, but a dev server is the expensive part of a
+stack. Mark it `routed` and main's copy serves every worktree instead:
+
+```yaml
+web:
+  x-hydra:
+    port: 3000
+    routed: node          # or `true` when the service forwards the header itself
+    upstreams:
+      API_URL: api
+```
+
+- Each worktree gets its own port for `web` (slot 2: `:3400`), whether or
+  not it changed it. If it did, its own copy listens there. If it didn't,
+  Hydra's router does: it marks the request with the worktree (an
+  `X-Hydra-Worktree` header) and passes it to main's copy.
+- Main's `web` calls the API through the router, which sends each call to
+  the marked worktree's API when that worktree runs one, and to main's
+  otherwise. Every response says who answered in `X-Hydra-Served-By`.
+- In between, `web` has to copy the mark from the request it is serving onto
+  the calls it makes. With `routed: node`, Hydra loads a small preload into
+  the Node process that does this (and keeps Next's data cache apart per
+  worktree), so the app needs no change. The router checks that the mark
+  really comes out the other side before it lets a worktree use the copy.
+
+Two rules keep this from quietly testing the wrong code:
+
+- A proxy can only route requests. If `web` also reads, say, a queue name
+  from an env var and the worktree runs its own worker, main's copy would
+  keep using main's queue. Hydra then runs `web` in the worktree after all.
+  Temporal is handled for you: mark the worker `kind: temporal` and the hook
+  switches the namespace inside the Temporal SDK, so the app isn't changed.
+  Any other value can be marked `per_request: true`, and the app reads it per
+  request from `globalThis.__hydra.upstream('QUEUE')`.
+- When a worktree runs its own API and that API isn't up, calls for that
+  worktree get a 503. They never fall back to main's.
+
+`./examples/demo/routed.sh` shows it with a Node frontend that knows nothing
+about Hydra.
+
+### Kinds
+
+Some services need more than a port to get a copy per worktree. `kind`
+tells Hydra what the service is, and it does the rest:
+
+```yaml
+worker:
+  x-hydra:
+    kind: temporal        # each worktree's worker polls namespace hydra-<slot>
+    paths: ["services/core/**"]
+```
+
+That creates the namespace before the worker starts (with the baseline
+namespace's search attributes), hands it to every upstream pointing at the
+worker, and switches it per request on routed services. `temporal` is the
+only kind so far.
 
 See [docs/design.md](docs/design.md) for the `x-hydra` fields and the rules
 in full.

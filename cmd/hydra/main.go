@@ -22,8 +22,10 @@ import (
 	"github.com/santiagotoscanini/hydra/internal/changes"
 	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/gitx"
+	"github.com/santiagotoscanini/hydra/internal/hook"
 	"github.com/santiagotoscanini/hydra/internal/plan"
 	"github.com/santiagotoscanini/hydra/internal/render"
+	"github.com/santiagotoscanini/hydra/internal/routes"
 	"github.com/santiagotoscanini/hydra/internal/slots"
 	"github.com/santiagotoscanini/hydra/internal/stack"
 )
@@ -81,6 +83,10 @@ func run(args []string) error {
 			return slotsCmd(args[1:])
 		case "watch":
 			return watchCmd(args[1:])
+		case "router":
+			return routerCmd(args[1:])
+		case "prepare":
+			return prepareCmd(args[1:])
 		}
 	}
 	return wrap(args)
@@ -118,6 +124,12 @@ func resolve(root, file string) (*target, error) {
 	}
 	st, err := config.Load(file)
 	if err != nil {
+		return nil, err
+	}
+	if st.Hydra.BaseRef == "" {
+		st.Hydra.BaseRef = gitx.DefaultBranch(co)
+	}
+	if st.Hydra.Exe, err = stableExecutable(); err != nil {
 		return nil, err
 	}
 	return &target{checkout: co, file: file, stack: st}, nil
@@ -244,7 +256,17 @@ func shortBranch(b string) string {
 }
 
 func (t *target) render(p *plan.Plan, watch string) ([]byte, error) {
-	return render.Render(t.stack, p, render.Options{Dir: t.checkout.Root, Watch: watch})
+	opt := render.Options{Dir: t.checkout.Root, Watch: watch}
+	if p.Slot == 0 && t.stack.HasRouted() {
+		var err error
+		if opt.Router, err = routerCommand(t); err != nil {
+			return nil, err
+		}
+		if opt.NodeHook, err = hook.Install(t.checkout.CommonDir); err != nil {
+			return nil, err
+		}
+	}
+	return render.Render(t.stack, p, opt)
 }
 
 func planOrRender(cmd string, args []string) error {
@@ -300,6 +322,11 @@ func slotsCmd(args []string) error {
 				return err
 			}
 		}
+		for _, e := range mustList(co.CommonDir) {
+			if e.Root == root {
+				routes.Remove(co.CommonDir, e.Slot)
+			}
+		}
 		return slots.Release(co.CommonDir, root)
 	}
 	entries, err := slots.List(co.CommonDir)
@@ -317,6 +344,11 @@ func slotsCmd(args []string) error {
 		fmt.Printf("%s %2d  %s\n", mark, e.Slot, e.Root)
 	}
 	return nil
+}
+
+func mustList(commonDir string) []slots.Entry {
+	entries, _ := slots.List(commonDir)
+	return entries
 }
 
 type localFile struct {
@@ -369,6 +401,9 @@ func printPlan(t *target, p *plan.Plan) {
 	fmt.Fprintln(w, "SERVICE\tRUNS\tPORT\tWHY")
 	for _, s := range p.Services {
 		where := "baseline"
+		if s.Routed {
+			where = "main, routed"
+		}
 		if s.Local {
 			where = "here"
 			if s.Disabled {
@@ -409,6 +444,11 @@ func printPlan(t *target, p *plan.Plan) {
 			}
 		}
 		for _, s := range p.Services {
+			if src := t.stack.Services[s.Source]; s.Prepare != "" && src != nil && src.Kind == config.KindTemporal && src.Prepare == "" {
+				fmt.Printf("  %s first creates Temporal namespace %s, with %s's search attributes\n", s.Name,
+					plan.Value(t.stack, src, p.Slot, ""), plan.Value(t.stack, src, 0, ""))
+				continue
+			}
 			if s.Prepare != "" {
 				cmd := s.Prepare
 				if r := []rune(cmd); len(r) > 90 {

@@ -38,6 +38,7 @@
   <a href="#changes">What counts as changed</a>
   <a href="#watching">Watching</a>
   <a href="#stacks">Stacked branches</a>
+  <a href="#routed">One copy for every worktree</a>
   <a href="#generated">The generated file</a>
   <a href="#slots">Slots and ports</a>
   <h4>Reference</h4>
@@ -82,7 +83,6 @@ $ brew upgrade --fetch-HEAD santiagotoscanini/tap/hydra    # later, to update
 version: "0.5"
 
 x-hydra:
-  base_ref: main
   slot_stride: 200
   reserved_ports: [5432]
   global_paths: [pnpm-lock.yaml]
@@ -127,13 +127,14 @@ processes:
     x-hydra:
       port: 3000
       paths: ["apps/web/**", "packages/shared/**"]
+      routed: node
       upstreams:
         API_URL: api
         JOBS_QUEUE: worker
         NEXT_PUBLIC_SITE_URL: web
 </pre>
     </div>
-    <p>Each service has to read its port and its upstreams from the environment variables named here. hydra sets those variables; it doesn't proxy traffic.</p>
+    <p>Each service has to read its port and its upstreams from the environment variables named here. hydra sets those variables. It only sits between two services for one marked <code>routed</code>, like <code>web</code> here: see <a href="#routed">one copy for every worktree</a>.</p>
 
     <h3>2. Start the baseline</h3>
     <p>In the main checkout, <code>hydra</code> runs the whole file, exactly as <code>process-compose</code> would.</p>
@@ -153,7 +154,7 @@ $ hydra plan        # what would run here, and why
 $ hydra             # run it
 </pre>
     </div>
-    <p>A fresh worktree has changed nothing, so nothing runs in it yet. Edit a file under <code>apps/web</code> and <code>web</code> starts on port 3200, pointed at the baseline API on 8080.</p>
+    <p>A fresh worktree has changed nothing, so nothing runs in it yet. Because <code>web</code> is routed, port 3200 already answers: it is main's copy. Edit a file under <code>apps/web</code> and the worktree's own <code>web</code> takes that port, pointed at the baseline API on 8080.</p>
     <div class="code">
       <div class="file">hydra plan</div>
 <pre data-lang="text">
@@ -211,6 +212,7 @@ $ git ls-files --others --exclude-standard                       # new files
 </pre>
     </div>
     <p>The remote-tracking branch counts as well as the local one, because a local <code>main</code> is often behind. A branch cut from a freshly fetched <code>origin/main</code> forked there, and the commits merged in between aren't its work.</p>
+    <p><code>main</code> here stands for the repository's default branch. hydra reads it from git, and <a href="#config"><code>base_ref</code></a> names another.</p>
     <div class="note"><b>The baseline runs what the main checkout has checked out.</b> Services left to the baseline run that code, so pull in the main checkout when a worktree needs newer baseline code.</div>
   </section>
 
@@ -251,6 +253,52 @@ $ git ls-files --others --exclude-standard                       # new files
     <p><code>hydra plan</code> prints the stack it found and why each service runs where it does.</p>
   </section>
 
+  <section id="routed">
+    <h2>One copy for every worktree</h2>
+    <p>A worktree that changed only the API has nothing in front of it: the frontend runs in main and calls main's API. Running a second frontend there works, but a dev server is the expensive process in a stack. A service marked <code>routed</code> keeps one copy, the baseline's, for every worktree that didn't change it.</p>
+    <div class="code">
+<pre data-lang="yaml">
+  web:
+    x-hydra:
+      port: 3000
+      routed: node
+      upstreams:
+        API_URL: api
+</pre>
+    </div>
+    <div class="table"><table>
+      <tr><th>Step</th><th>What happens</th></tr>
+      <tr><td>You open <code>localhost:3400</code></td><td>Slot 2's port for <code>web</code>. The worktree didn't change <code>web</code>, so hydra's router listens there. It sets <code>X-Hydra-Worktree: 2</code> and passes the request to main's <code>web</code> on 3000.</td></tr>
+      <tr><td>Main's <code>web</code> calls the API</td><td>In the baseline, a routed service's <code>API_URL</code> points at the router. The call carries the header of the request being served.</td></tr>
+      <tr><td>The router picks the API</td><td>Slot 2's API on 8480 if that worktree runs one, main's on 8080 otherwise. The response says which in <code>X-Hydra-Served-By</code>.</td></tr>
+    </table></div>
+    <p>The router is one more process in the baseline's project, <code>hydra-router</code>. Each running worktree tells it what it runs, and <code>hydra down</code> in a worktree closes that worktree's ports. When a worktree later changes <code>web</code>, the router hands the port over and the worktree's own copy listens there, so a worktree's address for <code>web</code> never changes.</p>
+    <h3>Passing the header on</h3>
+    <p>The routed service has to copy the header from the request it is serving onto the calls it makes.</p>
+    <ul>
+      <li><code>routed: node</code>: hydra loads a preload script into the Node process (through <code>NODE_OPTIONS</code>) that does it for <code>fetch</code> and <code>node:http</code>. The app isn't changed. For Next.js it also keeps the data cache apart per worktree, so a cached response from one worktree's API is never served to another.</li>
+      <li><code>routed: true</code>: the service forwards <code>X-Hydra-Worktree</code> itself. That is a few lines of middleware in any language.</li>
+    </ul>
+    <p>With <code>routed: node</code> the router checks this before a worktree may use the copy: it sends a request with a made-up mark and compares what arrives at its own ports. If the mark is lost, the worktree's port answers 503 with the reason, and <code>hydra up web</code> gives that worktree a copy of its own.</p>
+    <h3>What can't be routed</h3>
+    <p>A proxy routes requests. It can do nothing about a value the service reads once from its environment, such as a queue name or a database URL. If a routed service has an upstream like that pointing at something the worktree runs, hydra starts the service in the worktree after all, and <code>hydra plan</code> says why.</p>
+    <p>Temporal is handled for you: an upstream pointing at a <code>kind: temporal</code> worker is switched per request, inside the Temporal SDK, so the app isn't changed. The router checks the switch before a worktree may use the copy.</p>
+    <p>For any other value, mark the upstream <code>per_request: true</code> and have the app read it per request where it used to read the environment:</p>
+    <div class="code">
+<pre data-lang="yaml">
+      upstreams:
+        JOBS_QUEUE: { service: worker, per_request: true }
+</pre>
+    </div>
+    <div class="code">
+<pre data-lang="text">
+const queue = globalThis.__hydra?.upstream('JOBS_QUEUE') ?? process.env.JOBS_QUEUE
+</pre>
+    </div>
+    <div class="note"><b>No silent fallback.</b> When a worktree runs its own API and that API is down or still compiling, calls for that worktree get a 503. They don't go to main's API, because you would then be testing main while believing you are testing the branch.</div>
+    <p>Not routed: HTTP/2 and gRPC between services, work that no request is behind (a timer started at boot, a webhook from outside), and unchanged services that aren't marked <code>routed</code>, which keep calling the baseline's copies.</p>
+  </section>
+
   <section id="generated">
     <h2>The generated file</h2>
     <p><code>hydra render</code> prints what hydra hands to process-compose. Compared with your file:</p>
@@ -261,6 +309,7 @@ $ git ls-files --others --exclude-standard                       # new files
       <li>Readiness and liveness probes on the baseline port move to the slot's port. Otherwise a worktree's probe would hit the baseline's copy and pass at once.</li>
       <li>A stand-in replaces every baseline process that a local one depends on. It copies only the readiness probe or ready log line, so <code>process_healthy</code> waits for the baseline's database instead of starting a second one. Stopping the worktree never runs the baseline's shutdown commands.</li>
       <li>A <code>hydra-prepare-&lt;service&gt;</code> step runs before each service that has <code>prepare</code>.</li>
+      <li>In the baseline, when a service is <code>routed</code>: a <code>hydra-router</code> process is added, and the routed service's HTTP upstreams point at it.</li>
     </ul>
     <p>hydra relies on the process environment winning over <code>.env</code> files. That holds for Next.js and for godotenv; check it for other loaders.</p>
   </section>
@@ -282,7 +331,7 @@ $ hydra slots free         # free this worktree's slot
     <p>The top-level <code>x-hydra</code> block. A file without it runs unchanged.</p>
     <div class="table"><table>
       <tr><th>Key</th><th>Default</th><th>Description</th></tr>
-      <tr><td><code>base_ref</code><span class="type">string</span></td><td class="def">main</td><td>The branch a worktree is compared with. If it tracks a remote branch, that one counts too.</td></tr>
+      <tr><td><code>base_ref</code><span class="type">string</span></td><td class="def">detected</td><td>The branch a worktree is compared with. Left out, it is the branch <code>origin</code> calls its default (<code>git symbolic-ref refs/remotes/origin/HEAD</code>), else a local <code>main</code> or <code>master</code>, else the branch the main checkout is on. If it tracks a remote branch, that one counts too.</td></tr>
       <tr><td><code>slot_stride</code><span class="type">integer</span></td><td class="def">1000</td><td>Port offset per slot. Slot N listens on <code>port</code> + N × <code>slot_stride</code>.</td></tr>
       <tr><td><code>max_slots</code><span class="type">integer</span></td><td class="def">20</td><td>How many worktrees can hold a slot. Port collisions are checked for all of them.</td></tr>
       <tr><td><code>reserved_ports</code><span class="type">list of integers</span></td><td class="def">[]</td><td>Ports used by shared services or anything else on the machine. No slot may land on one.</td></tr>
@@ -300,10 +349,12 @@ $ hydra slots free         # free this worktree's slot
       <tr><td><code>port</code><span class="type">integer</span></td><td class="def">none</td><td>The port the baseline's copy listens on. Leave it out for services that don't listen, such as workers.</td></tr>
       <tr><td><code>port_env</code><span class="type">string</span></td><td class="def">stack's</td><td>The variable this service reads its port from.</td></tr>
       <tr><td><code>paths</code><span class="type">list of globs</span></td><td class="def">[]</td><td>Files that belong to the service, relative to the repository root. A change to one makes the service run in the worktree.</td></tr>
-      <tr><td><code>upstreams</code><span class="type">map</span></td><td class="def">{}</td><td>Environment variable → the service it points at. Write <code>API_URL: api</code>, or <code>API_PORT: { service: api, value: "{port}" }</code> to change what the variable receives. A service may point at itself.</td></tr>
+      <tr><td><code>upstreams</code><span class="type">map</span></td><td class="def">{}</td><td>Environment variable → the service it points at. Write <code>API_URL: api</code>, or <code>API_PORT: { service: api, value: "{port}" }</code> to change what the variable receives. A service may point at itself. On a routed service, <code>per_request: true</code> marks a value the app picks per request.</td></tr>
       <tr><td><code>url</code><span class="type">string</span></td><td class="def">http://{host}:{port}</td><td>What an upstream variable pointing at this service receives. It doesn't have to be a URL.</td></tr>
       <tr><td><code>baseline_url</code><span class="type">string</span></td><td class="def"><code>url</code></td><td>Replaces <code>url</code> for the baseline's copy, for values that don't come from a port.</td></tr>
       <tr><td><code>shared</code><span class="type">boolean</span></td><td class="def">false</td><td>Always use the baseline's copy. A change to its <code>paths</code> is reported as a warning.</td></tr>
+      <tr><td><code>kind</code><span class="type">string</span></td><td class="def">none</td><td>A service hydra knows more about. <code>temporal</code>: a Temporal worker. Each worktree's copy polls namespace <code>hydra-&lt;slot&gt;</code> (main keeps <code>default</code>), created before it starts with main's search attributes. Fills in <code>url</code>, <code>baseline_url</code> and <code>prepare</code>; keys you set win.</td></tr>
+      <tr><td><code>routed</code><span class="type">true or node</span></td><td class="def">false</td><td>The baseline's copy serves every worktree that didn't change the service, on that worktree's port. <code>node</code> has hydra pass the worktree header along inside the Node process; <code>true</code> means the service does it itself. Needs <code>port</code>. See <a href="#routed">one copy for every worktree</a>.</td></tr>
       <tr><td><code>follow</code><span class="type">boolean</span></td><td class="def">false</td><td>Run in a worktree whenever a local service depends on it.</td></tr>
       <tr><td><code>prepare</code><span class="type">string</span></td><td class="def">none</td><td>A shell command run once before the service starts in a worktree, for example to create the queue or namespace named by <code>url</code>.</td></tr>
     </table></div>
@@ -369,6 +420,7 @@ routes:
       <li>Services named in <code>with</code>, or with <code>hydra up NAME</code>.</li>
       <li>Services with a route override, plus the target of a <code>local</code> override.</li>
       <li>Follow services that one of those depends on.</li>
+      <li>Routed services with a call that can't be routed to something in this list.</li>
       <li>Minus shared services and anything in <code>without</code>.</li>
     </ol>
   </section>
@@ -430,6 +482,7 @@ $ hydra plan --route web.api=local       # also starts api here
     <ul>
       <li><b>The database is shared.</b> A branch that adds a migration still uses the baseline's database, and hydra warns about it. A database per worktree is planned.</li>
       <li><b>Scheduled jobs.</b> A worker that sets up its own schedules on startup does so in every worktree it runs in.</li>
+      <li><b>Routing covers HTTP/1.1.</b> A routed service's gRPC or HTTP/2 calls, and work that no request is behind, reach the baseline's copies. A webhook from outside reaches the baseline's API.</li>
       <li><b>Hard-coded ports.</b> A service has to read its port and its upstreams from the environment. A port written into code or a dev script needs a small patch first.</li>
       <li><b>Paths are written by hand.</b> They aren't derived from a dependency graph yet, so a shared package has to be listed on each service that imports it.</li>
       <li><b>Tested with process-compose v1.124</b> on macOS.</li>

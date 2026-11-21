@@ -33,6 +33,35 @@ func Find(dir string) (Checkout, error) {
 	return Checkout{Root: root, Main: filepath.Dir(common), CommonDir: common}, nil
 }
 
+// DefaultBranch is the branch worktrees are compared with when the stack
+// file names none:
+//
+//   - the branch origin calls its default (origin/HEAD, set by `git clone`),
+//   - else a local main or master,
+//   - else whatever the main checkout has checked out.
+func DefaultBranch(co Checkout) string {
+	if ref, err := run(co.Main, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"); err == nil && ref != "" {
+		if name := strings.TrimPrefix(ref, "origin/"); hasRef(co.Main, "refs/heads/"+name) {
+			return name
+		}
+		return ref // never checked out locally: compare with the remote's copy
+	}
+	for _, name := range []string{"main", "master"} {
+		if hasRef(co.Main, "refs/heads/"+name) {
+			return name
+		}
+	}
+	if name, err := run(co.Main, "symbolic-ref", "--quiet", "--short", "HEAD"); err == nil && name != "" {
+		return name
+	}
+	return "main"
+}
+
+func hasRef(dir, ref string) bool {
+	_, err := run(dir, "rev-parse", "--verify", "--quiet", ref)
+	return err == nil
+}
+
 func run(dir string, args ...string) (string, error) {
 	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
 	if err != nil {

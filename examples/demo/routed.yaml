@@ -1,0 +1,41 @@
+# One frontend for every worktree. `web` and `admin` are routed: the main
+# checkout's copy serves each worktree through that worktree's own port, and
+# its calls to the api land on the worktree's api when the worktree runs one.
+#
+#   web    a Node server that knows nothing about hydra; `routed: node` loads
+#          hydra's hook into it, which passes the worktree tag along.
+#   admin  passes the X-Hydra-Worktree header on itself (`routed: true`).
+version: "0.5"
+
+x-hydra:
+  slot_stride: 100
+  max_slots: 5
+
+processes:
+  api:
+    command: bin/mocksvc
+    x-hydra:
+      port: 21010
+      paths: ["apps/api/**"]
+
+  web:
+    command: node web.cjs
+    depends_on:
+      api: { condition: process_started }
+    x-hydra:
+      port: 21000
+      paths: ["apps/web/**"]
+      routed: node
+      upstreams:
+        API_URL: api
+
+  admin:
+    command: bin/mocksvc
+    depends_on:
+      api: { condition: process_started }
+    x-hydra:
+      port: 21001
+      paths: ["apps/admin/**"]
+      routed: true
+      upstreams:
+        API_URL: api

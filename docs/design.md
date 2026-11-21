@@ -76,7 +76,7 @@ know (checked on v1.124).
 
 ```yaml
 x-hydra:
-  base_ref: main          # changes = diff against where HEAD left main (or its upstream) + untracked
+  base_ref: develop       # optional: the branch worktrees are diffed against (default: detected, see below)
   slot_stride: 200        # slot N listens on port + N*200 (slot 0 = baseline)
   max_slots: 20
   reserved_ports: [6379, 7233, 54321]  # shared infra; no slot may land here
@@ -94,13 +94,18 @@ processes:
   worker:
     x-hydra:
       paths: ["services/core/**"]
-      url: "hydra-{slot}"         # what upstreams receive (default http://{host}:{port})
-      baseline_url: default       # ...from the baseline instance
-      prepare: "temporal operator namespace create --namespace {value}"
+      kind: temporal              # a namespace per worktree: url, baseline_url and prepare filled in (see below)
   mobile:
     x-hydra:
       upstreams:
         API_PORT: { service: web, value: "{port}" }  # just the port
+  web:
+    x-hydra:
+      port: 3000
+      routed: node                # main's copy serves every worktree that didn't change it (see below)
+      upstreams:
+        GO_BACKEND_URL: api
+        TEMPORAL_NAMESPACE: worker  # switched per request on a routed service
   deps:
     x-hydra: { follow: true }     # runs here whenever a local service depends on it
   supabase:
@@ -109,6 +114,13 @@ processes:
 
 A process without `x-hydra` is treated as shared: it only runs in the
 baseline.
+
+Without `base_ref`, worktrees are diffed against the repository's default
+branch: the one `origin` calls its default (`git symbolic-ref
+refs/remotes/origin/HEAD`, recorded by `git clone`), else a local `main` or
+`master`, else the branch the main checkout is on. The changed files are the
+diff against where HEAD left that branch (or its upstream), plus untracked
+files.
 
 ## What a worktree runs
 
@@ -156,6 +168,88 @@ jobs on its own worker and a worktree's calls on its own agent.
   worktree never runs the baseline's shutdown commands.
 - A `hydra-prepare-<service>` step before each service with `prepare`.
 
+## Kinds
+
+`kind` names a service Hydra knows more about than its port. It fills in the
+keys you'd otherwise write by hand; any key you set yourself wins.
+
+| Kind | Fills in | Also |
+|---|---|---|
+| `temporal` | `url: hydra-{slot}`, `baseline_url: default`, and a prepare step `hydra prepare temporal --namespace hydra-N --from default` | Routed services switch upstreams pointing at it per request (`per_request` is implied) |
+
+`hydra prepare temporal` creates the namespace if needed, waits until
+Temporal knows it, and adds every custom search attribute the baseline's
+namespace has. It is safe to run again and reads `TEMPORAL_ADDRESS` like the
+temporal CLI. A kind can't be `shared`, `follow` or `routed`: its point is a
+separate copy per worktree.
+
+New kinds (SQS queues, Redis key prefixes, a database per worktree) go in the
+same table.
+
+## Routed services
+
+A routed service has one copy, the baseline's, for every worktree that didn't
+change it. It exists for the expensive process in a stack, usually a frontend
+dev server: a branch that only changed the API shouldn't need its own.
+
+```
+browser -> :3400 (router, slot 2's port for web)      marks the request: X-Hydra-Worktree: 2
+        -> main's web :3000                           copies the mark onto its calls
+        -> :8080 + (max_slots+1)*stride (router)      reads the mark
+        -> slot 2's api :8480, or main's :8080 when slot 2 runs none
+```
+
+- **The router** is one more process in the baseline's project
+  (`hydra-router`). It opens a worktree's port for each routed service that
+  worktree didn't change, and one port per service that routed services call.
+  In the baseline, a routed service's HTTP upstreams point at those ports.
+- **Each worktree publishes what it runs** in
+  `<git common dir>/hydra-routes/slot-N.json`, on `hydra up` and on every
+  watcher update. The router re-reads those files twice a second and only
+  honours a worktree whose process-compose server answers, so `hydra down`
+  closes its ports.
+- **Port handover.** A worktree's port for a routed service belongs to the
+  router until the worktree changes the service. The watcher then publishes
+  first, waits for the router to let go, and only then starts the service.
+- **Passing the mark on** is the service's job. `routed: node` loads
+  `hydra-hook.cjs` with `NODE_OPTIONS=--require`: it keeps the incoming
+  header in an `AsyncLocalStorage` and adds it to `fetch` and `node:http`
+  calls to the router's ports. `routed: true` means the service does it
+  itself (a few lines of middleware in any language).
+- **Checked, not assumed.** The router asks the hook (`/__hydra/probe`) to
+  call each router port with a made-up mark and compares what arrives. If it
+  doesn't match, the worktree's port answers 503 with the reason and the
+  command for a copy of your own (`hydra up web`).
+- **What can't be routed runs here.** Only upstreams whose value carries the
+  target's port as an HTTP URL (or the bare port) go through the router. If a
+  routed service has any other upstream pointing at something the worktree
+  runs (a Temporal namespace, a database URL), the planner starts the service
+  in the worktree, unless that upstream is `per_request: true`. Those values
+  travel in an `X-Hydra-Upstreams` header (their names in the service's
+  `HYDRA_PER_REQUEST`). The app can read them with
+  `globalThis.__hydra.upstream(name)`.
+- **Temporal namespaces switch without app changes.** The hook replaces each
+  `@temporalio/client` client class with a subclass whose
+  `options.namespace` is a getter: while a worktree's request is being
+  served, a namespace equal to main's value of a per-request variable reads
+  as the worktree's value. The SDK reads `options.namespace` on every call
+  (checked on 1.17), so workflows started from main's copy land where the
+  worktree's worker polls. The probe builds a client and checks the switch
+  on the SDK the app resolves; if it fails, the worktree runs its own copy.
+  Calls with no request behind them stay in main's namespace.
+- **No silent fallback.** A marked call for a worktree that runs its own copy
+  of the target gets a 503 while that copy is down. Unmarked calls, and marks
+  of worktrees that don't run the target, go to the baseline's.
+- **Next's data cache** (`fetch` with `force-cache` or `revalidate`,
+  `unstable_cache`) is keyed without the mark, so the hook keeps a set of
+  entries per worktree by prefixing the key. This patches a Next internal
+  (`IncrementalCache`); verified on Next 16.4.
+
+Not covered: HTTP/2 and gRPC between services, calls that no request is
+behind (timers started at boot, webhooks from outside) which always reach the
+baseline's copy, and unchanged services that aren't routed (a baseline worker
+still calls the baseline's API).
+
 ## Slots
 
 `hydra-slots.json` in the shared `.git` directory maps worktree paths to
@@ -182,6 +276,12 @@ checked against each other and `reserved_ports` when the config loads.
   (or a command override in the process-compose file).
 - **Routing to another worktree** (`web.api=slot:3`), and hostnames instead of
   ports (`api.slot1.localhost`), so cookies and CORS behave as on the
-  baseline.
+  baseline. Worktree ports for a routed service share `localhost` cookies
+  with the baseline, which matters once a worktree has its own database.
+- **Webhooks.** A tunnel reaches the baseline's API only, so a provider's
+  callback for work a worktree started lands on main. The router could take
+  the tunnel's traffic and route by a mark in the callback URL.
+- **Shared Redis and queues.** Pub/sub channels and cache keys are shared
+  between code versions; a worktree needs its own database index or prefix.
 - **PR bases as a parent source.** Stacked PRs already record the parent
   branch on GitHub; reading it would remove most `parent:` overrides.

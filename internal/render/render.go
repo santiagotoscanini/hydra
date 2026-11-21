@@ -22,6 +22,12 @@ type Options struct {
 	// Watch, when set, is the command of a `hydra-watch` process added to
 	// the file, which keeps the running project in step with new changes.
 	Watch string
+	// Router, when set, is the command of a `hydra-router` process added to
+	// the baseline, through which routed services reach each worktree.
+	Router string
+	// NodeHook is the path of hydra's Node preload, loaded into services
+	// marked `routed: node`.
+	NodeHook string
 }
 
 const idle = "while :; do sleep 3600; done"
@@ -142,6 +148,25 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 			names = append(names, u.Env)
 		}
 		env = append(env, "HYDRA_UPSTREAMS="+strings.Join(names, ","))
+		if svc := st.Services[source]; p.Slot == 0 && svc.Routed != config.NotRouted && opt.Router != "" {
+			// One copy for every worktree: its calls go through the router,
+			// which has to be up first.
+			env = append(env, "HYDRA_ROUTED_ORIGINS="+strings.Join(routedOrigins(st, svc), ","))
+			var per []string
+			for _, e := range svc.UpstreamEnvs() {
+				if svc.Upstreams[e].PerRequest {
+					per = append(per, e)
+				}
+			}
+			if len(per) > 0 {
+				env = append(env, "HYDRA_PER_REQUEST="+strings.Join(per, ","))
+			}
+			if svc.Routed == config.RoutedNode && opt.NodeHook != "" {
+				env = withNodeHook(env, opt.NodeHook)
+			}
+			deps["hydra-router"] = map[string]any{"condition": "process_started"}
+			proc["depends_on"] = deps
+		}
 		proc["environment"] = env
 
 		procs[row.Name] = proc
@@ -153,6 +178,15 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 			"command":      opt.Watch,
 			"working_dir":  dir,
 			"availability": map[string]any{"restart": "on_failure", "backoff_seconds": 5},
+		}
+	}
+	if opt.Router != "" && p.Slot == 0 {
+		procs["hydra-router"] = map[string]any{
+			"namespace":    "hydra",
+			"description":  "Lets worktrees use this checkout's copy of the routed services",
+			"command":      opt.Router,
+			"working_dir":  dir,
+			"availability": map[string]any{"restart": "always", "backoff_seconds": 2},
 		}
 	}
 	for name, s := range stubs {
@@ -171,6 +205,41 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 		return nil, err
 	}
 	return append([]byte(header), body...), nil
+}
+
+// routedOrigins lists the router addresses a routed service calls, which is
+// where hydra's hook adds the worktree tag.
+func routedOrigins(st *config.Stack, s *config.Service) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, env := range s.UpstreamEnvs() {
+		u := s.Upstreams[env]
+		if u.Service == s.Name || !st.Routable(u) {
+			continue
+		}
+		o := "http://" + st.Hydra.Host + ":" + strconv.Itoa(st.DispatchPort(st.Services[u.Service]))
+		if !seen[o] {
+			seen[o] = true
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// withNodeHook adds `--require <hook>` to NODE_OPTIONS, keeping what the
+// process already sets there.
+func withNodeHook(env []string, hook string) []string {
+	flag := "--require " + hook
+	if strings.ContainsAny(hook, " \t") {
+		flag = `--require "` + hook + `"`
+	}
+	for i, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "NODE_OPTIONS="); ok {
+			env[i] = "NODE_OPTIONS=" + strings.TrimSpace(v+" "+flag)
+			return env
+		}
+	}
+	return append(env, "NODE_OPTIONS="+flag)
 }
 
 // stub builds the stand-in for a baseline process that a local one waits on.

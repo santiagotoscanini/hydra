@@ -124,6 +124,11 @@ func step(t *target, o options, cmd, out, sock string) error {
 	if err != nil {
 		return err
 	}
+	// Before the update: the router has to release the port of a routed
+	// service that is about to start here.
+	if err := publishRoutes(t, p); err != nil {
+		return err
+	}
 	current, _ := os.ReadFile(out)
 	if bytes.Equal(current, data) {
 		return nil

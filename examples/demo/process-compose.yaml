@@ -8,7 +8,6 @@
 version: "0.5"
 
 x-hydra:
-  base_ref: main
   slot_stride: 100 # slot N listens on port + N*100; keep base ports within 100 of each other
   host: 127.0.0.1
   port_env: PORT

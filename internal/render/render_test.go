@@ -89,3 +89,76 @@ func TestRenderWorktree(t *testing.T) {
 		t.Errorf("api must wait for its prepare step")
 	}
 }
+
+const routedStack = `
+x-hydra: { slot_stride: 100, max_slots: 5 }
+processes:
+  api:
+    command: api
+    x-hydra: { port: 8080, paths: ["api/**"] }
+  web:
+    command: web
+    environment: ["NODE_OPTIONS=--max-old-space-size=4096"]
+    depends_on:
+      api: { condition: process_started }
+    x-hydra:
+      port: 3000
+      paths: ["web/**"]
+      routed: node
+      upstreams: { API_URL: api }
+`
+
+func TestBaselineOfARoutedService(t *testing.T) {
+	st, err := config.Parse([]byte(routedStack))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := Render(st, plan.BaselinePlan(st), Options{Dir: "/repo", Router: "exec hydra router", NodeHook: "/repo/.git/hydra hook.cjs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Processes map[string]struct {
+			Command     string         `yaml:"command"`
+			Environment []string       `yaml:"environment"`
+			DependsOn   map[string]any `yaml:"depends_on"`
+		} `yaml:"processes"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Processes["hydra-router"].Command != "exec hydra router" {
+		t.Errorf("no router process: %+v", doc.Processes["hydra-router"])
+	}
+	web := doc.Processes["web"]
+	env := strings.Join(web.Environment, "\n")
+	for _, want := range []string{
+		"API_URL=http://127.0.0.1:8680", // the router's port for the api
+		"HYDRA_ROUTED_ORIGINS=http://127.0.0.1:8680",
+		`NODE_OPTIONS=--max-old-space-size=4096 --require "/repo/.git/hydra hook.cjs"`,
+	} {
+		if !strings.Contains(env, want) {
+			t.Errorf("web env lacks %q:\n%s", want, env)
+		}
+	}
+	if web.DependsOn["hydra-router"] == nil || web.DependsOn["api"] == nil {
+		t.Errorf("web depends_on = %v", web.DependsOn)
+	}
+	// The api itself is untouched.
+	if e := strings.Join(doc.Processes["api"].Environment, " "); strings.Contains(e, "NODE_OPTIONS") || strings.Contains(e, "ROUTED") {
+		t.Errorf("api env = %q", e)
+	}
+
+	// A worktree's file has neither the router nor the hook.
+	p, err := plan.Build(st, plan.Request{Slot: 1, Changed: []string{"web/page.tsx"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err = Render(st, p, Options{Dir: "/repo", Router: "exec hydra router", NodeHook: "/hook.cjs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "hydra-router") || strings.Contains(string(data), "hook.cjs") {
+		t.Errorf("worktree file mentions the router or the hook:\n%s", data)
+	}
+}

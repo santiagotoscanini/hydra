@@ -18,6 +18,9 @@ type Target string
 const (
 	Baseline Target = "baseline"
 	Local    Target = "local"
+	// Routed is the baseline's copy of a routed service, reached through
+	// this worktree's own port so its requests carry the worktree's tag.
+	Routed Target = "routed"
 )
 
 // ParseTarget accepts "baseline" or "local".
@@ -81,6 +84,9 @@ type Upstream struct {
 	Target  Target
 	Value   string
 	Why     string
+	// PerRequest: the service picks this value per request itself, from
+	// what hydra's hook hands it.
+	PerRequest bool
 }
 
 // Service is one row of the plan.
@@ -93,6 +99,14 @@ type Service struct {
 	Prepare   string // rendered prepare command, local services only
 	Disabled  bool   // process-compose `disabled: true`: listed, started by hand
 	Upstreams []Upstream
+	// Routed: the baseline's copy serves this worktree. Port is then the
+	// worktree's port for it, where the router tags requests and passes them
+	// on, and Upstreams say where that copy's calls go for this worktree.
+	Routed bool
+	// Dispatch: in the baseline, a routed service's calls go through the
+	// router so each lands in the calling worktree. Lists the env vars set
+	// to a router address.
+	Dispatch []string
 
 	// Source is the process in the stack file this row runs; it differs
 	// from Name for a follow service copied into another worktree.
@@ -156,12 +170,25 @@ func Value(st *config.Stack, s *config.Service, slot int, tmpl string) string {
 }
 
 func expand(st *config.Stack, s *config.Service, slot int, tmpl, value string) string {
+	return expandPort(st, Port(st, s, slot), slot, tmpl, value)
+}
+
+func expandPort(st *config.Stack, port, slot int, tmpl, value string) string {
 	return strings.NewReplacer(
 		"{host}", st.Hydra.Host,
-		"{port}", strconv.Itoa(Port(st, s, slot)),
+		"{port}", strconv.Itoa(port),
 		"{slot}", strconv.Itoa(slot),
 		"{value}", value,
 	).Replace(tmpl)
+}
+
+// dispatchValue is what a routed service's env var receives in the baseline:
+// the target's address with the router's port for it.
+func dispatchValue(st *config.Stack, t *config.Service, tmpl string) string {
+	if tmpl == "" {
+		tmpl = t.URL
+	}
+	return expandPort(st, st.DispatchPort(t), 0, tmpl, "")
 }
 
 // BaselinePlan plans the baseline checkout: everything, in slot 0.
@@ -173,9 +200,12 @@ func BaselinePlan(st *config.Stack) *Plan {
 		for _, env := range s.UpstreamEnvs() {
 			u := s.Upstreams[env]
 			t := st.Services[u.Service]
-			row.Upstreams = append(row.Upstreams, Upstream{
-				Env: env, Service: t.Name, Target: Baseline, Value: Value(st, t, 0, u.Value), Why: "baseline",
-			})
+			up := Upstream{Env: env, Service: t.Name, Target: Baseline, Value: Value(st, t, 0, u.Value), Why: "baseline"}
+			if s.Routed != config.NotRouted && t.Name != name && st.Routable(u) {
+				up.Value, up.Why = dispatchValue(st, t, u.Value), "through the router, per request"
+				row.Dispatch = append(row.Dispatch, env)
+			}
+			row.Upstreams = append(row.Upstreams, up)
 		}
 		p.Services = append(p.Services, row)
 	}
@@ -293,6 +323,29 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 				}
 			}
 		}
+		// 5. A routed service can stay on the baseline's copy only while
+		//    every call of its that differs for this worktree can be told
+		//    apart per request. One that can't (a queue name, a database
+		//    URL) would reach the baseline's target, so it runs here.
+		for _, name := range st.Names() {
+			s := st.Services[name]
+			if _, here := why[name]; here || s.Routed == config.NotRouted {
+				continue
+			}
+			for _, env := range s.UpstreamEnvs() {
+				u := s.Upstreams[env]
+				if _, tHere := why[u.Service]; !tHere || u.Service == name || u.PerRequest || st.Routable(u) {
+					continue
+				}
+				reason := env + " points at " + u.Service + " here and can't be routed per request"
+				if _, known := skipped[name]; !known && without[name] {
+					p.Warnings = append(p.Warnings, fmt.Sprintf(
+						"%s is excluded, but its %s; those calls reach the baseline's %s", name, reason, u.Service))
+				}
+				changed = want(name, reason) || changed
+				break
+			}
+		}
 	}
 
 	// Everything started for another reason runs from the top worktree.
@@ -354,6 +407,28 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 			row.Root, row.Layer = layers[owner[name]].Root, layers[owner[name]].Name
 			row.FollowDeps = followDeps[name]
 		}
+		if !local && s.Routed != config.NotRouted {
+			// The baseline's copy, behind this worktree's port.
+			row.Routed, row.Port = true, Port(st, s, req.Slot)
+			row.Why = "main's copy, tagged for this worktree"
+			if sk := skipped[name]; sk != "" {
+				row.Why += "; " + sk
+			}
+			for _, env := range s.UpstreamEnvs() {
+				u := s.Upstreams[env]
+				t := st.Services[u.Service]
+				if t.Name == name || !(u.PerRequest || st.Routable(u)) {
+					continue
+				}
+				up := Upstream{Env: env, Service: t.Name, Target: Baseline, Value: Value(st, t, 0, u.Value), Why: "per request: " + t.Name + " not running here", PerRequest: u.PerRequest}
+				if _, tLocal := why[t.Name]; tLocal {
+					up.Target, up.Value, up.Why = Local, Value(st, t, req.Slot, u.Value), "per request: "+t.Name+" running here"
+				}
+				row.Upstreams = append(row.Upstreams, up)
+			}
+			p.Services = append(p.Services, row)
+			continue
+		}
 		if !local {
 			row.Why = skipped[name]
 			if row.Why == "" {
@@ -367,8 +442,8 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 			continue
 		}
 		row.Port = Port(st, s, req.Slot)
-		if s.Prepare != "" {
-			row.Prepare = expand(st, s, req.Slot, s.Prepare, Value(st, s, req.Slot, ""))
+		if tmpl := prepareTemplate(st, s); tmpl != "" {
+			row.Prepare = expand(st, s, req.Slot, tmpl, Value(st, s, req.Slot, ""))
 		}
 		for _, env := range s.UpstreamEnvs() {
 			u := s.Upstreams[env]
@@ -388,6 +463,11 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 			if target == Local {
 				slot = req.Slot
 			}
+			if _, overridden := req.Routes[name][t.Name]; !tLocal && !overridden &&
+				t.Routed != config.NotRouted && t.Name != name && st.Routable(u) {
+				// Through this worktree's port for it, so the request is tagged.
+				target, slot, how = Routed, req.Slot, "default: main's "+t.Name+" through this worktree's port"
+			}
 			row.Upstreams = append(row.Upstreams, Upstream{
 				Env: env, Service: t.Name, Target: target, Value: Value(st, t, slot, u.Value), Why: how,
 			})
@@ -396,6 +476,28 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 	}
 	sort.Slice(p.Services, func(i, j int) bool { return p.Services[i].Name < p.Services[j].Name })
 	return p, nil
+}
+
+// prepareTemplate is the service's prepare command, or the one its kind
+// supplies when it has none.
+func prepareTemplate(st *config.Stack, s *config.Service) string {
+	if s.Prepare != "" || s.Kind != config.KindTemporal {
+		return s.Prepare
+	}
+	exe := st.Hydra.Exe
+	if exe == "" {
+		exe = "hydra"
+	}
+	return quote(exe) + " prepare temporal --namespace {value} --from " + quote(Value(st, s, 0, ""))
+}
+
+func quote(s string) string {
+	if s != "" && strings.IndexFunc(s, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("-_./{}", r))
+	}) < 0 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func contains(xs []string, x string) bool {

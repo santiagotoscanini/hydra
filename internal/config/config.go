@@ -24,7 +24,8 @@ type Stack struct {
 
 // Global is the top-level `x-hydra` block.
 type Global struct {
-	// BaseRef is what a worktree is diffed against (default "main").
+	// BaseRef is what a worktree is diffed against. Empty means the
+	// repository's default branch, which the caller works out from git.
 	BaseRef string `yaml:"base_ref"`
 	// SlotStride is the port offset per worktree slot: slot N listens on
 	// port + N*SlotStride (default 1000). Slot 0 is the baseline.
@@ -41,7 +42,23 @@ type Global struct {
 	PortEnv string `yaml:"port_env"`
 	// GlobalPaths are files that affect every non-shared service.
 	GlobalPaths []string `yaml:"global_paths"`
+
+	// Exe is the hydra binary that generated steps call (a kind's prepare
+	// step). Set by the caller; "hydra" when empty.
+	Exe string `yaml:"-"`
 }
+
+// Kinds hydra knows how to give each worktree a copy of.
+const (
+	// KindTemporal is a Temporal worker. Each worktree's copy polls a
+	// namespace of its own (hydra-<slot>; the baseline keeps "default"),
+	// created before the worker starts with the baseline namespace's search
+	// attributes. Upstreams pointing at it receive the namespace, and on a
+	// routed service they switch per request.
+	KindTemporal = "temporal"
+)
+
+var kinds = []string{KindTemporal}
 
 // Upstream says which service an env var points at and how to format it.
 type Upstream struct {
@@ -50,6 +67,11 @@ type Upstream struct {
 	// "{port}" when the consumer wants only the port. Placeholders as in
 	// Service.URL.
 	Value string `yaml:"value"`
+	// PerRequest says a routed service picks this value per request itself,
+	// from the value hydra's hook hands it, instead of once from its
+	// environment. For targets a proxy can't route, such as a Temporal
+	// namespace.
+	PerRequest bool `yaml:"per_request"`
 }
 
 // UnmarshalYAML accepts `ENV: service` or `ENV: {service: s, value: "..."}`.
@@ -85,6 +107,16 @@ type Service struct {
 	// Shared services always come from the baseline (databases, Docker,
 	// tunnels). A change to their paths is reported as a warning.
 	Shared bool `yaml:"shared"`
+	// Kind marks a service hydra knows more about than its port: "temporal"
+	// for a Temporal worker. It fills in url, baseline_url and prepare.
+	Kind string `yaml:"kind"`
+	// Routed services have one copy, the baseline's, that serves every
+	// worktree which didn't change them: each worktree reaches it through a
+	// port of its own, and the calls it makes while serving such a request go
+	// to that worktree's services. The service has to pass the request's
+	// X-Hydra-Worktree header on to the calls it makes: "node" has hydra's
+	// preload hook do that, "true" says the service does it itself.
+	Routed Routing `yaml:"routed"`
 	// Follow services run in a worktree whenever a local service depends
 	// on them, such as `pnpm install` for that worktree's node_modules.
 	Follow bool `yaml:"follow"`
@@ -96,6 +128,89 @@ type Service struct {
 	// DependsOn lists the process names this process waits for, from the
 	// regular process-compose `depends_on`.
 	DependsOn []string `yaml:"-"`
+}
+
+// Routing is how a routed service passes the worktree tag along.
+type Routing string
+
+const (
+	NotRouted  Routing = ""
+	RoutedSelf Routing = "true" // the service forwards the header itself
+	RoutedNode Routing = "node" // hydra's Node preload hook forwards it
+)
+
+// UnmarshalYAML accepts `routed: true`, `routed: false` and `routed: node`.
+func (r *Routing) UnmarshalYAML(n *yaml.Node) error {
+	switch n.Value {
+	case "false", "":
+		*r = NotRouted
+	case "true":
+		*r = RoutedSelf
+	case "node":
+		*r = RoutedNode
+	default:
+		return fmt.Errorf("line %d: routed: want true or node, got %q", n.Line, n.Value)
+	}
+	return nil
+}
+
+// Routable reports whether a proxy can route calls made through this upstream:
+// its value has to carry the target's port, as an HTTP URL or as the bare
+// port. A postgres:// URL or a queue name isn't.
+func (st *Stack) Routable(u Upstream) bool {
+	tmpl := u.Value
+	if tmpl == "" {
+		tmpl = st.Services[u.Service].URL
+	}
+	if !strings.Contains(tmpl, "{port}") {
+		return false
+	}
+	if scheme, _, ok := strings.Cut(tmpl, "://"); ok {
+		switch scheme {
+		case "http", "https", "ws", "wss":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// DispatchPort is where the router listens for calls to s made by routed
+// services: one stride past the last slot.
+func (st *Stack) DispatchPort(s *Service) int {
+	return s.Port + (st.Hydra.MaxSlots+1)*st.Hydra.SlotStride
+}
+
+// Dispatched returns the services routed services call through the router,
+// sorted.
+func (st *Stack) Dispatched() []string {
+	seen := map[string]bool{}
+	for _, s := range st.Services {
+		if s.Routed == NotRouted {
+			continue
+		}
+		for _, u := range s.Upstreams {
+			if u.Service != s.Name && st.Routable(u) {
+				seen[u.Service] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// HasRouted reports whether any service is routed.
+func (st *Stack) HasRouted() bool {
+	for _, s := range st.Services {
+		if s.Routed != NotRouted {
+			return true
+		}
+	}
+	return false
 }
 
 // UpstreamEnvs returns the upstream env var names in a stable order.
@@ -160,9 +275,6 @@ func Parse(data []byte) (*Stack, error) {
 
 	st := &Stack{Hydra: typed.Hydra, Services: map[string]*Service{}, Raw: raw}
 	g := &st.Hydra
-	if g.BaseRef == "" {
-		g.BaseRef = "main"
-	}
 	if g.SlotStride == 0 {
 		g.SlotStride = 1000
 	}
@@ -183,6 +295,14 @@ func Parse(data []byte) (*Stack, error) {
 			s = &Service{Shared: true}
 		}
 		s.Name = name
+		if s.Kind == KindTemporal {
+			if s.URL == "" {
+				s.URL = "hydra-{slot}"
+			}
+			if s.BaselineURL == "" {
+				s.BaselineURL = "default"
+			}
+		}
 		if s.URL == "" {
 			s.URL = "http://{host}:{port}"
 		}
@@ -194,6 +314,20 @@ func Parse(data []byte) (*Stack, error) {
 		}
 		sort.Strings(s.DependsOn)
 		st.Services[name] = s
+	}
+
+	// A routed service can't take a Temporal namespace from its environment
+	// (main's copy has main's), so it gets it per request.
+	for _, s := range st.Services {
+		if s.Routed == NotRouted {
+			continue
+		}
+		for env, u := range s.Upstreams {
+			if t := st.Services[u.Service]; t != nil && t.Kind == KindTemporal {
+				u.PerRequest = true
+				s.Upstreams[env] = u
+			}
+		}
 	}
 
 	if err := st.validate(); err != nil {
@@ -208,6 +342,26 @@ func (st *Stack) validate() error {
 		if s.Shared && s.Follow {
 			return fmt.Errorf("%s: shared and follow can't both be set", name)
 		}
+		if s.Kind != "" {
+			known := false
+			for _, k := range kinds {
+				known = known || s.Kind == k
+			}
+			switch {
+			case !known:
+				return fmt.Errorf("%s: unknown kind %q (known: %s)", name, s.Kind, strings.Join(kinds, ", "))
+			case s.Shared || s.Follow || s.Routed != NotRouted:
+				return fmt.Errorf("%s: kind %s gives each worktree its own copy; it can't be shared, follow or routed", name, s.Kind)
+			}
+		}
+		if s.Routed != NotRouted {
+			switch {
+			case s.Shared || s.Follow:
+				return fmt.Errorf("%s: routed can't be combined with shared or follow", name)
+			case s.Port == 0:
+				return fmt.Errorf("%s: routed needs x-hydra.port, the port worktrees reach it through", name)
+			}
+		}
 		for _, env := range s.UpstreamEnvs() {
 			u := s.Upstreams[env]
 			t, ok := st.Services[u.Service]
@@ -220,6 +374,9 @@ func (st *Stack) validate() error {
 			}
 			if strings.Contains(tmpl, "{port}") && t.Port == 0 {
 				return fmt.Errorf("%s: upstream %s needs %s's port, but %s has no x-hydra.port", name, env, t.Name, t.Name)
+			}
+			if u.PerRequest && s.Routed == NotRouted {
+				return fmt.Errorf("%s: upstream %s is per_request, which only applies to a routed service", name, env)
 			}
 		}
 	}
@@ -249,6 +406,17 @@ func (st *Stack) checkPorts() error {
 			}
 			owner[p] = who
 		}
+	}
+	for _, name := range st.Dispatched() {
+		p := st.DispatchPort(st.Services[name])
+		who := "the router's port for " + name
+		if p > 65535 {
+			return fmt.Errorf("%s would be %d; lower max_slots or slot_stride", who, p)
+		}
+		if prev, taken := owner[p]; taken {
+			return fmt.Errorf("port %d: %s collides with %s; change slot_stride, max_slots or the base ports", p, who, prev)
+		}
+		owner[p] = who
 	}
 	return nil
 }

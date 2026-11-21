@@ -93,7 +93,7 @@ document.addEventListener("click", function (e) {
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var ORDER = ["web", "api", "worker", "db"];
   var SVC = {
-    web: { port: 3000, paths: ["apps/web/", "packages/shared/"], up: "api" },
+    web: { port: 3000, paths: ["apps/web/", "packages/shared/"], up: "api", routed: true },
     api: { port: 8080, paths: ["services/api/", "packages/shared/"] },
     worker: { paths: ["services/worker/", "packages/shared/"], up: "api" },
     db: { port: 5432, shared: true }
@@ -102,7 +102,7 @@ document.addEventListener("click", function (e) {
   var SCENES = [
     {
       label: "three agents",
-      cap: "Three agents in three worktrees. Each starts only the service it touched. The one fixing a typo in the README starts nothing.",
+      cap: "Three agents in three worktrees. Each starts only the service it touched, and the one fixing a typo starts nothing. A worktree that left the frontend alone uses main's, on a port of its own.",
       lanes: [{ name: "fix-cart-total", tag: "slot 1", slot: 1 }, { name: "api-pagination", tag: "slot 2", slot: 2 }, { name: "docs-typo", tag: "slot 3", slot: 3 }],
       script: [
         [500, 0, "say", "reading apps/web/cart.tsx"],
@@ -113,7 +113,7 @@ document.addEventListener("click", function (e) {
         [600, 2, "edit", "README.md"],
         [100, 2, "note", "No service owns README.md, so nothing starts."],
         [900, 0, "say", "checking the total at localhost:3200"],
-        [700, 1, "say", "curl 'localhost:8480/orders?page=2'"],
+        [700, 1, "say", "checking page 2 of the orders list at localhost:3400"],
         [700, 2, "say", "done"]
       ]
     },
@@ -182,7 +182,7 @@ document.addEventListener("click", function (e) {
   var tabs = bar.querySelectorAll(".sc");
 
   function cellHTML(svc) {
-    return '<div class="g-cell" data-svc="' + svc + '"><span class="off">·</span><span class="on"><i></i><b></b></span><span class="wire"></span></div>';
+    return '<div class="g-cell" data-svc="' + svc + '"><span class="off">·</span><span class="on"><i></i><b></b></span><span class="via"><i></i><b></b></span><span class="wire"></span></div>';
   }
 
   function build() {
@@ -210,8 +210,21 @@ document.addEventListener("click", function (e) {
   }
 
   // The plan: which service runs in which row, on which port, wired to what.
+  // via: a routed service the row didn't change. Main's copy answers on the
+  // row's own port and calls the row's services.
+  var via = {};
+  function addVia(row, slot, local) {
+    ORDER.forEach(function (svc) {
+      var s = SVC[svc];
+      if (!s.routed || svc in local) return;
+      via[row + ":" + svc] = { row: row, svc: svc, text: ":" + (s.port + slot * STRIDE),
+        wire: "main's copy\n" + s.up + " → " + (s.up in local ? "here" : "main") };
+    });
+  }
+
   function plan() {
     var out = {}, top = scene.lanes.length - 1;
+    via = {};
     function add(row, svc, slot, why, local) {
       var s = SVC[svc];
       out[row + ":" + svc] = {
@@ -228,6 +241,7 @@ document.addEventListener("click", function (e) {
         if (f) { owner[svc] = i; why[svc] = "changed" + (i < top ? " in " + scene.lanes[i].name : "") + ": " + f; }
       });
       Object.keys(owner).forEach(function (svc) { add(owner[svc], svc, 1, why[svc], owner); });
+      addVia(top, 1, owner);
     } else {
       scene.lanes.forEach(function (l, i) {
         var local = {}, w = {};
@@ -237,6 +251,7 @@ document.addEventListener("click", function (e) {
           if (f) { local[svc] = true; w[svc] = "changed: " + f; }
         });
         Object.keys(local).forEach(function (svc) { add(i, svc, l.slot, w[svc], local); });
+        addVia(i, l.slot, local);
       });
     }
     return out;
@@ -277,6 +292,18 @@ document.addEventListener("click", function (e) {
       } else if (shown[k].wire !== n.wire && !quiet) {
         c.classList.remove("rewire"); void c.offsetWidth; c.classList.add("rewire");
       }
+    });
+    rows.forEach(function (r, i) {
+      ORDER.forEach(function (svc) {
+        if (!SVC[svc].routed) return;
+        var c = r.querySelector('[data-svc="' + svc + '"]'), v = via[i + ":" + svc];
+        c.classList.toggle("is-via", !!v);
+        if (!v) return;
+        var wire = c.querySelector(".wire"), was = wire.textContent;
+        c.querySelector(".via b").textContent = v.text;
+        wire.textContent = v.wire;
+        if (was && was !== v.wire && !quiet) { c.classList.remove("rewire"); void c.offsetWidth; c.classList.add("rewire"); }
+      });
     });
     shown = next;
     tally();
@@ -417,7 +444,7 @@ document.addEventListener("click", function (e) {
     api: { port: 8080, paths: ["services/api/", "packages/shared/"], upstreams: {} },
     db: { shared: true, paths: ["db/migrations/"] },
     deps: { follow: true },
-    web: { port: 3000, paths: ["apps/web/", "packages/shared/"], needs: ["deps"],
+    web: { port: 3000, paths: ["apps/web/", "packages/shared/"], needs: ["deps"], routed: true,
            upstreams: { API_URL: "api", JOBS_QUEUE: "worker", NEXT_PUBLIC_SITE_URL: "web" } },
     worker: { paths: ["services/worker/", "packages/shared/"], url: "jobs-{slot}", baselineUrl: "jobs",
               upstreams: { API_URL: "api" } }
@@ -460,6 +487,18 @@ document.addEventListener("click", function (e) {
         why[n] = "unchanged";
       }
     });
+    // A routed service stays on main's copy unless one of its calls can't be
+    // routed per request: only values that carry a port can.
+    function routable(t) { return (services[t].url || "{port}").indexOf("{port}") >= 0; }
+    names.forEach(function (n) {
+      var s = services[n];
+      if (!s.routed || local[n]) return;
+      var env = Object.keys(s.upstreams).sort().filter(function (e) {
+        var t = s.upstreams[e];
+        return t !== n && local[t] && !routable(t);
+      })[0];
+      if (env) { local[n] = true; why[n] = env + " points at " + s.upstreams[env] + " here and can't be routed per request"; }
+    });
     names.forEach(function (n) {
       if (!services[n].follow) return;
       var by = names.filter(function (m) { return local[m] && (services[m].needs || []).indexOf(n) >= 0; })[0];
@@ -468,12 +507,23 @@ document.addEventListener("click", function (e) {
 
     var rows = pad([["SERVICE", "RUNS", "PORT", "WHY"]].concat(names.map(function (n) {
       var s = services[n];
-      return [n, local[n] ? "here" : "baseline", s.port ? String(s.port + (local[n] ? SLOT * STRIDE : 0)) : "-", why[n]];
+      var routed = s.routed && !local[n];
+      return [n, local[n] ? "here" : routed ? "main, routed" : "baseline",
+        s.port ? String(s.port + (local[n] || routed ? SLOT * STRIDE : 0)) : "-",
+        routed ? "main's copy, tagged for this worktree" : why[n]];
     })));
 
     var wires = [];
     names.forEach(function (n) {
-      if (!local[n]) return;
+      if (!local[n]) {
+        if (services[n].routed) Object.keys(services[n].upstreams).sort().forEach(function (env) {
+          var t = services[n].upstreams[env];
+          if (t === n || !routable(t)) return;
+          wires.push([n, env, "-> " + t + " (" + (local[t] ? "local" : "baseline") + ")", value(t, !!local[t]),
+            "per request: " + t + (local[t] ? " running here" : " not running here")]);
+        });
+        return;
+      }
       Object.keys(services[n].upstreams || {}).sort().forEach(function (env) {
         var t = services[n].upstreams[env];
         wires.push([n, env, "-> " + t + " (" + (local[t] ? "local" : "baseline") + ")", value(t, !!local[t]),

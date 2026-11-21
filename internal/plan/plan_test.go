@@ -240,3 +240,201 @@ processes:
 		t.Errorf("web should use the stack's api: %+v", u)
 	}
 }
+
+const routedStack = `
+x-hydra:
+  slot_stride: 100
+  max_slots: 5
+processes:
+  api:
+    command: x
+    x-hydra: { port: 6010, paths: ["apps/api/**"] }
+  worker:
+    command: x
+    x-hydra: { paths: ["apps/worker/**"], url: "hydra-{slot}", baseline_url: default }
+  web:
+    command: x
+    x-hydra:
+      port: 6000
+      paths: ["apps/web/**"]
+      routed: node
+      upstreams: { API_URL: api, QUEUE: worker, SITE_URL: web }
+  mobile:
+    command: x
+    x-hydra: { paths: ["apps/mobile/**"], upstreams: { WEB_PORT: { service: web, value: "{port}" } } }
+`
+
+func loadRouted(t *testing.T, edit func(string) string) *config.Stack {
+	t.Helper()
+	src := routedStack
+	if edit != nil {
+		src = edit(src)
+	}
+	st, err := config.Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+func routedUpstream(t *testing.T, p *Plan, svc, env string) Upstream {
+	t.Helper()
+	row := p.Get(svc)
+	if row == nil || !row.Routed {
+		t.Fatalf("%s is not routed: %+v", svc, row)
+	}
+	for _, u := range row.Upstreams {
+		if u.Env == env {
+			return u
+		}
+	}
+	t.Fatalf("routed %s has no upstream %s", svc, env)
+	return Upstream{}
+}
+
+func TestRoutedServiceStaysOnMainsCopy(t *testing.T) {
+	st := loadRouted(t, nil)
+
+	// The api changed: only the api runs here. Web is main's copy behind
+	// this worktree's port, and its api calls are routed here per request.
+	p, err := Build(st, Request{Slot: 2, Changed: []string{"apps/api/list.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := local(p); got != "api" {
+		t.Errorf("local = %q, want api", got)
+	}
+	web := p.Get("web")
+	if !web.Routed || web.Local || web.Port != 6200 {
+		t.Errorf("web = %+v, want routed on :6200", web)
+	}
+	if u := routedUpstream(t, p, "web", "API_URL"); u.Target != Local || u.Value != "http://127.0.0.1:6210" {
+		t.Errorf("web API_URL = %+v", u)
+	}
+
+	// Nothing changed: web is still reachable on the worktree's port, and
+	// its calls go to main's api.
+	p, err = Build(st, Request{Slot: 2, Changed: []string{"README.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u := routedUpstream(t, p, "web", "API_URL"); u.Target != Baseline || u.Value != "http://127.0.0.1:6010" {
+		t.Errorf("web API_URL = %+v", u)
+	}
+
+	// Web itself changed: it runs here, like any service.
+	p, err = Build(st, Request{Slot: 2, Changed: []string{"apps/web/page.tsx"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if web := p.Get("web"); !web.Local || web.Routed {
+		t.Errorf("web = %+v, want local", web)
+	}
+}
+
+func TestRoutedServiceRunsHereWhenACallCantBeRouted(t *testing.T) {
+	// The worker changed, and web names its queue in an env var read once at
+	// start. Main's copy would keep using main's queue, so web runs here.
+	st := loadRouted(t, nil)
+	p, err := Build(st, Request{Slot: 1, Changed: []string{"apps/worker/job.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := local(p); got != "web,worker" {
+		t.Fatalf("local = %q, want web,worker", got)
+	}
+	if why := p.Get("web").Why; !strings.Contains(why, "QUEUE points at worker here and can't be routed per request") {
+		t.Errorf("web why = %q", why)
+	}
+
+	// Once web picks the queue per request, main's copy can serve it.
+	st = loadRouted(t, func(s string) string {
+		return strings.Replace(s, "QUEUE: worker", "QUEUE: { service: worker, per_request: true }", 1)
+	})
+	p, err = Build(st, Request{Slot: 1, Changed: []string{"apps/worker/job.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := local(p); got != "worker" {
+		t.Fatalf("local = %q, want worker", got)
+	}
+	if u := routedUpstream(t, p, "web", "QUEUE"); u.Value != "hydra-1" || !u.PerRequest {
+		t.Errorf("web QUEUE = %+v", u)
+	}
+
+	// Excluded on purpose: it stays on main's copy, with a warning.
+	st = loadRouted(t, nil)
+	p, err = Build(st, Request{Slot: 1, Changed: []string{"apps/worker/job.go"}, Without: []string{"web"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := local(p); got != "worker" || len(p.Warnings) != 1 || !strings.Contains(p.Warnings[0], "web is excluded") {
+		t.Errorf("local = %q, warnings = %q", got, p.Warnings)
+	}
+}
+
+func TestCallsIntoARoutedServiceUseTheWorktreesPort(t *testing.T) {
+	// Mobile runs here and calls web, which doesn't: it goes through this
+	// worktree's port for web, so its requests carry the worktree's tag.
+	st := loadRouted(t, nil)
+	p, err := Build(st, Request{Slot: 3, Changed: []string{"apps/mobile/app.tsx"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u := upstream(t, p, "mobile", "WEB_PORT"); u.Target != Routed || u.Value != "6300" {
+		t.Errorf("mobile WEB_PORT = %+v", u)
+	}
+}
+
+func TestBaselineSendsRoutedCallsThroughTheRouter(t *testing.T) {
+	st := loadRouted(t, nil)
+	p := BaselinePlan(st)
+	web := p.Get("web")
+	got := map[string]string{}
+	for _, u := range web.Upstreams {
+		got[u.Env] = u.Value
+	}
+	// The api is one stride past the last slot; the queue name and web's own
+	// address are left alone.
+	want := map[string]string{"API_URL": "http://127.0.0.1:6610", "QUEUE": "default", "SITE_URL": "http://127.0.0.1:6000"}
+	for env, v := range want {
+		if got[env] != v {
+			t.Errorf("%s = %q, want %q", env, got[env], v)
+		}
+	}
+	if strings.Join(web.Dispatch, ",") != "API_URL" {
+		t.Errorf("dispatch = %v", web.Dispatch)
+	}
+}
+
+func TestTemporalKindPreparesItsNamespace(t *testing.T) {
+	st, err := config.Parse([]byte(`
+x-hydra: { slot_stride: 100 }
+processes:
+  worker:
+    command: x
+    x-hydra: { kind: temporal, paths: ["core/**"] }
+  web:
+    command: x
+    x-hydra: { port: 3000, paths: ["web/**"], routed: node, upstreams: { TEMPORAL_NAMESPACE: worker } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Hydra.Exe = "/opt/my tools/hydra"
+	p, err := Build(st, Request{Slot: 2, Changed: []string{"core/job.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The worker gets its namespace made first; web stays on main's copy and
+	// switches it per request.
+	if got, want := p.Get("worker").Prepare, `'/opt/my tools/hydra' prepare temporal --namespace hydra-2 --from default`; got != want {
+		t.Errorf("prepare = %q, want %q", got, want)
+	}
+	if got := local(p); got != "worker" {
+		t.Errorf("local = %q, want worker", got)
+	}
+	if u := routedUpstream(t, p, "web", "TEMPORAL_NAMESPACE"); u.Value != "hydra-2" || !u.PerRequest {
+		t.Errorf("web TEMPORAL_NAMESPACE = %+v", u)
+	}
+}

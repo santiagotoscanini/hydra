@@ -51,7 +51,7 @@ func main() {
 				if out.Upstreams == nil {
 					out.Upstreams = map[string]*upstream{}
 				}
-				out.Upstreams[env] = call(os.Getenv(env), depth+1)
+				out.Upstreams[env] = call(os.Getenv(env), depth+1, r.Header.Get("X-Hydra-Worktree"))
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -62,7 +62,9 @@ func main() {
 	log.Fatal(http.ListenAndServe("127.0.0.1:"+port, nil))
 }
 
-func call(url string, depth int) *upstream {
+// call asks an upstream for its reply. worktree is the tag of the request
+// being served, passed on so a routed copy's calls reach that worktree.
+func call(url string, depth int, worktree string) *upstream {
 	u := &upstream{URL: url}
 	// Mock databases get a postgres:// URL; talk HTTP to the same host:port.
 	httpURL := url
@@ -75,6 +77,9 @@ func call(url string, depth int) *upstream {
 	}
 	req, _ := http.NewRequest("GET", httpURL, nil)
 	req.Header.Set("X-Hydra-Depth", strconv.Itoa(depth))
+	if worktree != "" {
+		req.Header.Set("X-Hydra-Worktree", worktree)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		u.Error = err.Error()

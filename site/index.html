@@ -42,7 +42,7 @@
 
 <section>
   <h2>What that looks like with agents at work</h2>
-  <p class="sec-note measure">Rows are checkouts and columns are services. A lit cell is a process running in that checkout. A dot means the checkout uses main's copy.</p>
+  <p class="sec-note measure">Rows are checkouts and columns are services. A lit cell is a process running in that checkout. A dot means the checkout uses main's copy. A ring is main's frontend answering on that checkout's own port, with its API calls sent to that checkout.</p>
 
   <div class="sim" id="sim">
     <div class="sim-bar"><div class="sim-ctl"><button data-sim-toggle>pause</button></div></div>
@@ -52,7 +52,7 @@
     <div class="sim-count"></div>
     <div class="sim-log mono"></div>
   </div>
-  <noscript><p class="aside">The animation needs JavaScript. In short: an agent edits <code>apps/web/cart.tsx</code> in a worktree, and only <code>web</code> starts there, on port 3200, talking to main's API on 8080.</p></noscript>
+  <noscript><p class="aside">The animation needs JavaScript. In short: an agent edits <code>apps/web/cart.tsx</code> in a worktree, and only <code>web</code> starts there, on port 3200, talking to main's API on 8080. Another agent edits the API in a second worktree: only the API starts there, and main's <code>web</code> serves that worktree on port 3400.</p></noscript>
   <p class="aside">Not a recording. The cells follow the rules hydra applies, and the log lines are the ones <code>hydra-watch</code> prints.</p>
 </section>
 
@@ -70,10 +70,9 @@
 version: "0.5"
 
 x-hydra:
-  base_ref: main
   slot_stride: 200
 </pre>
-      <div class="say"><p><code>base_ref</code> is the branch a worktree is compared with.</p><p><code>slot_stride</code> is how far apart worktrees sit. The first one listens on every port + 200, the second on + 400.</p></div>
+      <div class="say"><p><code>slot_stride</code> is how far apart worktrees sit. The first one listens on every port + 200, the second on + 400.</p><p>Worktrees are compared with the repository's default branch, which hydra reads from git.</p></div>
     </div>
 
     <div class="chunk">
@@ -108,10 +107,11 @@ processes:
     x-hydra:
       port: 3000
       paths: ["apps/web/**"]
+      routed: node
       upstreams:
         API_URL: api
 </pre>
-      <div class="say"><p><code>upstreams</code> maps an environment variable to the service it points at.</p><p>In a worktree, <code>API_URL</code> is that worktree's api if it runs there, and main's otherwise.</p></div>
+      <div class="say"><p><code>upstreams</code> maps an environment variable to the service it points at.</p><p>In a worktree, <code>API_URL</code> is that worktree's api if it runs there, and main's otherwise.</p><p><code>routed</code> lets main's copy serve the worktrees that didn't change it. <a href="#one-frontend">More below</a>.</p></div>
     </div>
   </div>
   <p class="aside">Every option, with defaults, is in <a href="docs/#config">the docs</a>.</p>
@@ -138,7 +138,7 @@ $ git ls-files --others --exclude-standard
       <li>Writes <code>.process-compose/hydra.yaml</code>: those services only, with their ports and upstreams set.</li>
       <li>Starts process-compose on it, on a socket of its own. <code>hydra down</code> in a worktree can't stop main's stack.</li>
     </ol>
-    <p style="margin-top:14px">hydra runs no services itself and proxies nothing. It writes a normal process-compose file and sets environment variables.</p>
+    <p style="margin-top:14px">hydra writes a normal process-compose file and sets environment variables. It sits in the path of a request in one case only, described <a href="#one-frontend">below</a>.</p>
   </div>
 </section>
 
@@ -161,6 +161,34 @@ $ git ls-files --others --exclude-standard
     <p style="margin-top:18px">Services that point at it are restarted with the new address. Further edits to a service that already runs here are left to its own reload, like <code>next dev</code> or <code>air</code>.</p>
     <p>It asks git instead of watching the file system because only git knows whether a file differs from <code>main</code>. A revert has to stop the service, and <code>node_modules</code> must not start one. It reads git without taking the index lock, so it stays out of the way of an agent's commits.</p>
     <p>Stacked branches work too: each branch is compared with its parent, and each service runs from the worktree of the branch that changed it. <a href="docs/#stacks">How a stack is found</a>.</p>
+  </div>
+</section>
+
+<hr>
+
+<section id="one-frontend">
+  <div class="measure">
+    <h2>One frontend for all of them</h2>
+    <p>A branch that only changed the API has no page to open: the frontend runs in main and calls main's API. A second dev server per worktree would fix that, and it is the most expensive process in the stack. So a service marked <code>routed</code> keeps a single copy, in main, that serves every worktree which left it alone.</p>
+  </div>
+  <div class="code measure" style="margin-top:16px">
+<pre data-lang="text">
+you open  localhost:3400         slot 2's port for web. hydra's router answers,
+                                 marks the request "worktree 2", passes it on
+          main's web  :3000      renders the page; its API call keeps the mark
+          hydra's router         reads the mark
+          slot 2's api  :8480    or main's api, if slot 2 runs none
+</pre>
+  </div>
+  <div class="measure">
+    <p style="margin-top:18px">The mark is a header. Chrome doesn't send it: the router adds it, because a request on port 3400 can only be for slot 2. The frontend has to copy it onto the calls it makes, and <code>routed: node</code> loads a small script into the Node process that does that, so the app isn't changed.</p>
+    <p>Three rules keep this from testing the wrong code without telling you:</p>
+    <ol class="steps">
+      <li>The router checks that the mark really comes out the other side before a worktree may use main's copy.</li>
+      <li>A call that can't be routed, such as a queue name read once at start, makes the frontend run in the worktree after all.</li>
+      <li>If a worktree's API is down, its calls fail. They never fall back to main's API.</li>
+    </ol>
+    <p style="margin-top:14px"><a href="docs/#routed">How routing works, and its limits</a>.</p>
   </div>
 </section>
 
@@ -189,7 +217,7 @@ $ git ls-files --others --exclude-standard
 <hr>
 
 <footer class="foot">
-  <p>hydra is about 2,500 lines of Go and has no daemon: the watcher is one more process in your process-compose project.</p>
+  <p>hydra is about 3,500 lines of Go and has no daemon: the watcher and the router are ordinary processes in your process-compose projects.</p>
   <p>This page is static HTML, one stylesheet and one script, with its fonts served from here. No build step, no trackers.</p>
   <p><a href="docs/">docs</a> · <a href="https://github.com/santiagotoscanini/hydra">source</a> · <a href="https://github.com/F1bonacc1/process-compose">process-compose</a></p>
 </footer>
