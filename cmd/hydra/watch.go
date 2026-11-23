@@ -123,6 +123,7 @@ func step(t *target, o options, cmd, out, sock string) error {
 	if err != nil {
 		return err
 	}
+	noteMain(t, p)
 	data, err := t.render(p, cmd)
 	if err != nil {
 		return err
@@ -168,6 +169,39 @@ func step(t *target, o options, cmd, out, sock string) error {
 	}
 	migrateSupabase(t, p)
 	return nil
+}
+
+// said is the last thing the watcher logged about each subject, so it says a
+// thing once, when it changes.
+var said = map[string]string{}
+
+// noteMain logs, in the worktree's own log, when the main checkout's stack
+// stops answering and when the branch falls out of step with main: both
+// break what runs here without anything here changing.
+func noteMain(t *target, p *plan.Plan) {
+	say := func(key, bad, good string) {
+		if said[key] == bad {
+			return
+		}
+		was := said[key]
+		said[key] = bad
+		switch {
+		case bad != "":
+			logf("%s", bad)
+		case was != "":
+			logf("%s", good)
+		}
+	}
+	down := ""
+	if !mainClient(t.checkout.CommonDir).Alive() {
+		down = "! main's stack isn't answering: what this worktree takes from it is down (cd " + shQuote(t.checkout.Main) + " && hydra up -D)"
+	}
+	say("main", down, "main's stack answers again")
+	skew := ""
+	if pr := skewProblem(t.stack, p); pr != nil {
+		skew = "! " + strings.ReplaceAll(pr.Text, "\n", "\n    ") + "\n    fix: " + pr.Fix
+	}
+	say("skew", skew, "in step with main again")
 }
 
 // migrationsSeen is what the worktree's supabase/migrations looked like when
@@ -249,7 +283,7 @@ func sortedNames(m map[string]string) []string {
 }
 
 func describeStack(t *target) string {
-	layers, _, err := t.layers()
+	layers, _, _, err := t.layers()
 	if err != nil || len(layers) < 2 {
 		return t.checkout.Root
 	}

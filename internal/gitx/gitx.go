@@ -62,6 +62,34 @@ func Head(dir string) (string, error) {
 	return run(dir, "rev-parse", "HEAD")
 }
 
+// DiffNames lists the paths that differ between two commits.
+func DiffNames(dir, a, b string) ([]string, error) {
+	out, err := run(dir, "diff", "--name-only", "--no-renames", a, b)
+	if err != nil || out == "" {
+		return nil, err
+	}
+	return strings.Split(out, "\n"), nil
+}
+
+// IsAncestor reports whether commit a is contained in commit b.
+func IsAncestor(dir, a, b string) bool {
+	return exec.Command("git", "-C", dir, "merge-base", "--is-ancestor", a, b).Run() == nil
+}
+
+// Branch is the checked-out branch's short name, or "" when detached.
+func Branch(dir string) string {
+	name, _ := run(dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+	return name
+}
+
+// Short abbreviates a commit for messages.
+func Short(commit string) string {
+	if len(commit) > 9 {
+		return commit[:9]
+	}
+	return commit
+}
+
 func hasRef(dir, ref string) bool {
 	_, err := run(dir, "rev-parse", "--verify", "--quiet", ref)
 	return err == nil

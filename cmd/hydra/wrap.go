@@ -8,9 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/gitx"
+	"github.com/santiagotoscanini/hydra/internal/pc"
+	"github.com/santiagotoscanini/hydra/internal/plan"
 )
 
 // process-compose subcommands that load the config file, so they get the
@@ -36,6 +39,7 @@ type pcArgs struct {
 	file  string   // the user's -f, if any
 	names []string // positional process names after up/run
 	rest  []string // everything else, in order, minus -f
+	force bool     // hydra's own --force: start despite what the checks found
 }
 
 func parsePC(args []string) pcArgs {
@@ -43,6 +47,9 @@ func parsePC(args []string) pcArgs {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
+		case arg == "--force":
+			a.force = true
+			continue
 		case arg == "-f" || arg == "--config":
 			if i+1 < len(args) {
 				a.file = args[i+1]
@@ -111,9 +118,13 @@ func wrap(args []string) error {
 			}
 			final = append(final, "-f", file)
 		} else {
-			out, local, err := renderFor(co, file, a.names)
+			starting := a.sub == "" || a.sub == "up" || a.sub == "run"
+			out, local, err := renderFor(co, file, a.names, starting, a.force)
 			if err != nil {
 				return err
+			}
+			if starting && co.IsMain() {
+				recordStart(co, a.rest)
 			}
 			final = append(final, "-f", out)
 			a.rest = keepRunnable(a.rest, a.names, local)
@@ -132,8 +143,46 @@ func wrap(args []string) error {
 	return execPC(pc, final)
 }
 
+// recordStart notes, when the main checkout's stack is about to start, the
+// commit it starts on and where its process-compose will listen: worktrees
+// check both. A stack that is already up keeps its record.
+func recordStart(co gitx.Checkout, args []string) {
+	host, port := pcAddress(args)
+	if pc.TCP(host, port).Alive() {
+		return
+	}
+	head, err := gitx.Head(co.Root)
+	if err != nil {
+		return
+	}
+	if err := writeBaseline(co.CommonDir, baselineRecord{Commit: head, At: time.Now(), Address: host, Port: port}); err != nil {
+		fmt.Fprintln(os.Stderr, "hydra: warning: can't record the baseline's commit:", err)
+	}
+}
+
+// preflight refuses to start a worktree on a main stack that is down,
+// broken or out of step with the branch: everything `hydra status` would
+// flag before anything runs here.
+func preflight(co gitx.Checkout, t *target, p *plan.Plan, force bool) error {
+	ms, err := loadMain(co)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "hydra: warning: can't check the main checkout:", err)
+		return nil
+	}
+	problems := worktreeProblems(ms, &wtState{target: t, Plan: p}, false)
+	if len(problems) == 0 {
+		return nil
+	}
+	printProblems(os.Stderr, problems)
+	if len(blocking(problems)) > 0 && !force {
+		return fmt.Errorf("not starting this worktree: fix what is marked ✗ above, or start anyway with --force")
+	}
+	return nil
+}
+
 // renderFor plans and renders the checkout and returns the rendered file.
-func renderFor(co gitx.Checkout, file string, names []string) (string, map[string]bool, error) {
+// With starting, a worktree is checked against the main checkout first.
+func renderFor(co gitx.Checkout, file string, names []string, starting, force bool) (string, map[string]bool, error) {
 	t, err := resolve(co.Root, file)
 	if err != nil {
 		return "", nil, err
@@ -149,6 +198,11 @@ func renderFor(co gitx.Checkout, file string, names []string) (string, map[strin
 	p, err := t.build(o)
 	if err != nil {
 		return "", nil, err
+	}
+	if starting && !co.IsMain() {
+		if err := preflight(co, t, p, force); err != nil {
+			return "", nil, err
+		}
 	}
 	data, err := t.render(p, watch)
 	if err != nil {
@@ -169,8 +223,10 @@ func renderFor(co gitx.Checkout, file string, names []string) (string, map[strin
 	if p.Slot > 0 {
 		fmt.Fprintf(os.Stderr, "hydra: slot %d, running here: %s\n", p.Slot, strings.Join(orNone(p.Local()), ", "))
 		routedNote(t, p)
-		for _, w := range p.Warnings {
-			fmt.Fprintln(os.Stderr, "hydra: warning:", w)
+		if !starting { // the checks before a start already said these
+			for _, w := range p.Warnings {
+				fmt.Fprintln(os.Stderr, "hydra: warning:", w)
+			}
 		}
 	}
 	local := map[string]bool{}
@@ -220,5 +276,34 @@ func execPC(pc string, args []string) error {
 		fmt.Println(strings.Join(append([]string{"process-compose"}, args...), " "))
 		return nil
 	}
-	return syscall.Exec(pc, append([]string{"process-compose"}, args...), os.Environ())
+	return syscall.Exec(pc, append([]string{"process-compose"}, args...), withoutAgentMarks(os.Environ()))
+}
+
+// agentMarks are the variables tools read to tell that an AI agent's shell
+// started them. Next.js, for one, prints a notice for agents and exits on
+// its first start. A stack has to run the same whoever typed `hydra up`, so
+// its processes don't inherit them. A trailing * matches a prefix.
+var agentMarks = []string{
+	"AI_AGENT", "CLAUDECODE", "CLAUDE_CODE", "CLAUDE_CODE_*", "CLAUDE_AGENT_SDK_VERSION",
+	"CURSOR_AGENT", "CURSOR_TRACE_ID", "CODEX_SANDBOX", "CODEX_SANDBOX_*", "CODEX_THREAD_ID",
+	"GEMINI_CLI", "AUGMENT_AGENT", "OPENCODE_CLIENT", "REPL_ID",
+}
+
+func withoutAgentMarks(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		marked := false
+		for _, m := range agentMarks {
+			if prefix, ok := strings.CutSuffix(m, "*"); ok {
+				marked = marked || strings.HasPrefix(name, prefix)
+			} else {
+				marked = marked || name == m
+			}
+		}
+		if !marked {
+			out = append(out, kv)
+		}
+	}
+	return out
 }

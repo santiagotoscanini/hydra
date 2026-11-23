@@ -68,11 +68,13 @@ type Request struct {
 	With    []string // force these to run locally
 	Without []string // force these to come from the baseline
 	Routes  Routes
-	// BaselineDiff lists the paths where this worktree differs from the
-	// commit the main checkout has checked out, in either direction: what
-	// the worktree changed, and what main gained since it branched. Only a
-	// kind with state (supabase: its schema) looks at it.
-	BaselineDiff []string
+	// MainChanged lists the paths that differ between the commit where this
+	// branch left main and the commit the main checkout has checked out
+	// now: what main gained since. With MainBehind it is the other way
+	// round: the branch started from a newer commit than main is on, and
+	// these are the paths main still lacks.
+	MainChanged []string
+	MainBehind  bool
 }
 
 // Layer is one worktree of a stack.
@@ -125,12 +127,28 @@ type Service struct {
 	FollowDeps map[string]string
 }
 
+// Skew is a service this worktree uses from main whose code there isn't
+// the code the branch was built against.
+type Skew struct {
+	Service string
+	Why     string   // how this worktree uses it: "web here calls it"
+	Files   []string // where main and the branch's starting point differ, sorted
+}
+
 // Plan is the result for one checkout.
 type Plan struct {
 	Slot     int
 	Layers   []Layer   // the stack, bottom first (one entry when not stacked)
 	Services []Service // sorted by name
 	Warnings []string
+	// OutOfStep lists what this worktree uses from main at another version
+	// than its branch started from. MainBehind says which side is older:
+	// false, the branch (merge main into it); true, main (update main).
+	OutOfStep  []Skew
+	MainBehind bool
+	// Unclaimed are changed files that no service lists in its paths and
+	// the stack doesn't ignore: nothing runs here because of them.
+	Unclaimed []string
 }
 
 // Local returns the names of services that run in this checkout.
@@ -207,7 +225,7 @@ func BaselinePlan(st *config.Stack) *Plan {
 	p := &Plan{Slot: 0}
 	for _, name := range st.Names() {
 		s := st.Services[name]
-		row := Service{Name: name, Source: name, Local: true, Why: "baseline", Port: Port(st, s, 0), PortEnv: s.PortEnv}
+		row := Service{Name: name, Source: name, Local: true, Why: "baseline", Port: Port(st, s, 0), PortEnv: s.PortEnv, Disabled: disabled(st, name)}
 		for _, env := range s.UpstreamEnvs() {
 			u := s.Upstreams[env]
 			t := st.Services[u.Service]
@@ -266,10 +284,6 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 		switch {
 		case s.Shared:
 			skipped[n] = "shared, always baseline (" + reason + ")"
-			if strings.HasPrefix(reason, "changed") {
-				p.Warnings = append(p.Warnings, fmt.Sprintf(
-					"%s is shared, but its paths %s; the baseline's copy is used", n, reason))
-			}
 			return false
 		case without[n]:
 			skipped[n] = "excluded (--without), " + reason
@@ -283,6 +297,8 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 	//    topmost worktree that changed it, which carries the lower layers'
 	//    commits plus its own edits. Global paths only touch services that
 	//    declare paths of their own; the rest are infra.
+	type sharedHit struct{ name, reason, file string }
+	var sharedHits []sharedHit
 	for i := top; i >= 0; i-- {
 		in := ""
 		if len(layers) > 1 {
@@ -297,6 +313,11 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 				continue
 			}
 			if f, ok := firstMatch(s.Paths, layers[i].Changed); ok {
+				if s.Shared {
+					if _, seen := skipped[name]; !seen {
+						sharedHits = append(sharedHits, sharedHit{name, "changed" + in + ": " + f, f})
+					}
+				}
 				if want(name, "changed"+in+": "+f) {
 					owner[name] = i
 				}
@@ -304,23 +325,6 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 				if want(name, "changed"+in+": "+f+" (global)") {
 					owner[name] = i
 				}
-			}
-		}
-	}
-	// 1b. A database shared with the baseline has the baseline's schema. A
-	//     worktree whose schema files differ from the main checkout's, even
-	//     ones it never touched (main moved on), gets its own.
-	for _, name := range st.Names() {
-		s := st.Services[name]
-		if s.Kind != config.KindSupabase {
-			continue
-		}
-		if _, done := why[name]; done {
-			continue
-		}
-		if f, ok := firstMatch(s.Paths, req.BaselineDiff); ok {
-			if want(name, "differs from the main checkout's: "+f) {
-				owner[name] = top
 			}
 		}
 	}
@@ -384,6 +388,22 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 		}
 	}
 
+	// A shared service's changed file is worth a warning only when nothing
+	// running here takes it: a migration that this worktree's own database
+	// applies needs none.
+	for _, h := range sharedHits {
+		taken := false
+		for n := range why {
+			if _, ok := firstMatch(st.Services[n].Paths, []string{h.file}); ok {
+				taken = true
+			}
+		}
+		if !taken {
+			p.Warnings = append(p.Warnings, fmt.Sprintf(
+				"%s is shared, but its paths %s; the baseline's copy is used", h.name, h.reason))
+		}
+	}
+
 	// Everything started for another reason runs from the top worktree.
 	for n := range why {
 		if _, ok := owner[n]; !ok && !st.Services[n].Follow {
@@ -425,6 +445,9 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 		followCopies[f] = copies
 	}
 
+	// A process that is `disabled: true` waits for someone to start it. One
+	// asked for by name (`hydra up mobile`) has been.
+	off := func(name string) bool { return disabled(st, name) && !contains(req.With, name) }
 	for _, name := range st.Names() {
 		s := st.Services[name]
 		reason, local := why[name]
@@ -432,13 +455,13 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 			for _, i := range sortedInts(followCopies[name]) {
 				p.Services = append(p.Services, Service{
 					Name: followCopies[name][i], Source: name, Local: true, Why: reason,
-					PortEnv: s.PortEnv, Disabled: disabled(st, name),
+					PortEnv: s.PortEnv, Disabled: off(name),
 					Root: layers[i].Root, Layer: layers[i].Name,
 				})
 			}
 			continue
 		}
-		row := Service{Name: name, Source: name, Local: local, Why: reason, PortEnv: s.PortEnv, Disabled: disabled(st, name)}
+		row := Service{Name: name, Source: name, Local: local, Why: reason, PortEnv: s.PortEnv, Disabled: off(name)}
 		if local {
 			row.Root, row.Layer = layers[owner[name]].Root, layers[owner[name]].Name
 			row.FollowDeps = followDeps[name]
@@ -511,7 +534,192 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 		p.Services = append(p.Services, row)
 	}
 	sort.Slice(p.Services, func(i, j int) bool { return p.Services[i].Name < p.Services[j].Name })
+	p.OutOfStep, p.MainBehind = outOfStep(st, p, req.MainChanged), req.MainBehind
+	for _, l := range layers {
+		p.Unclaimed = append(p.Unclaimed, unclaimed(st, l.Changed)...)
+	}
+	p.Unclaimed = dedupe(p.Unclaimed)
 	return p, nil
+}
+
+// outOfStep finds the services this worktree uses from main whose files are
+// among those main changed since the branch left it. Only services that
+// meet this worktree's code count: the ones a service running here calls or
+// waits for (a migrations job changes the database it reads), and a routed
+// service whose calls land in this worktree. Two services that both run in
+// main are in step with each other whatever this branch did.
+func outOfStep(st *config.Stack, p *Plan, mainChanged []string) []Skew {
+	if len(mainChanged) == 0 {
+		return nil
+	}
+	local := map[string]bool{}
+	for _, row := range p.Services {
+		if row.Local {
+			local[row.Source] = true
+		}
+	}
+	// For each of main's services: who here calls it, who here waits for
+	// it, and whose calls it serves.
+	callers, waiters, serves := map[string][]string{}, map[string][]string{}, map[string][]string{}
+	add := func(m map[string][]string, svc, who string) {
+		if !contains(m[svc], who) {
+			m[svc] = append(m[svc], who)
+		}
+	}
+	for _, row := range p.Services {
+		switch {
+		case row.Local && !row.Disabled:
+			for _, u := range row.Upstreams {
+				if u.Target != Local && u.Service != row.Source {
+					add(callers, u.Service, row.Name)
+				}
+			}
+			for _, d := range st.Services[row.Source].DependsOn {
+				if !local[d] {
+					add(waiters, d, row.Name)
+				}
+			}
+		case row.Routed:
+			for _, u := range row.Upstreams {
+				if u.Target == Local {
+					add(serves, row.Name, u.Service)
+				}
+			}
+		}
+	}
+	uses := map[string]string{}
+	waited := map[string]bool{} // used only as a job something here waits for
+	for svc, who := range waiters {
+		uses[svc], waited[svc] = list(who)+" here "+verb(who, "waits", "wait")+" for it", true
+	}
+	for svc, who := range callers {
+		uses[svc], waited[svc] = list(who)+" here "+verb(who, "uses", "use")+" it", false
+	}
+	for svc, who := range serves {
+		uses[svc], waited[svc] = "it serves this worktree's "+list(who), false
+	}
+	var out []Skew
+	said := map[string]bool{} // files already reported for a service used directly
+	for _, jobs := range []bool{false, true} {
+		for _, name := range sortedKeys(uses) {
+			s := st.Services[name]
+			if s == nil || len(s.Paths) == 0 || waited[name] != jobs {
+				continue
+			}
+			files := allMatches(s.Paths, mainChanged)
+			if jobs {
+				// A job in main works on main's state. When a service here
+				// takes the same files (this worktree's own database applies
+				// its own migrations), main's run of the job doesn't reach
+				// it. And when the service the job works on is already
+				// listed for those files, saying it twice helps nobody.
+				var left []string
+				for _, f := range notTakenHere(st, local, files) {
+					if !said[f] {
+						left = append(left, f)
+					}
+				}
+				files = left
+			}
+			for _, f := range files {
+				said[f] = true
+			}
+			if len(files) > 0 {
+				out = append(out, Skew{Service: name, Why: uses[name], Files: files})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Service < out[j].Service })
+	return out
+}
+
+// list joins names as prose: "api", "api and worker", "api, web and worker".
+func list(names []string) string {
+	sort.Strings(names)
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+}
+
+func verb(names []string, one, many string) string {
+	if len(names) == 1 {
+		return one
+	}
+	return many
+}
+
+// notTakenHere drops the files that a service running in this worktree
+// lists in its paths.
+func notTakenHere(st *config.Stack, local map[string]bool, files []string) []string {
+	var out []string
+	for _, f := range files {
+		taken := false
+		for name := range local {
+			if _, ok := firstMatch(st.Services[name].Paths, []string{f}); ok {
+				taken = true
+				break
+			}
+		}
+		if !taken {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// unclaimed returns the changed files that no service's paths take (a `!`
+// exclusion still counts as taking it: someone decided it doesn't matter)
+// and the stack's ignore list doesn't cover.
+func unclaimed(st *config.Stack, changed []string) []string {
+	var positive []string
+	for _, s := range st.Services {
+		for _, pat := range s.Paths {
+			if !strings.HasPrefix(pat, "!") {
+				positive = append(positive, pat)
+			}
+		}
+	}
+	for _, pat := range append(append([]string{}, st.Hydra.GlobalPaths...), st.Hydra.Ignore...) {
+		positive = append(positive, strings.TrimPrefix(pat, "!"))
+	}
+	var out []string
+	for _, f := range changed {
+		taken := false
+		for _, pat := range positive {
+			if glob.Match(pat, f) {
+				taken = true
+				break
+			}
+		}
+		if !taken {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func dedupe(xs []string) []string {
+	sort.Strings(xs)
+	var out []string
+	for i, x := range xs {
+		if i == 0 || x != xs[i-1] {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// allMatches returns every path that firstMatch would accept.
+func allMatches(patterns, paths []string) []string {
+	var out []string
+	for _, f := range paths {
+		if _, ok := firstMatch(patterns, []string{f}); ok {
+			out = append(out, f)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // prepareTemplate is the service's prepare command, or the one its kind

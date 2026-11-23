@@ -49,8 +49,17 @@ func web(apiURL func() string, forward *bool) *httptest.Server {
 		}
 		return http.DefaultClient.Do(req)
 	}
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tag := r.Header.Get(TagHeader)
+		switch r.URL.Path {
+		case "/redirect-home": // an absolute URL built from its own address
+			http.Redirect(w, r, srv.URL+"/landing?x=1", http.StatusFound)
+			return
+		case "/redirect-away":
+			http.Redirect(w, r, "https://example.com/x", http.StatusFound)
+			return
+		}
 		if r.URL.Path == probePath {
 			resp, err := call(tag, echoPath)
 			if err != nil {
@@ -74,6 +83,7 @@ func web(apiURL func() string, forward *bool) *httptest.Server {
 		w.Header().Set("X-Saw-Upstreams", r.Header.Get(UpstreamsHeader))
 		fmt.Fprintf(w, "web -> %s", body)
 	}))
+	return srv
 }
 
 func get(t *testing.T, url string, headers ...string) (int, string, http.Header) {
@@ -231,5 +241,57 @@ func TestRefusesWhenTheTemporalSwitchIsBroken(t *testing.T) {
 	reason, running := r.check("web", st, "probe-1")
 	if !running || !strings.Contains(reason, "can't switch its Temporal namespace") {
 		t.Errorf("reason = %q, running = %v", reason, running)
+	}
+}
+
+func TestARedirectToMainsAddressStaysOnTheWorktreesPort(t *testing.T) {
+	g := newRig(t)
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	location := func(path string) string {
+		t.Helper()
+		resp, err := noFollow.Get(strings.TrimSuffix(g.url(g.e1), "/") + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.Header.Get("Location")
+	}
+	// main's web redirects to its own address: followed as is, the browser
+	// would leave worktree 1's port and its next requests would be main's.
+	if got, want := location("/redirect-home"), fmt.Sprintf("http://127.0.0.1:%d/landing?x=1", g.e1); got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+	if got := location("/redirect-away"); got != "https://example.com/x" {
+		t.Errorf("a redirect elsewhere was rewritten: %q", got)
+	}
+}
+
+func TestStatusSaysWhetherMainsCopyCanServe(t *testing.T) {
+	g := newRig(t)
+	status := func() (out struct {
+		Router   bool
+		Service  string
+		Worktree string
+		Reason   string
+	}) {
+		t.Helper()
+		_, body, _ := get(t, strings.TrimSuffix(g.url(g.e1), "/")+StatusPath)
+		if err := json.Unmarshal([]byte(body), &out); err != nil {
+			t.Fatalf("status: %v in %q", err, body)
+		}
+		return out
+	}
+	if s := status(); !s.Router || s.Service != "web" || s.Worktree != "1" || s.Reason != "" {
+		t.Errorf("status = %+v", s)
+	}
+	g.forward = false // web stops passing the tag on
+	g.r.mu.Lock()
+	g.r.probed = map[string]time.Time{}
+	g.r.mu.Unlock()
+	g.r.health.Delete("web")
+	g.r.Reconcile()
+	g.waitProbed("web")
+	if s := status(); !strings.Contains(s.Reason, "without the worktree tag") {
+		t.Errorf("status after the tag is dropped = %+v", s)
 	}
 }

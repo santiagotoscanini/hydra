@@ -5,15 +5,38 @@
 `hydra` stands in for `process-compose`; arguments pass through.
 
 - In the **main checkout** it runs everything, like plain process-compose
-  (the server stays on :8099).
+  (the server stays on its TCP port), minus `watch` blocks and with each
+  `baseline_command` in place of the `command`: main's code only changes on
+  `hydra update`. Starting it records the commit and the server's address
+  in the shared `.git` directory (`hydra-baseline.json`), where every
+  worktree reads them.
 - In a **worktree** it runs only the services whose paths that worktree
   changed, on its own ports, wired to the baseline (or to each other). The
   worktree's process-compose server listens on its own unix socket, so
   `hydra attach`, `hydra down` and `hydra process ...` reach that worktree's
-  instance and never the baseline's.
-- `hydra up web` in a worktree also runs `web` there, changed or not.
+  instance and never the baseline's. Before it starts anything, it runs the
+  checks of `hydra status` and stops on a ✗ (`--force` starts anyway).
+- `hydra up web` in a worktree also runs `web` there, changed or not, and
+  switches it on if it is `disabled: true`.
 - A file without an `x-hydra` block runs unchanged.
 - A worktree without its own `process-compose.yaml` uses the main checkout's.
+- process-compose is started without the variables that mark an AI agent's
+  shell (`AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_*`, `CURSOR_AGENT`, ...):
+  dev servers act on them (Next.js prints a notice and exits), and a stack
+  has to run the same whoever started it.
+
+## The three sentences
+
+1. The main checkout runs the one full stack, and it only changes on
+   `hydra update`.
+2. A worktree runs what its branch changed and takes the rest from main.
+3. `hydra status` says when either isn't true, with the fix, and `hydra up`
+   won't start a worktree on top of something broken.
+
+Everything below serves one of the three. What would break them silently
+gets a check instead of a convention: a main that moved by itself, a branch
+older than the services it takes, a changed file no service lists, a
+process that never came up.
 
 ## Live changes
 
@@ -35,6 +58,96 @@ Polling `git diff`/`git ls-files` (with `GIT_OPTIONAL_LOCKS=0`, so it never
 takes the index lock from an agent's git) respects `.gitignore` and costs
 about 0.35s per tick on the monorepo with a two-branch stack. A file watcher
 on a tree with `node_modules` would cost more than it saves.
+
+## Status
+
+`hydra status` plans the checkout, asks the two process-compose servers what
+runs (main's over TCP, the worktree's over its socket), and compares. A
+problem is an error (✗: exit 1, and `hydra up` refuses) or a note (!).
+
+| Check | Error when |
+|---|---|
+| Main's stack | nothing answers at the recorded address |
+| What this worktree takes from main | a service it calls, waits for or is routed to has failed or was stopped (with the end of its log) |
+| Main's stack against main's files | the checkout moved since the stack was last brought to a commit, and a process this worktree uses has files in between |
+| Branch against main | main changed a service the worktree takes from it since the branch left main, or main is older than the branch's starting point (see below) |
+| This worktree's stack | a process that should run here failed, was skipped (the step it waited for is shown) or isn't running; `hydra-watch` is down |
+| Routed services | the router doesn't answer on the worktree's port, or main's copy doesn't pass the worktree's tag on (`/__hydra/status` on that port) |
+
+Notes: a process that is still starting (`--wait` waits for these), main's
+stack file or hydra being newer than the running stack, the main checkout
+on another branch or with uncommitted changes, plan warnings, and changed
+files that no service's `paths` (nor `ignore`) cover.
+
+"What this worktree takes from main" is: the upstream targets and
+`depends_on` entries of its local, enabled services that don't run here, and
+every routed service.
+
+`--all`, or `hydra status` in the main checkout, prints main's processes and
+one line per worktree without taking a slot for any of them.
+
+### In step with main
+
+Let B be the commit where the branch (or the bottom of its stack) left main,
+and M the commit the main checkout has checked out. They differ in the files
+`git diff B M` lists. For each service the worktree takes from main, those
+files are matched against its `paths`:
+
+- A hit with B older than M: the branch is **behind main**. Merge main.
+- A hit with M older than B (a worktree cut from `origin/main` before the
+  main checkout pulled): **main is behind**. `hydra update`.
+
+Services running in the worktree are left out, since they run the branch's
+code. So is a job in main (migrations) whose files a local service takes:
+a worktree with its own database applies its own. Nothing is started or
+stopped because of this check. It used to be that a worktree behind main's
+migrations got a database of its own; one update of main would then have
+started a database, an API and a frontend in every running worktree.
+
+## Updating main
+
+Worktrees take the baseline's running services, so main moves only through
+`hydra update`, never by itself: no auto-pull from an editor or agent app,
+no cron. Fetching is fine (it moves `origin/main` only).
+
+1. **Pull.** `git pull --ff-only` in the main checkout, which must be on the
+   base branch with no uncommitted tracked changes. No upstream: no pull.
+2. **Main's stack**, if it is running:
+   - The file is rendered again. If it differs from the one the stack was
+     started from, `process-compose project update` applies it, and a
+     process that was running by hand (`disabled: true`) is started again
+     if the reload stopped it. The summary line says which processes the
+     reload changes, adds, drops or switches on.
+   - `git diff --name-only <recorded commit> <new commit>` gives the files;
+     every process whose `paths` match and that has run is restarted, in
+     `depends_on` order, each waited for: a job until it completes (a job is
+     a process something waits on to complete, or one that had exited 0 and
+     has no readiness), a service until it is ready (probe or
+     `ready_log_line`; without either, up for three seconds).
+   - Not restarted: daemons (`is_daemon`, they hold data; a note says when
+     their files changed and nothing else took them), and processes that are
+     `disabled: true` unless they are running.
+   - A process that had failed is run again even if its files didn't change.
+   - The first failure stops the sequence and leaves the record where it
+     was, so `hydra status` keeps saying what is stale and the next update
+     starts from the same commit. Only a full pass records the new commit.
+   - With no record (a stack started by an older hydra), every process with
+     `paths` is restarted once.
+3. **Worktrees**, parents of a stack first. For each: `git merge-tree
+   --write-tree` tries the merge of its parent (main, or the branch it is
+   stacked on) in memory. Then: fast-forward when the branch has no commits
+   of its own; `git merge --no-edit` when the merge is clean; nothing when
+   it conflicts (files and command are printed), when tracked files have
+   uncommitted changes, when a merge or rebase is in progress, when no
+   branch is checked out, or when the merged tree equals the parent's (the
+   branch is already in main, squash-merged for instance). After a merge in
+   a worktree whose stack runs, the processes whose `paths` match the merged
+   files are restarted there, in the same way as in main.
+
+`--dry-run` prints all of this without doing it, `--main-only` skips step 3,
+`--no-pull` step 1. One update runs at a time per repository (a lock in the
+shared `.git` directory). Conflicts, generated files and pushing stay with
+the person or agent who owns the branch.
 
 ## Stacks
 
@@ -65,8 +178,10 @@ checked out) are not parents: from ancestry alone a sibling looks the same as
 a parent that moved on. A branch made with `git checkout -b b2` while on b1
 records "Created from HEAD"; once b1 gets new commits, b2 needs `parent: b1`.
 
-Commands of its own: `hydra plan` (what runs where, and why), `hydra render`
-(the generated file), `hydra slots` (which worktree has which slot).
+Commands of its own: `hydra status` (is it all up and in step), `hydra
+update` (move main and bring everything along), `hydra plan` (what runs
+where, and why), `hydra render` (the generated file), `hydra slots` (which
+worktree has which slot).
 
 ## The `x-hydra` extension
 
@@ -81,6 +196,7 @@ x-hydra:
   max_slots: 20
   reserved_ports: [6379, 7233]  # shared infra; no slot may land here
   global_paths: [go.work] # affect every service that declares paths
+  ignore: ["docs/**", ".github/**"]  # belong to no service; other unlisted changes are reported
 
 processes:
   api:
@@ -107,7 +223,15 @@ processes:
         GO_BACKEND_URL: api
         TEMPORAL_NAMESPACE: worker  # switched per request on a routed service
   deps:
-    x-hydra: { follow: true }     # runs here whenever a local service depends on it
+    x-hydra:
+      follow: true                # runs here whenever a local service depends on it
+      paths: ["pnpm-lock.yaml"]   # and `hydra update` runs it again when a pull changes this
+  migrate:
+    x-hydra: { shared: true, paths: ["db/migrations/**"] }  # main's job; rerun by `hydra update`
+  docs:
+    x-hydra:
+      paths: ["apps/docs/**"]
+      baseline_command: "pnpm build && pnpm start"  # main's copy: built once, no dev server
   supabase:
     x-hydra:
       kind: supabase              # a stack of its own where the schema differs (see Kinds)
@@ -131,18 +255,21 @@ files.
 
 1. Services whose `paths` match a changed file (or `global_paths`, for
    services that declare paths).
-2. A `kind: supabase` service whose `paths` differ from the main checkout's
-   HEAD in either direction (the database has main's schema, and main may
-   have moved on).
-3. Services named with `--with`, `hydra up NAME` or `.hydra.local.yaml`.
-4. Services with a route override, plus the target of an `=local` override.
-5. `follow` services that a local service depends on.
-6. Services with an upstream pointing at a service that runs here through a
+2. Services named with `--with`, `hydra up NAME` or `.hydra.local.yaml`.
+   Naming one also switches it on if it is `disabled: true`.
+3. Services with a route override, plus the target of an `=local` override.
+4. `follow` services that a local service depends on.
+5. Services with an upstream pointing at a service that runs here through a
    value no proxy can route (a database URL, a namespace, a queue name),
    unless it is `per_request`. Main's copy would keep using main's target.
    HTTP calls are left alone: a routed service routes them, and a plain one
    keeps calling the baseline.
-7. Minus `shared` services and anything in `--without`.
+6. Minus `shared` services and anything in `--without`.
+
+A changed file that matches no service's `paths` (a `!` exclusion counts as
+a match: someone decided), no `global_paths` and no `ignore` entry is
+reported by `hydra plan` and `hydra status`. A `shared` service whose paths
+changed is a warning only when no service running here takes the same file.
 
 ## Routing
 
@@ -189,12 +316,14 @@ keys you'd otherwise write by hand; any key you set yourself wins.
 | Kind | Fills in | Also |
 |---|---|---|
 | `temporal` | `url: hydra-{slot}`, `baseline_url: default`, and a prepare step `hydra prepare temporal --namespace hydra-N --from default` | Routed services switch upstreams pointing at it per request (`per_request` is implied) |
-| `supabase` | `port: 54321`, `ports.db: port + 1` | Runs here when its `paths` differ from the main checkout's; in a worktree, a stack of its own (below) |
+| `supabase` | `port: 54321`, `ports.db: port + 1` | In a worktree, a stack of its own (below) |
 
 `hydra prepare temporal` creates the namespace if needed, waits until
 Temporal knows it, and adds every custom search attribute the baseline's
 namespace has. It is safe to run again and reads `TEMPORAL_ADDRESS` like the
-temporal CLI. A kind can't be `shared`, `follow` or `routed`: its point is a
+temporal CLI. Calls that time out are tried again: the CLI checks its
+connection against the namespace before every command, and a namespace that
+was just created often isn't known everywhere yet. A kind can't be `shared`, `follow` or `routed`: its point is a
 separate copy per worktree.
 
 ### `kind: supabase`
@@ -292,6 +421,14 @@ browser -> :3400 (router, slot 2's port for web)      marks the request: X-Hydra
 - **No silent fallback.** A marked call for a worktree that runs its own copy
   of the target gets a 503 while that copy is down. Unmarked calls, and marks
   of worktrees that don't run the target, go to the baseline's.
+- **Redirects stay on the worktree's port.** Main's copy builds absolute
+  URLs from its own environment (`NEXT_PUBLIC_SITE_URL` is main's). A
+  `Location` that points at main's address for the service is rewritten to
+  the address the browser used, or the next requests would be main's,
+  untagged. Links inside a page or an email are not rewritten.
+- **`/__hydra/status`** on a worktree's port is answered by the router
+  itself: whether main's copy passed the check, and why not. `hydra status`
+  reads it.
 - **Next's data cache** (`fetch` with `force-cache` or `revalidate`,
   `unstable_cache`) is keyed without the mark, so the hook keeps a set of
   entries per worktree by prefixing the key. This patches a Next internal
@@ -322,9 +459,12 @@ checked against each other and `reserved_ports` when the config loads.
 - **Routed frontends and a worktree database.** A worktree with its own
   Supabase runs its own frontend, because the frontend reads the database
   URL once. Sharing main's would need per-request database clients.
-- **Scheduled work.** A worktree worker in its own Temporal namespace creates
-  that namespace's schedules on startup, so cron-like jobs run twice against
-  the shared database. Needs a way to skip schedule setup in worktree slots.
+- **Scheduled work.** A worker that sets up its schedules when it starts
+  would do so in each worktree's Temporal namespace too, and cron-like jobs
+  would run once per worktree against the shared database. (The monorepo
+  this was built on creates schedules out of band, so it isn't affected.)
+- **Ports are per repository.** Slots are handed out per repository; two
+  repositories whose stacks use the same ports can't run at once.
 - **Dependency paths by hand.** `paths` lists workspace packages manually.
   They could be derived from the nx project graph or `go list -deps`. Go
   package-level deps would also tell api changes apart from worker changes.

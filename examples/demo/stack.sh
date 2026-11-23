@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Demo: a stack of worktrees, main <- b1 (db) <- b2 (api) <- b3 (web-b),
+# Demo: a stack of worktrees, main <- b1 (web-a) <- b2 (api) <- b3 (web-b),
 # run from b3 with the live watcher.
 #
-#  1. `hydra up` in b3 runs db from b1, api from b2 and web-b from b3.
+#  1. `hydra up` in b3 runs web-a from b1, api from b2 and web-b from b3.
 #     b2's api edit is uncommitted, like an agent's work in progress.
 #  2. An edit to the worker in b2's worktree starts the worker (from b2).
 #  3. Reverting that edit stops it again.
@@ -34,7 +34,7 @@ g init -q -b main
 sed "s#command: bin/mocksvc.*#command: $root/bin/mocksvc#" "$here/process-compose.yaml" >process-compose.yaml
 printf '.process-compose/\n' >.gitignore
 commit README
-g worktree add -q -b b1 "$repo/b1" main && (cd "$repo/b1" && commit db/002_add_column.sql)
+g worktree add -q -b b1 "$repo/b1" main && (cd "$repo/b1" && commit apps/web-a/page.tsx)
 g worktree add -q -b b2 "$repo/b2" b1 && (cd "$repo/b2" && mkdir -p apps/api && echo edit >apps/api/users.go)
 g worktree add -q -b b3 "$repo/b3" b2 && (cd "$repo/b3" && mkdir -p apps/web-b && echo edit >apps/web-b/page.tsx)
 

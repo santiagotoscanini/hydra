@@ -43,6 +43,10 @@ type Global struct {
 	PortEnv string `yaml:"port_env"`
 	// GlobalPaths are files that affect every non-shared service.
 	GlobalPaths []string `yaml:"global_paths"`
+	// Ignore lists files that belong to no service (docs, CI, other apps).
+	// A changed file that matches neither a service's paths nor these is
+	// reported, so a path someone forgot to list doesn't go unnoticed.
+	Ignore []string `yaml:"ignore"`
 
 	// Exe is the hydra binary that generated steps call (a kind's prepare
 	// step). Set by the caller; "hydra" when empty.
@@ -155,6 +159,10 @@ type Service struct {
 	// worktree, with the same placeholders as URL plus {value} (this
 	// service's rendered URL). Used to create a Temporal namespace.
 	Prepare string `yaml:"prepare"`
+	// BaselineCommand replaces the process's command in the main checkout,
+	// where the code only changes on `hydra update`: a compiled binary or a
+	// production build instead of a dev server that watches files.
+	BaselineCommand string `yaml:"baseline_command"`
 
 	// DependsOn lists the process names this process waits for, from the
 	// regular process-compose `depends_on`.

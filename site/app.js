@@ -546,6 +546,12 @@ document.addEventListener("click", function (e) {
       html += '<span class="d">  ' + (any ? "(what runs here points at no other service)" : "(nothing runs here)") + "</span>\n";
     }
     if (warnings.length) html += "\n" + warnings.map(function (w) { return '<span class="w">' + esc(w) + "</span>"; }).join("\n") + "\n";
+    // Changed files that no service lists in its paths (a test file under
+    // services/api is listed, and excluded on purpose).
+    var unclaimed = changed.filter(function (f) {
+      return !names.some(function (n) { return (services[n].paths || []).some(function (p) { return f.indexOf(p) === 0; }); });
+    });
+    if (unclaimed.length) html += '\n<span class="w">' + esc("note: changed, but in no service's paths, so nothing runs here for them: " + unclaimed.join(", ")) + "</span>\n";
     out.innerHTML = html;
   }
 

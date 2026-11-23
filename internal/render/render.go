@@ -95,6 +95,19 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 		if w, ok := proc["watch"].(map[string]any); ok {
 			proc["watch"] = absWatch(root, w)
 		}
+		if !row.Disabled {
+			delete(proc, "disabled") // asked for by name: `hydra up mobile`
+		}
+		if p.Slot == 0 {
+			// The main checkout's code changes only on `hydra update`, which
+			// restarts what the new commits touched, in order. A file
+			// watcher would restart a service in the middle of a pull,
+			// before its migrations ran.
+			delete(proc, "watch")
+			if cmd := st.Services[source].BaselineCommand; cmd != "" {
+				proc["command"] = cmd
+			}
+		}
 		// Probes written against the baseline port must follow the service
 		// to its slot port, or they'd report the baseline's copy as healthy.
 		if base := st.Services[source].Port; base != 0 && row.Port != base {

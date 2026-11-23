@@ -6,6 +6,8 @@
 //	hydra plan  [flags]            show what this checkout runs and how it is wired
 //	hydra render [flags] [-o FILE] print or write the rendered file
 //	hydra slots [free [PATH]]      list worktree slots, or free one
+//	hydra status [--all]           check this checkout against main's stack
+//	hydra update                   pull main and bring everything along
 package main
 
 import (
@@ -42,11 +44,26 @@ In the main checkout everything runs, as plain process-compose would. In a
 worktree only the services it changed run, on that worktree's own ports, with
 their upstreams pointing at the baseline or at each other.
 
+Before it starts anything in a worktree, hydra checks the main checkout:
+its stack has to be running, and in step with the branch for every service
+the worktree takes from it. hydra up --force starts anyway.
+
 Hydra's own commands:
+  hydra status [--all] [--wait]  is everything this checkout uses up and in step
+                                 with main? (exit 1 if not; --all: every worktree;
+                                 --wait: first wait for what is still starting)
+  hydra update [flags]           pull main, restart what the new commits touched
+                                 in its stack, merge main into the worktrees
   hydra plan   [flags]           show what this checkout runs and how it is wired
   hydra render [flags] [-o FILE] print (or write) the rendered process-compose file
   hydra slots                    list worktree slots
   hydra slots free [PATH]        free a worktree's slot (default: this one)
+
+Flags for update:
+  -n, --dry-run    say what would happen, change nothing
+  --main-only      leave the worktrees alone
+  --no-pull        don't pull; bring the stack and the worktrees to where main is
+  --timeout D      how long one process may take to come back (default 15m)
 
 Flags for plan and render:
   -f FILE          stack file (default <checkout>/process-compose.yaml)
@@ -56,6 +73,7 @@ Flags for plan and render:
   --with SVC       also run SVC here (repeatable, comma-separated ok)
   --without SVC    never run SVC here (repeatable)
   --route S.U=T    point service S's upstream U at T = baseline|local
+  --unclaimed      (plan) only list the changed files no service's paths cover
 
 A git-ignored .hydra.local.yaml in the checkout adds the same settings:
   with: [web]
@@ -66,7 +84,9 @@ A git-ignored .hydra.local.yaml in the checkout adds the same settings:
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "hydra:", err)
+		if _, said := err.(errProblems); !said {
+			fmt.Fprintln(os.Stderr, "hydra:", err)
+		}
 		os.Exit(1)
 	}
 }
@@ -81,6 +101,10 @@ func run(args []string) error {
 			return planOrRender(args[0], args[1:])
 		case "slots":
 			return slotsCmd(args[1:])
+		case "status":
+			return statusCmd(args[1:])
+		case "update":
+			return updateCmd(args[1:])
 		case "watch":
 			return watchCmd(args[1:])
 		case "router":
@@ -204,13 +228,14 @@ func (t *target) build(o options) (*plan.Plan, error) {
 	if len(o.changed) > 0 {
 		req.Changed = o.changed
 	} else {
-		req.Layers, warnings, err = t.layers()
+		var base string
+		req.Layers, base, warnings, err = t.layers()
 		if err != nil {
 			return nil, err
 		}
-	}
-	if req.BaselineDiff, err = t.baselineDiff(); err != nil {
-		return nil, err
+		if req.MainChanged, req.MainBehind, err = t.mainChanged(base); err != nil {
+			return nil, err
+		}
 	}
 	p, err := plan.Build(t.stack, req)
 	if p != nil {
@@ -219,27 +244,30 @@ func (t *target) build(o options) (*plan.Plan, error) {
 	return p, err
 }
 
-// baselineDiff lists the files where this worktree differs from the main
-// checkout's HEAD, for kinds whose state follows those files. Nothing to do
-// without such a kind.
-func (t *target) baselineDiff() ([]string, error) {
-	need := false
-	for _, s := range t.stack.Services {
-		need = need || s.Kind == config.KindSupabase
-	}
-	if !need {
-		return nil, nil
-	}
+// mainChanged lists the files that differ between base, the commit where
+// this worktree's branch (or the bottom of its stack) left main, and the
+// commit the main checkout has checked out: the code its services run.
+// behind is true when main is the older of the two, which happens when a
+// worktree is cut from origin's main before the main checkout pulled it.
+func (t *target) mainChanged(base string) (files []string, behind bool, err error) {
 	head, err := gitx.Head(t.checkout.Main)
 	if err != nil {
-		return nil, fmt.Errorf("reading the main checkout's HEAD: %w", err)
+		return nil, false, fmt.Errorf("reading the main checkout's HEAD: %w", err)
 	}
-	return changes.FromBase(t.checkout.Root, head)
+	if base == "" || base == head {
+		return nil, false, nil
+	}
+	files, err = gitx.DiffNames(t.checkout.Main, base, head)
+	if err != nil {
+		return nil, false, err
+	}
+	return files, gitx.IsAncestor(t.checkout.Main, head, base), nil
 }
 
 // layers finds the stack of worktrees this checkout sits on and what each
-// one changed relative to its parent.
-func (t *target) layers() ([]plan.Layer, []string, error) {
+// one changed relative to its parent. base is where the bottom one left
+// the base ref.
+func (t *target) layers() (layers []plan.Layer, base string, warnings []string, err error) {
 	chain, warnings, err := stack.Chain(t.checkout.Root, stack.Options{
 		BaseRef: t.stack.Hydra.BaseRef,
 		ParentOverride: func(root string) string {
@@ -251,17 +279,20 @@ func (t *target) layers() ([]plan.Layer, []string, error) {
 		},
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("finding the worktree stack: %w", err)
+		return nil, "", nil, fmt.Errorf("finding the worktree stack: %w", err)
 	}
 	var out []plan.Layer
 	for _, l := range chain {
 		changed, err := changes.FromBase(l.Root, l.Base)
 		if err != nil {
-			return nil, nil, fmt.Errorf("detecting changes in %s: %w", l.Root, err)
+			return nil, "", nil, fmt.Errorf("detecting changes in %s: %w", l.Root, err)
 		}
 		out = append(out, plan.Layer{Name: shortBranch(l.Name), Root: l.Root, Changed: changed})
 	}
-	return out, warnings, nil
+	if len(chain) > 0 {
+		base = chain[0].Base
+	}
+	return out, base, warnings, nil
 }
 
 // shortBranch keeps messages readable with long branch names:
@@ -297,6 +328,7 @@ func planOrRender(cmd string, args []string) error {
 	root := fs.String("root", "", "")
 	out := fs.String("o", "", "")
 	slot := fs.Int("slot", -1, "")
+	listUnclaimed := fs.Bool("unclaimed", false, "")
 	var o options
 	var changed, with, without, routes multi
 	fs.Var(&changed, "changed", "")
@@ -315,6 +347,12 @@ func planOrRender(cmd string, args []string) error {
 	p, err := t.build(o)
 	if err != nil {
 		return err
+	}
+	if cmd == "plan" && *listUnclaimed {
+		for _, f := range p.Unclaimed {
+			fmt.Println(f)
+		}
+		return nil
 	}
 	if cmd == "plan" {
 		printPlan(t, p)
@@ -486,10 +524,17 @@ func printPlan(t *target, p *plan.Plan) {
 	}
 	for _, s := range p.Services {
 		if s.Local && s.Disabled && p.Slot > 0 {
-			fmt.Printf("\n%s is disabled in process-compose; start it from the TUI (F7) or with `hydra process start %s`.\n", s.Name, s.Name)
+			fmt.Printf("\n%s is off until someone starts it (disabled: true): `hydra up %s` runs it here, or `hydra process start %s` once this stack is up.\n", s.Name, s.Name, s.Name)
 		}
 	}
 	for _, warn := range p.Warnings {
 		fmt.Println("\nwarning:", warn)
+	}
+	if len(p.Unclaimed) > 0 {
+		fmt.Println("\nnote:", unclaimedNote(p.Unclaimed))
+	}
+	if pr := skewProblem(t.stack, p); pr != nil {
+		fmt.Println()
+		printProblems(os.Stdout, []problem{*pr})
 	}
 }

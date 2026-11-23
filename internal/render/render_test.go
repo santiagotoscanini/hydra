@@ -233,3 +233,90 @@ processes:
 		t.Errorf("baseline render touched supabase:\n%s", base)
 	}
 }
+
+func TestBaselineIsStatic(t *testing.T) {
+	st, err := config.Parse([]byte(strings.Replace(stack, `prepare: "setup {value}"`,
+		`baseline_command: "build && exec ./api"`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Processes map[string]map[string]any `yaml:"processes"`
+	}
+	render := func(p *plan.Plan) map[string]any {
+		t.Helper()
+		data, err := Render(st, p, Options{Dir: "/repo"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc.Processes["api"]
+	}
+	// Main: the lean command, and no file watcher; `hydra update` restarts it.
+	api := render(plan.BaselinePlan(st))
+	if api["command"] != "build && exec ./api" || api["watch"] != nil {
+		t.Errorf("baseline api = %v, watch = %v", api["command"], api["watch"])
+	}
+	// A worktree keeps the dev command and its reload.
+	p, err := plan.Build(st, plan.Request{Slot: 1, Changed: []string{"api/main.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	api = render(p)
+	if api["command"] != "api" || api["watch"] == nil {
+		t.Errorf("worktree api = %v, watch = %v", api["command"], api["watch"])
+	}
+}
+
+func TestAProcessAskedForByNameIsSwitchedOn(t *testing.T) {
+	st, err := config.Parse([]byte(`
+processes:
+  mobile:
+    command: expo
+    disabled: true
+    x-hydra: { port: 8084, paths: ["mobile/**"] }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Processes map[string]map[string]any `yaml:"processes"`
+	}
+	render := func(req plan.Request) map[string]any {
+		t.Helper()
+		req.Slot = 1
+		p, err := plan.Build(st, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := Render(st, p, Options{Dir: "/repo"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc.Processes["mobile"]
+	}
+	// Changed, but nobody asked: listed, and off until started.
+	if m := render(plan.Request{Changed: []string{"mobile/app.tsx"}}); m["disabled"] != true {
+		t.Errorf("changed mobile should stay off: %v", m)
+	}
+	// `hydra up mobile`: on.
+	if m := render(plan.Request{With: []string{"mobile"}}); m == nil || m["disabled"] != nil {
+		t.Errorf("requested mobile should be on: %v", m)
+	}
+	// The main checkout: off, as written. Nothing there asks for it by name.
+	data, err := Render(st, plan.BaselinePlan(st), Options{Dir: "/repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if m := doc.Processes["mobile"]; m["disabled"] != true {
+		t.Errorf("the baseline must keep a disabled process off: %v", m)
+	}
+}

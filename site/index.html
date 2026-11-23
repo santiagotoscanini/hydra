@@ -135,6 +135,7 @@ $ git ls-files --others --exclude-standard
     <ol class="steps">
       <li>Picks the services whose paths match.</li>
       <li>Takes a slot for the worktree, which decides its ports.</li>
+      <li>Checks that main's stack is up and in step with the branch, and stops with the fix if it isn't.</li>
       <li>Writes <code>.process-compose/hydra.yaml</code>: those services only, with their ports and upstreams set.</li>
       <li>Starts process-compose on it, on a socket of its own. <code>hydra down</code> in a worktree can't stop main's stack.</li>
     </ol>
@@ -161,6 +162,38 @@ $ git ls-files --others --exclude-standard
     <p style="margin-top:18px">Services that point at it are restarted with the new address. Further edits to a service that already runs here are left to its own reload, like <code>next dev</code> or <code>air</code>.</p>
     <p>It asks git instead of watching the file system because only git knows whether a file differs from <code>main</code>. A revert has to stop the service, and <code>node_modules</code> must not start one. It reads git without taking the index lock, so it stays out of the way of an agent's commits.</p>
     <p>Stacked branches work too: each branch is compared with its parent, and each service runs from the worktree of the branch that changed it. <a href="docs/#stacks">How a stack is found</a>.</p>
+  </div>
+</section>
+
+<hr>
+
+<section id="updating">
+  <div class="measure">
+    <h2>Main moves when you say so</h2>
+    <p>Every worktree takes main's running copies, so main has to stay still until you decide to update it. A worktree from last week calling today's API can fail for reasons that have nothing to do with its branch. So turn off anything that pulls main by itself, and let one command move everything together:</p>
+  </div>
+  <div class="code measure" style="margin-top:16px">
+<pre data-lang="text">
+$ hydra update
+main  ~/code/shop  moved f67f0e32d → 9a782732a (30 commits)
+
+main's stack
+  migrate  ran again  db/migrations/0042_orders.sql and 2 more  done in 6s
+  api      restarted  services/api/handler.go and 207 more      ready in 9s
+
+worktrees
+  cart      main merged in (30 commits)
+  checkout  CONFLICTS with main in 2 files
+</pre>
+  </div>
+  <div class="measure">
+    <ol class="steps" style="margin-top:18px">
+      <li>It pulls main, fast-forward only.</li>
+      <li>It runs the jobs again and restarts the services the pull touched, in order, waiting for each. A migration that fails stops it before the API restarts.</li>
+      <li>It merges main into every worktree where the merge is clean. Conflicts and uncommitted work are left alone and listed.</li>
+    </ol>
+    <p style="margin-top:14px">In between, hydra keeps watch. <code>hydra up</code> won't start a worktree whose branch and main disagree on a service it takes from main, or whose main isn't running. <code>hydra status</code> says what is wrong and which command fixes it.</p>
+    <p><a href="docs/#status">What is checked</a> · <a href="docs/#updating">How an update works</a></p>
   </div>
 </section>
 

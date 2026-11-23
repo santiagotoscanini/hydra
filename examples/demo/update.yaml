@@ -1,0 +1,55 @@
+# The stack behind update.sh: a job that installs dependencies, a database
+# with a migrations job, an API, and a frontend that one copy serves to
+# every worktree. Every service is the `mocksvc` binary.
+version: "0.5"
+
+x-hydra:
+  slot_stride: 100
+  max_slots: 8
+  ignore: ["docs/**", "README", ".gitignore", "process-compose.yaml"]
+
+processes:
+  # Off until someone starts it. An update must leave it off.
+  seed:
+    command: "echo seeding; sleep 1000"
+    disabled: true
+    x-hydra: { paths: ["db/seed/**"] }
+
+  # Jobs carry paths too: `hydra update` runs them again when a pull changes
+  # those files, before it restarts the services that wait for them.
+  deps:
+    command: "echo installing $(cat lock.txt 2>/dev/null); sleep 1"
+    x-hydra: { follow: true, paths: ["lock.txt"] }
+
+  db:
+    command: bin/mocksvc
+    x-hydra: { shared: true, port: 21030, url: "postgres://{host}:{port}/app" }
+
+  migrate:
+    command: "test ! -e db/migrations/FAIL && echo applied $(ls db/migrations | wc -l) migrations"
+    depends_on:
+      db: { condition: process_started }
+    x-hydra: { shared: true, paths: ["db/migrations/**"] }
+
+  api:
+    command: bin/mocksvc
+    depends_on:
+      deps: { condition: process_completed_successfully }
+      migrate: { condition: process_completed_successfully }
+    readiness_probe:
+      http_get: { host: 127.0.0.1, port: 21010, path: / }
+      period_seconds: 1
+    x-hydra:
+      port: 21010
+      paths: ["apps/api/**"]
+      upstreams: { DATABASE_URL: db }
+
+  web:
+    command: bin/mocksvc
+    depends_on:
+      api: { condition: process_healthy }
+    x-hydra:
+      port: 21000
+      paths: ["apps/web/**"]
+      routed: true # mocksvc passes X-Hydra-Worktree on itself
+      upstreams: { API_URL: api }

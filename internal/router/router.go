@@ -43,6 +43,9 @@ const (
 
 	probePath = "/__hydra/probe"
 	echoPath  = "/__hydra/echo"
+	// StatusPath, on a worktree's port for a routed service, is answered by
+	// the router itself: whether main's copy can serve that worktree.
+	StatusPath = "/__hydra/status"
 )
 
 // Service is a baseline service the router knows.
@@ -254,12 +257,33 @@ func (r *Router) entry(tag, name string) http.Handler {
 				pr.Out.Header.Set(UpstreamsHeader, encodeUpstreams(ups))
 			}
 		},
+		ModifyResponse: func(resp *http.Response) error {
+			// A redirect to main's own address (built from an env var main's
+			// copy read once) would take the browser off this worktree's
+			// port, and its next requests would be main's.
+			st := r.state.Load()
+			if loc, err := url.Parse(resp.Header.Get("Location")); err == nil && loc.Host != "" &&
+				isLoopbackPort(loc.Host, st.Host, st.Services[name].Port) {
+				loc.Host = resp.Request.Host
+				resp.Header.Set("Location", loc.String())
+			}
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
 			port := r.state.Load().Services[name].Port
 			fail(w, http.StatusBadGateway, "main's %s isn't answering on :%d (%v). Is the baseline running?", name, port, err)
 		},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == StatusPath {
+			h, _ := r.health.Load(name)
+			hv, _ := h.(health)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"router": true, "service": name, "worktree": tag, "checked": hv.checked, "reason": hv.reason,
+			})
+			return
+		}
 		if h, ok := r.health.Load(name); ok && h.(health).reason != "" {
 			fail(w, http.StatusServiceUnavailable,
 				"main's %s can't serve this worktree: %s. Run `hydra up %s` here for a copy of your own.", name, h.(health).reason, name)
@@ -401,6 +425,16 @@ func (r *Router) check(name string, st *State, tag string) (reason string, runni
 		}
 	}
 	return "", true
+}
+
+// isLoopbackPort reports whether hostport is this machine on the given
+// port, under any of the names a browser or an env var uses for it.
+func isLoopbackPort(hostport, host string, port int) bool {
+	h, p, err := net.SplitHostPort(hostport)
+	if err != nil || p != strconv.Itoa(port) {
+		return false
+	}
+	return h == host || h == "localhost" || h == "127.0.0.1" || h == "::1"
 }
 
 func stripHydra(h http.Header) {

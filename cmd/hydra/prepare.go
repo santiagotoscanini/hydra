@@ -46,7 +46,19 @@ func temporalCLI(args ...string) ([]byte, error) {
 	return out, err
 }
 
-func prepareTemporal(cli func(...string) ([]byte, error), ns, from, retention string) error {
+func prepareTemporal(run func(...string) ([]byte, error), ns, from, retention string) error {
+	// Any call can time out while the server is busy, and the first calls
+	// that name a new namespace often do: the CLI checks the connection
+	// against that namespace before every command. Try those again.
+	cli := func(args ...string) (out []byte, err error) {
+		for i := 0; i < 20; i++ {
+			if out, err = run(args...); err == nil || !transient(err) {
+				return out, err
+			}
+			time.Sleep(retryGap)
+		}
+		return out, err
+	}
 	if _, err := cli("operator", "namespace", "describe", "--namespace", ns); err != nil {
 		fmt.Printf("creating Temporal namespace %s\n", ns)
 		if _, err := cli("operator", "namespace", "create", "--namespace", ns, "--retention", retention); err != nil {
@@ -111,6 +123,18 @@ func retry(fn func() error) error {
 }
 
 var retryGap = 500 * time.Millisecond
+
+// transient reports whether a temporal CLI error is the server not
+// answering in time, rather than an answer.
+func transient(err error) bool {
+	msg := err.Error()
+	for _, s := range []string{"deadline exceeded", "failed connecting", "Unavailable", "connection refused"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
 
 var attributeTypes = map[string]string{
 	"INDEXED_VALUE_TYPE_KEYWORD":      "Keyword",
