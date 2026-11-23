@@ -187,7 +187,7 @@ func publishRoutes(t *target, p *plan.Plan) error {
 func routedNote(t *target, p *plan.Plan) {
 	for _, row := range p.Services {
 		if row.Routed {
-			fmt.Fprintf(os.Stderr, "hydra: %s is main's copy, serving this worktree at http://%s:%d\n", row.Name, t.stack.Hydra.Host, row.Port)
+			fmt.Fprintf(os.Stderr, "hydra: %s is main's copy, serving this worktree at http://%s:%d\n", row.Name, browserHost(t.stack.Hydra.Host), row.Port)
 		}
 	}
 }

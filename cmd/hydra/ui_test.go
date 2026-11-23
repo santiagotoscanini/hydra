@@ -75,7 +75,9 @@ func TestWhatThePageSaysAboutAWorktree(t *testing.T) {
 	// Its stack is up: the api runs here, web is main's copy at its port.
 	w := build(1, true)
 	svc := byName(w)
-	if a := svc["api"]; a.Runs != "here" || a.Port != 8180 || a.URL != "http://127.0.0.1:8180" || a.Health != "up" || a.Memory != 42000 {
+	// Links are for a browser, which gets localhost: a dev server treats a
+	// page opened by IP address as another origin.
+	if a := svc["api"]; a.Runs != "here" || a.Port != 8180 || a.URL != "http://localhost:8180" || a.Health != "up" || a.Memory != 42000 {
 		t.Errorf("api = %+v", a)
 	}
 	if web := svc["web"]; web.Runs != "routed" || web.Port != 3100 || web.Health != "up" {

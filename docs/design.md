@@ -104,6 +104,10 @@ first). It is one HTML file inside the binary and one JSON endpoint,
   button. The page stops asking while its tab is hidden.
 - A worktree that never ran has no slot, so the page shows what it would
   run without ports.
+- Links, here and in what `hydra up` prints, name `localhost` where services
+  are wired to each other by `127.0.0.1`. A dev server treats a page opened
+  by IP address as another origin: Next.js then refuses it the hot-reload
+  socket and its dev resources.
 
 It isn't part of the generated file. To have it up whenever main is, add it
 to the stack file as an ordinary process (`command: hydra ui --no-open`).

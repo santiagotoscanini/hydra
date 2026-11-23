@@ -482,7 +482,19 @@ func serviceURL(ms *mainState, name string, port int) string {
 	if s == nil || port == 0 || !strings.HasPrefix(s.URL, "http") {
 		return ""
 	}
-	return "http://" + net.JoinHostPort(ms.target.stack.Hydra.Host, strconv.Itoa(port))
+	return "http://" + net.JoinHostPort(browserHost(ms.target.stack.Hydra.Host), strconv.Itoa(port))
+}
+
+// browserHost is the name to put in a link a person opens. Services are
+// wired to each other by loopback address (a name can resolve to the other
+// address family than the one a service listens on), but a browser is
+// better off with "localhost": dev servers treat a page opened by IP as
+// another origin, and Next.js then refuses it its hot-reload socket.
+func browserHost(host string) string {
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return "localhost"
+	}
+	return host
 }
 
 func uiMainOf(ms *mainState, mem func(int) int64) *uiMain {
