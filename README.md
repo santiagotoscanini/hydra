@@ -165,6 +165,9 @@ Two rules keep this from quietly testing the wrong code:
 - A proxy can only route requests. If `web` also reads, say, a queue name
   from an env var and the worktree runs its own worker, main's copy would
   keep using main's queue. Hydra then runs `web` in the worktree after all.
+  The same goes for any service, routed or not, that reaches something the
+  worktree runs through such a value: a worktree with its own database runs
+  its own API too.
   Temporal is handled for you: mark the worker `kind: temporal` and the hook
   switches the namespace inside the Temporal SDK, so the app isn't changed.
   Any other value can be marked `per_request: true`, and the app reads it per
@@ -189,8 +192,22 @@ worker:
 
 That creates the namespace before the worker starts (with the baseline
 namespace's search attributes), hands it to every upstream pointing at the
-worker, and switches it per request on routed services. `temporal` is the
-only kind so far.
+worker, and switches it per request on routed services.
+
+```yaml
+supabase:
+  x-hydra:
+    kind: supabase        # a worktree whose schema differs gets its own Supabase
+    ports: { db: 54322 }  # reached as {port.db}; the API is on port (54321)
+    paths: ["supabase/migrations/**", "supabase/seed/**", "supabase/config.toml"]
+```
+
+The main checkout runs its Supabase as written. A worktree whose schema
+files differ from the main checkout's (it changed a migration, or main gained
+one since it branched) gets a Supabase CLI stack of its own (stack mode) on
+its slot's ports, migrated and seeded from its files, and everything that
+reads that database runs in the worktree too. Every other worktree shares
+main's. An idle stack takes about 110 MB.
 
 See [docs/design.md](docs/design.md) for the `x-hydra` fields and the rules
 in full.
@@ -209,8 +226,7 @@ the watcher starting and stopping services as files change in them.
 
 ## Open questions
 
-- Database: most backend branches add migrations, and the database is shared.
-  Planned: a worktree that changes migrations gets its own Supabase
-  (`supabase start --stack`), filled from the baseline's database.
+- Database: a worktree's own Supabase starts from the seed files, not from
+  the baseline's data. Copying main's data in would need a dump per start.
 - Scheduled jobs: a worktree's worker sets up its own schedules.
 - Deriving `paths` from the nx / Go dependency graph instead of by hand.

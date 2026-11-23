@@ -209,11 +209,32 @@ func (t *target) build(o options) (*plan.Plan, error) {
 			return nil, err
 		}
 	}
+	if req.BaselineDiff, err = t.baselineDiff(); err != nil {
+		return nil, err
+	}
 	p, err := plan.Build(t.stack, req)
 	if p != nil {
 		p.Warnings = append(warnings, p.Warnings...)
 	}
 	return p, err
+}
+
+// baselineDiff lists the files where this worktree differs from the main
+// checkout's HEAD, for kinds whose state follows those files. Nothing to do
+// without such a kind.
+func (t *target) baselineDiff() ([]string, error) {
+	need := false
+	for _, s := range t.stack.Services {
+		need = need || s.Kind == config.KindSupabase
+	}
+	if !need {
+		return nil, nil
+	}
+	head, err := gitx.Head(t.checkout.Main)
+	if err != nil {
+		return nil, fmt.Errorf("reading the main checkout's HEAD: %w", err)
+	}
+	return changes.FromBase(t.checkout.Root, head)
 }
 
 // layers finds the stack of worktrees this checkout sits on and what each
@@ -444,6 +465,11 @@ func printPlan(t *target, p *plan.Plan) {
 			}
 		}
 		for _, s := range p.Services {
+			if src := t.stack.Services[s.Source]; s.Local && src != nil && src.Kind == config.KindSupabase {
+				ports := t.stack.SlotPorts(src, p.Slot)
+				fmt.Printf("  %s is this worktree's own Supabase stack (API :%d, database :%d), with its migrations applied after each start\n",
+					s.Name, ports[""], ports["db"])
+			}
 			if src := t.stack.Services[s.Source]; s.Prepare != "" && src != nil && src.Kind == config.KindTemporal && src.Prepare == "" {
 				fmt.Printf("  %s first creates Temporal namespace %s, with %s's search attributes\n", s.Name,
 					plan.Value(t.stack, src, p.Slot, ""), plan.Value(t.stack, src, 0, ""))

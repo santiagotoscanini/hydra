@@ -162,3 +162,74 @@ func TestBaselineOfARoutedService(t *testing.T) {
 		t.Errorf("worktree file mentions the router or the hook:\n%s", data)
 	}
 }
+
+func TestWorktreeSupabaseIsAStackOfItsOwn(t *testing.T) {
+	st, err := config.Parse([]byte(`
+x-hydra: { slot_stride: 200 }
+processes:
+  supabase:
+    command: supabase start
+    is_daemon: true
+    readiness_probe: { http_get: { host: 127.0.0.1, port: 54321, path: /rest/v1/ } }
+    shutdown: { command: supabase stop, timeout_seconds: 60 }
+    x-hydra: { kind: supabase, paths: ["supabase/**"] }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Hydra.Exe = "/bin/hydra"
+	p, err := plan.Build(st, plan.Request{Slot: 1, Changed: []string{"supabase/migrations/1.sql"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := Render(st, p, Options{Dir: "/wt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Processes map[string]struct {
+			Command        string         `yaml:"command"`
+			Environment    []string       `yaml:"environment"`
+			Shutdown       map[string]any `yaml:"shutdown"`
+			ReadinessProbe struct {
+				HTTPGet struct {
+					Port int `yaml:"port"`
+				} `yaml:"http_get"`
+			} `yaml:"readiness_probe"`
+		} `yaml:"processes"`
+	}
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatal(err)
+	}
+	sb := doc.Processes["supabase"]
+	if want := "mkdir -p '/wt/supabase/.temp/tmp' && (\nsupabase start\n) && '/bin/hydra' prepare supabase"; sb.Command != want {
+		t.Errorf("command = %q, want %q", sb.Command, want)
+	}
+	env := strings.Join(sb.Environment, " ")
+	for _, want := range []string{"SUPABASE_EXPERIMENTAL_STACK=1", "SUPABASE_API_PORT=54521", "SUPABASE_DB_PORT=54522", "TMPDIR=/wt/supabase/.temp/tmp"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("environment lacks %s: %s", want, env)
+		}
+	}
+	// The stop names the stack itself: run without that environment, it
+	// would stop the baseline's Supabase.
+	stop, _ := sb.Shutdown["command"].(string)
+	if !strings.HasPrefix(stop, "export SUPABASE_EXPERIMENTAL_STACK='1' ") || !strings.Contains(stop, "SUPABASE_API_PORT='54521'") || !strings.HasSuffix(stop, "\nsupabase stop") {
+		t.Errorf("shutdown command = %q", stop)
+	}
+	if sb.Shutdown["timeout_seconds"] != 60 {
+		t.Errorf("shutdown lost its timeout: %v", sb.Shutdown)
+	}
+	if sb.ReadinessProbe.HTTPGet.Port != 54521 {
+		t.Errorf("probe port = %d", sb.ReadinessProbe.HTTPGet.Port)
+	}
+
+	// The baseline runs the command as written.
+	base, err := Render(st, plan.BaselinePlan(st), Options{Dir: "/main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(base), "SUPABASE_EXPERIMENTAL_STACK") || strings.Contains(string(base), "prepare supabase") {
+		t.Errorf("baseline render touched supabase:\n%s", base)
+	}
+}

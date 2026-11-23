@@ -68,6 +68,11 @@ type Request struct {
 	With    []string // force these to run locally
 	Without []string // force these to come from the baseline
 	Routes  Routes
+	// BaselineDiff lists the paths where this worktree differs from the
+	// commit the main checkout has checked out, in either direction: what
+	// the worktree changed, and what main gained since it branched. Only a
+	// kind with state (supabase: its schema) looks at it.
+	BaselineDiff []string
 }
 
 // Layer is one worktree of a stack.
@@ -170,16 +175,22 @@ func Value(st *config.Stack, s *config.Service, slot int, tmpl string) string {
 }
 
 func expand(st *config.Stack, s *config.Service, slot int, tmpl, value string) string {
-	return expandPort(st, Port(st, s, slot), slot, tmpl, value)
+	return expandPort(st, s, Port(st, s, slot), slot, tmpl, value)
 }
 
-func expandPort(st *config.Stack, port, slot int, tmpl, value string) string {
-	return strings.NewReplacer(
+// expandPort fills in a template; {port} becomes port, and {port.NAME} the
+// slot's copy of s's named port.
+func expandPort(st *config.Stack, s *config.Service, port, slot int, tmpl, value string) string {
+	pairs := []string{
 		"{host}", st.Hydra.Host,
 		"{port}", strconv.Itoa(port),
 		"{slot}", strconv.Itoa(slot),
 		"{value}", value,
-	).Replace(tmpl)
+	}
+	for name, p := range s.Ports {
+		pairs = append(pairs, "{port."+name+"}", strconv.Itoa(p+slot*st.Hydra.SlotStride))
+	}
+	return strings.NewReplacer(pairs...).Replace(tmpl)
 }
 
 // dispatchValue is what a routed service's env var receives in the baseline:
@@ -188,7 +199,7 @@ func dispatchValue(st *config.Stack, t *config.Service, tmpl string) string {
 	if tmpl == "" {
 		tmpl = t.URL
 	}
-	return expandPort(st, st.DispatchPort(t), 0, tmpl, "")
+	return expandPort(st, t, st.DispatchPort(t), 0, tmpl, "")
 }
 
 // BaselinePlan plans the baseline checkout: everything, in slot 0.
@@ -201,7 +212,7 @@ func BaselinePlan(st *config.Stack) *Plan {
 			u := s.Upstreams[env]
 			t := st.Services[u.Service]
 			up := Upstream{Env: env, Service: t.Name, Target: Baseline, Value: Value(st, t, 0, u.Value), Why: "baseline"}
-			if s.Routed != config.NotRouted && t.Name != name && st.Routable(u) {
+			if st.Dispatches(s, u) {
 				up.Value, up.Why = dispatchValue(st, t, u.Value), "through the router, per request"
 				row.Dispatch = append(row.Dispatch, env)
 			}
@@ -296,6 +307,23 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 			}
 		}
 	}
+	// 1b. A database shared with the baseline has the baseline's schema. A
+	//     worktree whose schema files differ from the main checkout's, even
+	//     ones it never touched (main moved on), gets its own.
+	for _, name := range st.Names() {
+		s := st.Services[name]
+		if s.Kind != config.KindSupabase {
+			continue
+		}
+		if _, done := why[name]; done {
+			continue
+		}
+		if f, ok := firstMatch(s.Paths, req.BaselineDiff); ok {
+			if want(name, "differs from the main checkout's: "+f) {
+				owner[name] = top
+			}
+		}
+	}
 	// 2. Explicit --with.
 	for _, n := range req.With {
 		want(n, "requested")
@@ -323,21 +351,29 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 				}
 			}
 		}
-		// 5. A routed service can stay on the baseline's copy only while
-		//    every call of its that differs for this worktree can be told
-		//    apart per request. One that can't (a queue name, a database
-		//    URL) would reach the baseline's target, so it runs here.
+		// 5. A service that reaches something running here through a value
+		//    no proxy can route (a database URL, a Temporal namespace, a
+		//    queue name) runs here too, or it would keep using the
+		//    baseline's: main's api would read main's database and start
+		//    workflows in main's namespace. HTTP calls are left alone: a
+		//    routed service routes them, and a plain one keeps calling the
+		//    baseline as always. A per_request value is told apart by the
+		//    routed service itself.
 		for _, name := range st.Names() {
 			s := st.Services[name]
-			if _, here := why[name]; here || s.Routed == config.NotRouted {
+			if _, here := why[name]; here {
 				continue
 			}
+			routed := s.Routed != config.NotRouted
 			for _, env := range s.UpstreamEnvs() {
 				u := s.Upstreams[env]
 				if _, tHere := why[u.Service]; !tHere || u.Service == name || u.PerRequest || st.Routable(u) {
 					continue
 				}
-				reason := env + " points at " + u.Service + " here and can't be routed per request"
+				reason := env + " points at " + u.Service + ", which runs here"
+				if routed {
+					reason = env + " points at " + u.Service + " here and can't be routed per request"
+				}
 				if _, known := skipped[name]; !known && without[name] {
 					p.Warnings = append(p.Warnings, fmt.Sprintf(
 						"%s is excluded, but its %s; those calls reach the baseline's %s", name, reason, u.Service))
@@ -417,7 +453,7 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 			for _, env := range s.UpstreamEnvs() {
 				u := s.Upstreams[env]
 				t := st.Services[u.Service]
-				if t.Name == name || !(u.PerRequest || st.Routable(u)) {
+				if t.Name == name || !(u.PerRequest || st.Dispatches(s, u)) {
 					continue
 				}
 				up := Upstream{Env: env, Service: t.Name, Target: Baseline, Value: Value(st, t, 0, u.Value), Why: "per request: " + t.Name + " not running here", PerRequest: u.PerRequest}

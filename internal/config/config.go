@@ -8,6 +8,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -56,9 +57,36 @@ const (
 	// attributes. Upstreams pointing at it receive the namespace, and on a
 	// routed service they switch per request.
 	KindTemporal = "temporal"
+	// KindSupabase is a local Supabase. The baseline runs the command as
+	// written; a worktree's copy is a Supabase CLI stack of its own (stack
+	// mode, one database per worktree), on that slot's ports, with its
+	// migrations applied after every start.
+	KindSupabase = "supabase"
 )
 
-var kinds = []string{KindTemporal}
+var kinds = []string{KindTemporal, KindSupabase}
+
+// SupabasePorts are the Supabase CLI's port settings, as offsets from the
+// API port, that a worktree's stack listens on: the env var that sets each
+// one, and where it lands. "db" follows Service.Ports["db"] when that is
+// set. The rest only have to stay out of every other slot's way.
+var SupabasePorts = []struct {
+	Env    string
+	Name   string // a key of Service.Ports, or "" when hydra picks it alone
+	Offset int
+}{
+	{"SUPABASE_API_PORT", "", 0},
+	{"SUPABASE_DB_PORT", "db", 1},
+	{"SUPABASE_STUDIO_PORT", "", 2},
+	{"SUPABASE_LOCAL_SMTP_PORT", "", 3},
+	{"SUPABASE_LOCAL_SMTP_SMTP_PORT", "", 4},
+	{"SUPABASE_LOCAL_SMTP_POP3_PORT", "", 5},
+	{"SUPABASE_ANALYTICS_PORT", "", 6},
+	{"SUPABASE_ANALYTICS_VECTOR_PORT", "", 7},
+	{"SUPABASE_DB_POOLER_PORT", "", 8},
+	{"SUPABASE_DB_SHADOW_PORT", "", -1},
+	{"SUPABASE_EDGE_RUNTIME_INSPECTOR_PORT", "", -2},
+}
 
 // Upstream says which service an env var points at and how to format it.
 type Upstream struct {
@@ -89,6 +117,9 @@ type Service struct {
 	Name string `yaml:"-"`
 	// Port the baseline instance listens on.
 	Port int `yaml:"port"`
+	// Ports are further ports of the same service, by name, shifted per slot
+	// like Port. Upstream values reach them as {port.NAME}.
+	Ports map[string]int `yaml:"ports"`
 	// PortEnv overrides Global.PortEnv for this service.
 	PortEnv string `yaml:"port_env"`
 	// Paths (globs, relative to the repo root) whose changes mean this
@@ -154,6 +185,9 @@ func (r *Routing) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
+// namedPort matches a {port.NAME} placeholder.
+var namedPort = regexp.MustCompile(`\{port\.([A-Za-z0-9_-]+)\}`)
+
 // Routable reports whether a proxy can route calls made through this upstream:
 // its value has to carry the target's port, as an HTTP URL or as the bare
 // port. A postgres:// URL or a queue name isn't.
@@ -175,6 +209,23 @@ func (st *Stack) Routable(u Upstream) bool {
 	return true
 }
 
+// Dispatches reports whether routed service s reaches u's target through
+// the router. Not when s also points at that service through a value no
+// proxy can route, such as a database URL: a worktree running that service
+// runs its own copy of s too, so main's copy only ever serves worktrees that
+// use main's, and its calls can go there directly.
+func (st *Stack) Dispatches(s *Service, u Upstream) bool {
+	if s.Routed == NotRouted || u.Service == s.Name || !st.Routable(u) {
+		return false
+	}
+	for _, o := range s.Upstreams {
+		if o.Service == u.Service && !o.PerRequest && !st.Routable(o) {
+			return false
+		}
+	}
+	return true
+}
+
 // DispatchPort is where the router listens for calls to s made by routed
 // services: one stride past the last slot.
 func (st *Stack) DispatchPort(s *Service) int {
@@ -190,7 +241,7 @@ func (st *Stack) Dispatched() []string {
 			continue
 		}
 		for _, u := range s.Upstreams {
-			if u.Service != s.Name && st.Routable(u) {
+			if st.Dispatches(s, u) {
 				seen[u.Service] = true
 			}
 		}
@@ -201,6 +252,43 @@ func (st *Stack) Dispatched() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// SlotPorts lists every port s listens on in a slot, keyed by name ("" for
+// Port): its named ports, and in a worktree the rest of a Supabase stack's.
+func (st *Stack) SlotPorts(s *Service, slot int) map[string]int {
+	if s.Port == 0 {
+		return nil
+	}
+	shift := slot * st.Hydra.SlotStride
+	out := map[string]int{"": s.Port + shift}
+	for name, p := range s.Ports {
+		out[name] = p + shift
+	}
+	if s.Kind == KindSupabase && slot > 0 {
+		for _, sp := range SupabasePorts {
+			if sp.Name == "" && sp.Offset != 0 {
+				out[strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(sp.Env, "SUPABASE_"), "_PORT"))] = s.Port + sp.Offset + shift
+			}
+		}
+	}
+	return out
+}
+
+// SupabaseEnv is the environment that makes the Supabase CLI run a
+// worktree's own stack: stack mode on, every port on the slot's, and the Deno
+// version stack mode supports (it rejects any other).
+func (st *Stack) SupabaseEnv(s *Service, slot int) []string {
+	env := []string{"SUPABASE_EXPERIMENTAL_STACK=1", "SUPABASE_EDGE_RUNTIME_DENO_VERSION=2"}
+	shift := slot * st.Hydra.SlotStride
+	for _, sp := range SupabasePorts {
+		p := s.Port + sp.Offset
+		if sp.Name != "" {
+			p = s.Ports[sp.Name]
+		}
+		env = append(env, fmt.Sprintf("%s=%d", sp.Env, p+shift))
+	}
+	return env
 }
 
 // HasRouted reports whether any service is routed.
@@ -303,6 +391,17 @@ func Parse(data []byte) (*Stack, error) {
 				s.BaselineURL = "default"
 			}
 		}
+		if s.Kind == KindSupabase {
+			if s.Port == 0 {
+				s.Port = 54321
+			}
+			if s.Ports == nil {
+				s.Ports = map[string]int{}
+			}
+			if s.Ports["db"] == 0 {
+				s.Ports["db"] = s.Port + 1
+			}
+		}
 		if s.URL == "" {
 			s.URL = "http://{host}:{port}"
 		}
@@ -375,6 +474,11 @@ func (st *Stack) validate() error {
 			if strings.Contains(tmpl, "{port}") && t.Port == 0 {
 				return fmt.Errorf("%s: upstream %s needs %s's port, but %s has no x-hydra.port", name, env, t.Name, t.Name)
 			}
+			for _, m := range namedPort.FindAllStringSubmatch(tmpl, -1) {
+				if _, ok := t.Ports[m[1]]; !ok {
+					return fmt.Errorf("%s: upstream %s uses {port.%s}, but %s has no x-hydra.ports.%s", name, env, m[1], t.Name, m[1])
+				}
+			}
 			if u.PerRequest && s.Routed == NotRouted {
 				return fmt.Errorf("%s: upstream %s is per_request, which only applies to a routed service", name, env)
 			}
@@ -396,15 +500,29 @@ func (st *Stack) checkPorts() error {
 			if s.Port == 0 || (slot > 0 && s.Shared) {
 				continue
 			}
-			p := s.Port + slot*st.Hydra.SlotStride
-			who := fmt.Sprintf("%s in slot %d", name, slot)
-			if p > 65535 {
-				return fmt.Errorf("%s would listen on %d; lower max_slots or slot_stride", who, p)
+			ports := st.SlotPorts(s, slot)
+			labels := make([]string, 0, len(ports))
+			for label := range ports {
+				labels = append(labels, label)
 			}
-			if prev, taken := owner[p]; taken {
-				return fmt.Errorf("port %d: %s collides with %s; change slot_stride, max_slots or the base ports", p, who, prev)
+			sort.Strings(labels)
+			for _, label := range labels {
+				p := ports[label]
+				who := fmt.Sprintf("%s in slot %d", name, slot)
+				if label != "" {
+					who = fmt.Sprintf("%s's %s port in slot %d", name, label, slot)
+				}
+				if p > 65535 {
+					return fmt.Errorf("%s would listen on %d; lower max_slots or slot_stride", who, p)
+				}
+				if s.Kind == KindSupabase && slot > 0 && p >= 10000 && p < 20000 {
+					return fmt.Errorf("%s would be %d, which the Supabase CLI keeps for its own services (10000-19999); move x-hydra.port", who, p)
+				}
+				if prev, taken := owner[p]; taken {
+					return fmt.Errorf("port %d: %s collides with %s; change slot_stride, max_slots or the base ports", p, who, prev)
+				}
+				owner[p] = who
 			}
-			owner[p] = who
 		}
 	}
 	for _, name := range st.Dispatched() {

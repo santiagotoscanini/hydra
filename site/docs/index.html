@@ -39,6 +39,7 @@
   <a href="#watching">Watching</a>
   <a href="#stacks">Stacked branches</a>
   <a href="#routed">One copy for every worktree</a>
+  <a href="#supabase">A database per worktree</a>
   <a href="#generated">The generated file</a>
   <a href="#slots">Slots and ports</a>
   <h4>Reference</h4>
@@ -281,7 +282,7 @@ $ git ls-files --others --exclude-standard                       # new files
     </ul>
     <p>With <code>routed: node</code> the router checks this before a worktree may use the copy: it sends a request with a made-up mark and compares what arrives at its own ports. If the mark is lost, the worktree's port answers 503 with the reason, and <code>hydra up web</code> gives that worktree a copy of its own.</p>
     <h3>What can't be routed</h3>
-    <p>A proxy routes requests. It can do nothing about a value the service reads once from its environment, such as a queue name or a database URL. If a routed service has an upstream like that pointing at something the worktree runs, hydra starts the service in the worktree after all, and <code>hydra plan</code> says why.</p>
+    <p>A proxy routes requests. It can do nothing about a value the service reads once from its environment, such as a queue name or a database URL. If a service has an upstream like that pointing at something the worktree runs, hydra starts the service in the worktree after all, routed or not, and <code>hydra plan</code> says why. A worktree with its own database therefore runs its own API and frontend too.</p>
     <p>Temporal is handled for you: an upstream pointing at a <code>kind: temporal</code> worker is switched per request, inside the Temporal SDK, so the app isn't changed. The router checks the switch before a worktree may use the copy.</p>
     <p>For any other value, mark the upstream <code>per_request: true</code> and have the app read it per request where it used to read the environment:</p>
     <div class="code">
@@ -348,16 +349,49 @@ $ hydra slots free         # free this worktree's slot
       <tr><th>Key</th><th>Default</th><th>Description</th></tr>
       <tr><td><code>port</code><span class="type">integer</span></td><td class="def">none</td><td>The port the baseline's copy listens on. Leave it out for services that don't listen, such as workers.</td></tr>
       <tr><td><code>port_env</code><span class="type">string</span></td><td class="def">stack's</td><td>The variable this service reads its port from.</td></tr>
+      <tr><td><code>ports</code><span class="type">map</span></td><td class="def">{}</td><td>More ports of the same service by name, such as <code>{ db: 54322 }</code>. Shifted per slot like <code>port</code>, and reached as <code>{port.db}</code>.</td></tr>
       <tr><td><code>paths</code><span class="type">list of globs</span></td><td class="def">[]</td><td>Files that belong to the service, relative to the repository root. A change to one makes the service run in the worktree.</td></tr>
       <tr><td><code>upstreams</code><span class="type">map</span></td><td class="def">{}</td><td>Environment variable → the service it points at. Write <code>API_URL: api</code>, or <code>API_PORT: { service: api, value: "{port}" }</code> to change what the variable receives. A service may point at itself. On a routed service, <code>per_request: true</code> marks a value the app picks per request.</td></tr>
       <tr><td><code>url</code><span class="type">string</span></td><td class="def">http://{host}:{port}</td><td>What an upstream variable pointing at this service receives. It doesn't have to be a URL.</td></tr>
       <tr><td><code>baseline_url</code><span class="type">string</span></td><td class="def"><code>url</code></td><td>Replaces <code>url</code> for the baseline's copy, for values that don't come from a port.</td></tr>
       <tr><td><code>shared</code><span class="type">boolean</span></td><td class="def">false</td><td>Always use the baseline's copy. A change to its <code>paths</code> is reported as a warning.</td></tr>
-      <tr><td><code>kind</code><span class="type">string</span></td><td class="def">none</td><td>A service hydra knows more about. <code>temporal</code>: a Temporal worker. Each worktree's copy polls namespace <code>hydra-&lt;slot&gt;</code> (main keeps <code>default</code>), created before it starts with main's search attributes. Fills in <code>url</code>, <code>baseline_url</code> and <code>prepare</code>; keys you set win.</td></tr>
+      <tr><td><code>kind</code><span class="type">string</span></td><td class="def">none</td><td>A service hydra knows more about. <code>temporal</code>: a Temporal worker. Each worktree's copy polls namespace <code>hydra-&lt;slot&gt;</code> (main keeps <code>default</code>), created before it starts with main's search attributes. Fills in <code>url</code>, <code>baseline_url</code> and <code>prepare</code>; keys you set win. <code>supabase</code>: a local Supabase; see <a href="#supabase">a database per worktree</a>.</td></tr>
       <tr><td><code>routed</code><span class="type">true or node</span></td><td class="def">false</td><td>The baseline's copy serves every worktree that didn't change the service, on that worktree's port. <code>node</code> has hydra pass the worktree header along inside the Node process; <code>true</code> means the service does it itself. Needs <code>port</code>. See <a href="#routed">one copy for every worktree</a>.</td></tr>
       <tr><td><code>follow</code><span class="type">boolean</span></td><td class="def">false</td><td>Run in a worktree whenever a local service depends on it.</td></tr>
       <tr><td><code>prepare</code><span class="type">string</span></td><td class="def">none</td><td>A shell command run once before the service starts in a worktree, for example to create the queue or namespace named by <code>url</code>.</td></tr>
     </table></div>
+    <h3 id="supabase">A database per worktree</h3>
+    <p>Mark a local Supabase <code>kind: supabase</code>, with <code>paths</code> covering what makes up its schema. The main checkout runs it exactly as written. A worktree whose schema files differ from the main checkout's gets a Supabase of its own; every other worktree uses main's.</p>
+    <div class="code">
+<pre data-lang="yaml">
+supabase:
+  command: supabase start
+  shutdown: { command: supabase stop }
+  readiness_probe: { http_get: { host: 127.0.0.1, port: 54321, path: /rest/v1/ } }
+  is_daemon: true
+  x-hydra:
+    kind: supabase
+    port: 54321               # the API (default)
+    ports: { db: 54322 }      # the database (default: port + 1)
+    paths: ["supabase/migrations/**", "supabase/seed/**", "supabase/config.toml"]
+
+api:
+  x-hydra:
+    upstreams:
+      SUPABASE_API_URL: supabase
+      DATABASE_URL: { service: supabase, value: "postgresql://postgres:postgres@{host}:{port.db}/postgres" }
+</pre>
+    </div>
+    <ul>
+      <li><b>When.</b> The schema files differ in either direction: the branch changed a migration, or main gained one since the branch was cut. Code that differs only because main moved on doesn't make the other services run.</li>
+      <li><b>What it is.</b> A Supabase CLI stack (stack mode, CLI 2.119 or later; 2.121 or later to move ports), on the slot's ports: the API on <code>port + slot × stride</code>, the database on <code>{port.db}</code>'s. The first start applies every migration and seed in the worktree (about 20 seconds); later starts resume it in a couple of seconds and apply new migrations. An idle stack takes about 110 MB: services other than Postgres start on their first request.</li>
+      <li><b>Who follows it.</b> Anything that reaches it through a value a proxy can't route, such as a database URL, runs in the worktree too.</li>
+      <li><b>Migrations added while it runs</b> are applied within a couple of seconds.</li>
+      <li><b>Typing <code>supabase</code> commands.</b> hydra writes the stack's settings to a block in the worktree's root <code>.env.local</code>, which the CLI reads from the directory it runs in. <code>supabase db reset</code> at the worktree's root then resets the worktree's database, not main's. Run from a subdirectory, the CLI doesn't read it. hydra never writes through a symlinked <code>.env.local</code>.</li>
+      <li><b>Files the CLI writes.</b> It adds lines to <code>supabase/.gitignore</code> and writes <code>supabase/supabase.lock</code> on every start. hydra undoes the first when it is all that changed and ignores the rest through <code>.git/info/exclude</code>, so the worktree shows no changes it didn't make.</li>
+      <li><b>Data.</b> A worktree's database starts from the seed files, not from main's data, and keeps its data across restarts. <code>supabase stack destroy</code> in the worktree removes it.</li>
+      <li><b>Ports.</b> A stack also takes the ports from <code>port − 2</code> to <code>port + 8</code> in each slot, and none of them may fall in 10000–19999, which the CLI keeps for itself. With the API on 54321, keep <code>slot_stride × max_slots</code> under 11,000.</li>
+    </ul>
     <h3>Values that aren't URLs</h3>
     <p>"Where a service lives" is not always a port. A worker that reads jobs from a queue lives at a queue name. Give it a <code>url</code> built from the slot, and whoever enqueues jobs gets the right name:</p>
     <div class="code">
@@ -385,6 +419,7 @@ web:
       <tr><th>Placeholder</th><th>Becomes</th></tr>
       <tr><td><code>{host}</code></td><td>The stack's <code>host</code>.</td></tr>
       <tr><td><code>{port}</code></td><td>The service's port in this slot.</td></tr>
+      <tr><td><code>{port.NAME}</code></td><td>The service's port <code>NAME</code> from <code>ports</code>, in this slot.</td></tr>
       <tr><td><code>{slot}</code></td><td>The slot number. 0 for the baseline.</td></tr>
       <tr><td><code>{value}</code></td><td>In <code>prepare</code> only: the service's own rendered <code>url</code>.</td></tr>
     </table></div>
@@ -419,8 +454,9 @@ routes:
       <li>Services whose <code>paths</code> match a changed file, or <code>global_paths</code> for services that declare paths.</li>
       <li>Services named in <code>with</code>, or with <code>hydra up NAME</code>.</li>
       <li>Services with a route override, plus the target of a <code>local</code> override.</li>
+      <li>A <code>kind: supabase</code> service whose <code>paths</code> differ from the main checkout's.</li>
       <li>Follow services that one of those depends on.</li>
-      <li>Routed services with a call that can't be routed to something in this list.</li>
+      <li>Services that reach something in this list through a value a proxy can't route (a database URL, a queue name), unless it is <code>per_request</code>.</li>
       <li>Minus shared services and anything in <code>without</code>.</li>
     </ol>
   </section>
@@ -480,7 +516,8 @@ $ hydra plan --route web.api=local       # also starts api here
   <section id="limits">
     <h2>Limits</h2>
     <ul>
-      <li><b>The database is shared.</b> A branch that adds a migration still uses the baseline's database, and hydra warns about it. A database per worktree is planned.</li>
+      <li><b>A database per worktree is Supabase only.</b> Another database marked <code>shared</code> stays shared, and hydra warns when a branch changes its paths.</li>
+      <li><b>Auth redirects.</b> A worktree's Supabase sends email and OAuth redirects to the site URL in <code>config.toml</code>, which is main's frontend.</li>
       <li><b>Scheduled jobs.</b> A worker that sets up its own schedules on startup does so in every worktree it runs in.</li>
       <li><b>Routing covers HTTP/1.1.</b> A routed service's gRPC or HTTP/2 calls, and work that no request is behind, reach the baseline's copies. A webhook from outside reaches the baseline's API.</li>
       <li><b>Hard-coded ports.</b> A service has to read its port and its upstreams from the environment. A port written into code or a dev script needs a small patch first.</li>

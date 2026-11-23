@@ -162,6 +162,9 @@ func renderFor(co gitx.Checkout, file string, names []string) (string, map[strin
 		if err := publishRoutes(t, p); err != nil {
 			return "", nil, err
 		}
+		if err := syncEnvLocal(t, p); err != nil {
+			return "", nil, err
+		}
 	}
 	if p.Slot > 0 {
 		fmt.Fprintf(os.Stderr, "hydra: slot %d, running here: %s\n", p.Slot, strings.Join(orNone(p.Local()), ", "))

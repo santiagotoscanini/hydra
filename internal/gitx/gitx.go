@@ -57,6 +57,11 @@ func DefaultBranch(co Checkout) string {
 	return "main"
 }
 
+// Head returns the commit a checkout has checked out.
+func Head(dir string) (string, error) {
+	return run(dir, "rev-parse", "HEAD")
+}
+
 func hasRef(dir, ref string) bool {
 	_, err := run(dir, "rev-parse", "--verify", "--quiet", ref)
 	return err == nil

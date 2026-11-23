@@ -11,15 +11,18 @@ import (
 	"time"
 )
 
-// prepareCmd runs the step a kind adds before its service starts in a
-// worktree. `hydra prepare temporal --namespace hydra-2 --from default`
+// prepareCmd runs the step a kind adds to its service in a worktree (see
+// prepareSupabase for supabase's, which runs after the start). `hydra prepare temporal --namespace hydra-2 --from default`
 // creates the namespace if needed and gives it every custom search attribute
 // the baseline's namespace has, so workflows that set them start the same
 // way. Safe to run again. The temporal CLI reads TEMPORAL_ADDRESS (default
 // 127.0.0.1:7233).
 func prepareCmd(args []string) error {
+	if len(args) > 0 && args[0] == "supabase" {
+		return prepareSupabase(args[1:])
+	}
 	if len(args) == 0 || args[0] != "temporal" {
-		return fmt.Errorf("usage: hydra prepare temporal --namespace NAME --from NAME")
+		return fmt.Errorf("usage: hydra prepare temporal --namespace NAME --from NAME | hydra prepare supabase")
 	}
 	fs := flag.NewFlagSet("prepare temporal", flag.ContinueOnError)
 	ns := fs.String("namespace", "", "")

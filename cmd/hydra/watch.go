@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/santiagotoscanini/hydra/internal/config"
+	"github.com/santiagotoscanini/hydra/internal/plan"
 )
 
 // watchCommand is the command line of the hydra-watch process for t. It must
@@ -129,8 +132,12 @@ func step(t *target, o options, cmd, out, sock string) error {
 	if err := publishRoutes(t, p); err != nil {
 		return err
 	}
+	if err := syncEnvLocal(t, p); err != nil {
+		return err
+	}
 	current, _ := os.ReadFile(out)
 	if bytes.Equal(current, data) {
+		migrateSupabase(t, p)
 		return nil
 	}
 	if err := writeFile(out, data); err != nil {
@@ -159,7 +166,56 @@ func step(t *target, o options, cmd, out, sock string) error {
 			logf("- %s stopped; the baseline's copy is used again", name)
 		}
 	}
+	migrateSupabase(t, p)
 	return nil
+}
+
+// migrationsSeen is what the worktree's supabase/migrations looked like when
+// the watcher last applied them, per service.
+var migrationsSeen = map[string]string{}
+
+// migrateSupabase applies new migrations to a worktree's own Supabase stack
+// that is already running, when files in supabase/migrations appear or
+// change: a stack applies migrations only when it starts.
+func migrateSupabase(t *target, p *plan.Plan) {
+	for _, row := range p.Services {
+		src := t.stack.Services[row.Source]
+		if !row.Local || src == nil || src.Kind != config.KindSupabase {
+			continue
+		}
+		root := t.checkout.Root
+		if row.Root != "" {
+			root = row.Root
+		}
+		now := dirFingerprint(filepath.Join(root, "supabase", "migrations"))
+		prev, seen := migrationsSeen[row.Name]
+		migrationsSeen[row.Name] = now
+		if !seen || prev == now {
+			continue // the first look: the service's own start applies them
+		}
+		logf("supabase/migrations changed; applying them to this worktree's stack")
+		cmd := exec.Command(t.stack.Hydra.Exe, "prepare", "supabase")
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), t.stack.SupabaseEnv(src, p.Slot)...)
+		cmd.Env = append(cmd.Env, "TMPDIR="+filepath.Join(root, "supabase", ".temp", "tmp"))
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			logf("applying migrations: %v (retried on the next change)", err)
+		}
+	}
+}
+
+// dirFingerprint names every file in dir with its size and modification
+// time.
+func dirFingerprint(dir string) string {
+	entries, _ := os.ReadDir(dir)
+	var b strings.Builder
+	for _, e := range entries {
+		if info, err := e.Info(); err == nil {
+			fmt.Fprintf(&b, "%s %d %d\n", e.Name(), info.Size(), info.ModTime().UnixNano())
+		}
+	}
+	return b.String()
 }
 
 // running maps each real service in a rendered file to its working

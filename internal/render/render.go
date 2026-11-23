@@ -139,7 +139,7 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 			return nil, fmt.Errorf("%s: %w", row.Name, err)
 		}
 		env = append(env, "HYDRA_SERVICE="+row.Name, "HYDRA_SLOT="+strconv.Itoa(p.Slot))
-		if row.Port != 0 {
+		if row.Port != 0 && st.Services[source].Kind != config.KindSupabase { // the CLI takes its ports from SUPABASE_*_PORT
 			env = append(env, row.PortEnv+"="+strconv.Itoa(row.Port))
 		}
 		var names []string
@@ -148,6 +148,39 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 			names = append(names, u.Env)
 		}
 		env = append(env, "HYDRA_UPSTREAMS="+strings.Join(names, ","))
+		if svc := st.Services[source]; svc.Kind == config.KindSupabase && p.Slot > 0 {
+			// The worktree's own Supabase stack. TMPDIR inside the checkout:
+			// the CLI bind-mounts temp files into containers, and Colima's VM
+			// only sees the home directory, not macOS's /var/folders.
+			tmp := filepath.Join(root, "supabase", ".temp", "tmp")
+			env = append(env, st.SupabaseEnv(svc, p.Slot)...)
+			env = append(env, "TMPDIR="+tmp)
+			if cmd, ok := proc["command"].(string); ok {
+				exe := st.Hydra.Exe
+				if exe == "" {
+					exe = "hydra"
+				}
+				proc["command"] = "mkdir -p " + shellQuote(tmp) + " && (\n" + strings.TrimRight(cmd, "\n") + "\n) && " + shellQuote(exe) + " prepare supabase"
+			}
+			// The stop must reach this stack too, never the baseline's: name
+			// the stack's environment in the command itself rather than rely
+			// on it being inherited.
+			if sd, ok := proc["shutdown"].(map[string]any); ok {
+				if cmd, ok := sd["command"].(string); ok {
+					c := map[string]any{}
+					for k, v := range sd {
+						c[k] = v
+					}
+					var exports []string
+					for _, kv := range append(st.SupabaseEnv(svc, p.Slot), "TMPDIR="+tmp) {
+						k, v, _ := strings.Cut(kv, "=")
+						exports = append(exports, k+"="+shellQuote(v))
+					}
+					c["command"] = "export " + strings.Join(exports, " ") + "\n" + cmd
+					proc["shutdown"] = c
+				}
+			}
+		}
 		if svc := st.Services[source]; p.Slot == 0 && svc.Routed != config.NotRouted && opt.Router != "" {
 			// One copy for every worktree: its calls go through the router,
 			// which has to be up first.
@@ -214,7 +247,7 @@ func routedOrigins(st *config.Stack, s *config.Service) []string {
 	var out []string
 	for _, env := range s.UpstreamEnvs() {
 		u := s.Upstreams[env]
-		if u.Service == s.Name || !st.Routable(u) {
+		if !st.Dispatches(s, u) {
 			continue
 		}
 		o := "http://" + st.Hydra.Host + ":" + strconv.Itoa(st.DispatchPort(st.Services[u.Service]))

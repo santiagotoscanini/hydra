@@ -98,12 +98,70 @@ processes:
 	}
 
 	for src, want := range map[string]string{
-		"x-hydra: { kind: rabbit }":                 "unknown kind \"rabbit\" (known: temporal)",
+		"x-hydra: { kind: rabbit }":                 "unknown kind \"rabbit\" (known: temporal, supabase)",
 		"x-hydra: { kind: temporal, shared: true }": "can't be shared, follow or routed",
 	} {
 		_, err := Parse([]byte("processes:\n  w:\n    command: x\n    " + src + "\n"))
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: got %v, want %q", src, err, want)
+		}
+	}
+}
+
+func TestSupabaseKind(t *testing.T) {
+	st, err := Parse([]byte(`
+x-hydra: { slot_stride: 200 }
+processes:
+  supabase:
+    command: supabase start
+    x-hydra: { kind: supabase, paths: ["supabase/**"] }
+  api:
+    command: x
+    x-hydra:
+      port: 8080
+      upstreams: { DB: { service: supabase, value: "postgres://{host}:{port.db}/x" } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := st.Services["supabase"]
+	if s.Port != 54321 || s.Ports["db"] != 54322 {
+		t.Fatalf("defaults: port %d, db %d", s.Port, s.Ports["db"])
+	}
+	ports := st.SlotPorts(s, 1)
+	if ports[""] != 54521 || ports["db"] != 54522 || ports["db_shadow"] != 54520 || ports["edge_runtime_inspector"] != 54519 {
+		t.Errorf("slot 1 ports = %v", ports)
+	}
+	if len(st.SlotPorts(s, 0)) != 2 {
+		t.Errorf("the baseline's stack is the user's own; hydra tracks only its API and db: %v", st.SlotPorts(s, 0))
+	}
+	env := strings.Join(st.SupabaseEnv(s, 2), " ")
+	for _, want := range []string{"SUPABASE_EXPERIMENTAL_STACK=1", "SUPABASE_API_PORT=54721", "SUPABASE_DB_PORT=54722", "SUPABASE_EDGE_RUNTIME_INSPECTOR_PORT=54719"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("env lacks %s: %s", want, env)
+		}
+	}
+}
+
+func TestNamedPortValidation(t *testing.T) {
+	for in, want := range map[string]string{
+		// A placeholder for a port the target doesn't declare.
+		`processes:
+  db: { command: x, x-hydra: { port: 5432 } }
+  api: { command: x, x-hydra: { port: 80, upstreams: { U: { service: db, value: "{port.admin}" } } } }`: "no x-hydra.ports.admin",
+		// Slot ports landing in the range the Supabase CLI keeps for itself.
+		`x-hydra: { slot_stride: 1000 }
+processes:
+  supabase: { command: x, x-hydra: { kind: supabase, port: 9000 } }`: "keeps for its own services",
+		// Another service's slot port inside a Supabase stack's range.
+		`x-hydra: { slot_stride: 200 }
+processes:
+  supabase: { command: x, x-hydra: { kind: supabase } }
+  other: { command: x, x-hydra: { port: 54328 } }`: "collides",
+	} {
+		_, err := Parse([]byte(in))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s\ngot %v, want %q", in, err, want)
 		}
 	}
 }

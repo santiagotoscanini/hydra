@@ -79,7 +79,7 @@ x-hydra:
   base_ref: develop       # optional: the branch worktrees are diffed against (default: detected, see below)
   slot_stride: 200        # slot N listens on port + N*200 (slot 0 = baseline)
   max_slots: 20
-  reserved_ports: [6379, 7233, 54321]  # shared infra; no slot may land here
+  reserved_ports: [6379, 7233]  # shared infra; no slot may land here
   global_paths: [go.work] # affect every service that declares paths
 
 processes:
@@ -109,7 +109,12 @@ processes:
   deps:
     x-hydra: { follow: true }     # runs here whenever a local service depends on it
   supabase:
-    x-hydra: { shared: true, paths: ["supabase/migrations/**"] }  # always baseline; warns on change
+    x-hydra:
+      kind: supabase              # a stack of its own where the schema differs (see Kinds)
+      ports: { db: 54322 }        # more ports, shifted per slot, reached as {port.db}
+      paths: ["supabase/migrations/**", "supabase/seed/**"]
+  redis:
+    x-hydra: { shared: true }     # always baseline; warns when its paths change
 ```
 
 A process without `x-hydra` is treated as shared: it only runs in the
@@ -126,10 +131,18 @@ files.
 
 1. Services whose `paths` match a changed file (or `global_paths`, for
    services that declare paths).
-2. Services named with `--with`, `hydra up NAME` or `.hydra.local.yaml`.
-3. Services with a route override, plus the target of an `=local` override.
-4. `follow` services that a local service depends on.
-5. Minus `shared` services and anything in `--without`.
+2. A `kind: supabase` service whose `paths` differ from the main checkout's
+   HEAD in either direction (the database has main's schema, and main may
+   have moved on).
+3. Services named with `--with`, `hydra up NAME` or `.hydra.local.yaml`.
+4. Services with a route override, plus the target of an `=local` override.
+5. `follow` services that a local service depends on.
+6. Services with an upstream pointing at a service that runs here through a
+   value no proxy can route (a database URL, a namespace, a queue name),
+   unless it is `per_request`. Main's copy would keep using main's target.
+   HTTP calls are left alone: a routed service routes them, and a plain one
+   keeps calling the baseline.
+7. Minus `shared` services and anything in `--without`.
 
 ## Routing
 
@@ -176,6 +189,7 @@ keys you'd otherwise write by hand; any key you set yourself wins.
 | Kind | Fills in | Also |
 |---|---|---|
 | `temporal` | `url: hydra-{slot}`, `baseline_url: default`, and a prepare step `hydra prepare temporal --namespace hydra-N --from default` | Routed services switch upstreams pointing at it per request (`per_request` is implied) |
+| `supabase` | `port: 54321`, `ports.db: port + 1` | Runs here when its `paths` differ from the main checkout's; in a worktree, a stack of its own (below) |
 
 `hydra prepare temporal` creates the namespace if needed, waits until
 Temporal knows it, and adds every custom search attribute the baseline's
@@ -183,8 +197,43 @@ namespace has. It is safe to run again and reads `TEMPORAL_ADDRESS` like the
 temporal CLI. A kind can't be `shared`, `follow` or `routed`: its point is a
 separate copy per worktree.
 
-New kinds (SQS queues, Redis key prefixes, a database per worktree) go in the
-same table.
+### `kind: supabase`
+
+The baseline's Supabase is the user's command, untouched (classic
+`supabase start`, its data in the usual Docker volumes). A worktree's copy is
+a Supabase CLI stack (`supabase stack`, stack mode): its identity is the
+worktree's path plus its branch, so each worktree has its own containers and
+data. Rendering adds to the worktree's process:
+
+- `SUPABASE_EXPERIMENTAL_STACK=1`, every port setting on the slot's (the API
+  and `ports.db` shifted per slot, the rest at fixed offsets from the API:
+  studio +2, mail +3..+5, analytics +6/+7, pooler +8, shadow −1, inspector −2)
+  and `SUPABASE_EDGE_RUNTIME_DENO_VERSION=2` (stack mode rejects other
+  versions). Ports written in `config.toml` would otherwise be taken as exact
+  requests and clash with the baseline's; port 0 is rejected, so hydra picks.
+- `TMPDIR` inside the worktree (`supabase/.temp/tmp`): the CLI bind-mounts
+  temp files into containers, and Colima's VM only sees the home directory.
+- After the command, `hydra prepare supabase`: `supabase migration up
+  --include-all` (a resumed stack doesn't apply new migrations on its own),
+  then puts back `supabase/.gitignore` when the CLI's appended lines are all
+  that changed, and adds the CLI's lock and link files to `info/exclude`. It
+  refuses to run without stack mode, which would migrate main's database.
+- The shutdown command exports the same environment itself: a `supabase
+  stop` without it stops the baseline's Supabase.
+
+The watcher applies migrations that appear while the stack runs, and keeps a
+block of the same settings in the worktree's root `.env.local` (never through
+a symlink), so CLI commands typed at the worktree's root reach its stack. The
+CLI reads `.env.local` only from its working directory, so from a
+subdirectory they still reach main's database.
+
+Checked on CLI 2.122.1 with the work monorepo: a fresh stack applies 3,166
+migrations and 112 seed files in about 20 s; a resumed one starts in 2 s; an
+idle stack is about 110 MB (Postgres only; the rest start on demand). Its
+keys and JWT signing key are the CLI's local defaults, the same as the
+baseline's, so only URLs differ.
+
+New kinds (SQS queues, Redis key prefixes) go in the same table.
 
 ## Routed services
 
@@ -224,7 +273,10 @@ browser -> :3400 (router, slot 2's port for web)      marks the request: X-Hydra
   target's port as an HTTP URL (or the bare port) go through the router. If a
   routed service has any other upstream pointing at something the worktree
   runs (a Temporal namespace, a database URL), the planner starts the service
-  in the worktree, unless that upstream is `per_request: true`. Those values
+  in the worktree, unless that upstream is `per_request: true`. A routed
+  service that reaches a service through such a value also calls that
+  service's HTTP endpoints directly rather than through the router: a
+  worktree running that service runs its own copy of the routed one anyway. Those values
   travel in an `X-Hydra-Upstreams` header (their names in the service's
   `HYDRA_PER_REQUEST`). The app can read them with
   `globalThis.__hydra.upstream(name)`.
@@ -259,13 +311,17 @@ checked against each other and `reserved_ports` when the config loads.
 
 ## Open problems
 
-- **Migrations.** Most branches that touch the backend add a migration, and
-  the database is shared. Options: apply the worktree's migrations to the
-  shared database (fine for additive changes, breaks when two branches
-  conflict), a per-worktree database in the same Postgres (works for services
-  that connect directly, not for ones that go through Supabase's REST/auth),
-  or a second Supabase stack on shifted ports only for worktrees that change
-  migrations.
+- **A worktree's database starts empty of main's data.** It is migrated and
+  seeded from the worktree's files. Copying main's data would need a dump
+  per start; a template database would tie the stack to the baseline's
+  Postgres.
+- **Auth redirects.** A worktree's Supabase sends email and OAuth redirects
+  to `site_url` from `config.toml`, main's frontend. Setting
+  `SUPABASE_AUTH_SITE_URL` to the worktree's frontend port would fix it when
+  that frontend runs there.
+- **Routed frontends and a worktree database.** A worktree with its own
+  Supabase runs its own frontend, because the frontend reads the database
+  URL once. Sharing main's would need per-request database clients.
 - **Scheduled work.** A worktree worker in its own Temporal namespace creates
   that namespace's schedules on startup, so cron-like jobs run twice against
   the shared database. Needs a way to skip schedule setup in worktree slots.
@@ -277,7 +333,8 @@ checked against each other and `reserved_ports` when the config loads.
 - **Routing to another worktree** (`web.api=slot:3`), and hostnames instead of
   ports (`api.slot1.localhost`), so cookies and CORS behave as on the
   baseline. Worktree ports for a routed service share `localhost` cookies
-  with the baseline, which matters once a worktree has its own database.
+  with the baseline; a frontend whose cookie names its database (an upstream
+  like `sb-hydra-{slot}`) keeps sessions apart.
 - **Webhooks.** A tunnel reaches the baseline's API only, so a provider's
   callback for work a worktree started lands on main. The router could take
   the tunnel's traffic and route by a mark in the callback URL.
