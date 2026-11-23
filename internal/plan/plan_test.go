@@ -438,3 +438,43 @@ processes:
 		t.Errorf("web TEMPORAL_NAMESPACE = %+v", u)
 	}
 }
+
+func TestBaselineValueIsMainsAlone(t *testing.T) {
+	st, err := config.Parse([]byte(`
+x-hydra: { slot_stride: 100, max_slots: 5 }
+processes:
+  db:
+    command: db
+    x-hydra: { port: 5432, paths: ["db/**"], tls: 5443 }
+  web:
+    command: web
+    x-hydra:
+      port: 3000
+      paths: ["web/**"]
+      upstreams:
+        DB_URL: { service: db, baseline_value: "https://{host}:{tls}" }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Main's web reaches the database through its TLS front.
+	if u := upstream(t, BaselinePlan(st), "web", "DB_URL"); u.Value != "https://127.0.0.1:5443" {
+		t.Errorf("baseline DB_URL = %q", u.Value)
+	}
+	// A worktree's web keeps the plain address: of main's database, or of
+	// its own, which has no front.
+	p, err := Build(st, Request{Slot: 2, Changed: []string{"web/page.tsx"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u := upstream(t, p, "web", "DB_URL"); u.Value != "http://127.0.0.1:5432" {
+		t.Errorf("worktree DB_URL = %q", u.Value)
+	}
+	p, err = Build(st, Request{Slot: 2, Changed: []string{"web/page.tsx", "db/schema.sql"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u := upstream(t, p, "web", "DB_URL"); u.Value != "http://127.0.0.1:5632" {
+		t.Errorf("worktree DB_URL with its own db = %q", u.Value)
+	}
+}

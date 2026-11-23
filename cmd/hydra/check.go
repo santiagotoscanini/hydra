@@ -405,6 +405,7 @@ func mainProblems(ms *mainState) []problem {
 			Text: "main's stack was started from an older process-compose.yaml (or an older hydra) than the one there now.",
 			Fix:  "hydra update"})
 	}
+	out = append(out, tlsProblems(ms)...)
 	if base := ms.target.stack.Hydra.BaseRef; ms.Branch != base {
 		on := "a detached commit"
 		if ms.Branch != "" {
@@ -414,6 +415,53 @@ func mainProblems(ms *mainState) []problem {
 	}
 	if len(ms.Dirty) > 0 {
 		out = append(out, problem{Text: "the main checkout has uncommitted changes, which its stack runs: " + someFiles(ms.Dirty)})
+	}
+	return out
+}
+
+// tlsProblems checks the TLS fronts of main's stack: each has to accept
+// connections, and this machine has to trust their certificate, or a browser
+// refuses the https address without saying much.
+func tlsProblems(ms *mainState) []problem {
+	st := ms.target.stack
+	if !st.HasTLS() {
+		return nil
+	}
+	main := ms.target.checkout.Root
+	var out []problem
+	for _, name := range st.Names() {
+		s := st.Services[name]
+		if s.TLS == nil {
+			continue
+		}
+		addr := net.JoinHostPort(st.Hydra.Host, strconv.Itoa(s.TLS.Port))
+		c, err := net.DialTimeout("tcp", addr, time.Second)
+		if err != nil {
+			out = append(out, problem{Blocks: true,
+				Text: fmt.Sprintf("main's TLS front for %s isn't listening on :%d (hydra-router opens it).", name, s.TLS.Port),
+				Fix:  "cd " + shQuote(main) + " && hydra process restart hydra-router"})
+			continue
+		}
+		c.Close()
+	}
+	files, err := tlsFilesFor(ms.target)
+	if err != nil {
+		return append(out, problem{Blocks: true, Text: err.Error()})
+	}
+	// Whether this machine trusts the certificate only matters once a process
+	// is given a front's address.
+	used := false
+	for _, s := range st.Services {
+		for _, u := range s.Upstreams {
+			used = used || strings.Contains(u.BaselineValue, "{tls}")
+		}
+	}
+	if _, err := os.Stat(files.Cert); used && err == nil && !trusted(files) {
+		pr := problem{Text: "this machine doesn't trust the certificate of main's TLS fronts, so a browser refuses their https addresses.", Fix: "hydra trust"}
+		if !files.Own {
+			pr.Fix = "trust the CA that signed " + files.Cert + " (mkcert -install, if mkcert made it)"
+		}
+		out = append(out, pr)
 	}
 	return out
 }

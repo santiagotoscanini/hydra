@@ -1,0 +1,27 @@
+# The stack behind tls.sh: a database that only main's frontend has to reach
+# over https, and the frontend. Every service is the `mocksvc` binary.
+version: "0.5"
+
+x-hydra:
+  slot_stride: 100
+  max_slots: 8
+
+processes:
+  db:
+    command: bin/mocksvc
+    x-hydra:
+      shared: true
+      port: 22030
+      # hydra's router accepts TLS on 22443 and passes it on to 22030.
+      tls: 22443
+
+  web:
+    command: bin/mocksvc
+    depends_on:
+      db: { condition: process_started }
+    x-hydra:
+      port: 22000
+      paths: ["apps/web/**"]
+      upstreams:
+        # Main's copy is told to use the front; a worktree's keeps the plain address.
+        DB_URL: { service: db, baseline_value: "https://{host}:{tls}" }

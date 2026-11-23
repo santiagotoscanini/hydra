@@ -125,6 +125,7 @@ func wrap(args []string) error {
 			}
 			if starting && co.IsMain() {
 				recordStart(co, a.rest)
+				ensureFrontCert(co, file)
 			}
 			final = append(final, "-f", out)
 			a.rest = keepRunnable(a.rest, a.names, local)
@@ -157,6 +158,23 @@ func recordStart(co gitx.Checkout, args []string) {
 	}
 	if err := writeBaseline(co.CommonDir, baselineRecord{Commit: head, At: time.Now(), Address: host, Port: port}); err != nil {
 		fmt.Fprintln(os.Stderr, "hydra: warning: can't record the baseline's commit:", err)
+	}
+}
+
+// ensureFrontCert makes hydra's CA and certificate before the main stack
+// starts, if it has TLS fronts: processes are handed the CA's path, and the
+// file had better be there.
+func ensureFrontCert(co gitx.Checkout, file string) {
+	t, err := resolve(co.Root, file)
+	if err != nil || !t.stack.HasTLS() {
+		return
+	}
+	files, err := tlsFilesFor(t)
+	if err == nil {
+		err = ensureTLS(files)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "hydra: warning: no certificate for the TLS fronts:", err)
 	}
 }
 

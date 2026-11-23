@@ -165,3 +165,57 @@ processes:
 		}
 	}
 }
+
+func TestTLSFronts(t *testing.T) {
+	st, err := Parse([]byte(`
+x-hydra: { slot_stride: 100, max_slots: 5 }
+processes:
+  db:
+    command: db
+    x-hydra: { shared: true, port: 5432, tls: 5443 }
+  queue:
+    command: queue
+    x-hydra: { shared: true, port: 7233, tls: { port: 7243, alpn: h2 } }
+  web:
+    command: web
+    x-hydra:
+      port: 3000
+      upstreams:
+        DB_URL: { service: db, baseline_value: "https://{host}:{tls}" }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := st.Services["db"].TLS; f == nil || f.Port != 5443 || f.ALPN != "http/1.1" {
+		t.Errorf("db tls = %+v, want :5443 http/1.1", f)
+	}
+	if f := st.Services["queue"].TLS; f == nil || f.Port != 7243 || f.ALPN != "h2" {
+		t.Errorf("queue tls = %+v", f)
+	}
+	if !st.HasTLS() {
+		t.Error("HasTLS should be true")
+	}
+
+	for name, tc := range map[string]struct{ yaml, want string }{
+		"a front needs the port it passes to": {
+			`processes: { db: { command: x, x-hydra: { shared: true, tls: 5443 } } }`, "tls needs x-hydra.port"},
+		"only the two protocols": {
+			`processes: { db: { command: x, x-hydra: { port: 5432, tls: { port: 5443, alpn: spdy } } } }`, "want http/1.1 or h2"},
+		"a worktree's copy has no front": {
+			`processes:
+  db: { command: x, x-hydra: { port: 5432, tls: 5443 } }
+  web: { command: x, x-hydra: { upstreams: { DB: { service: db, value: "https://{host}:{tls}" } } } }`, "belongs in baseline_value"},
+		"{tls} needs a front": {
+			`processes:
+  db: { command: x, x-hydra: { port: 5432 } }
+  web: { command: x, x-hydra: { upstreams: { DB: { service: db, baseline_value: "https://{host}:{tls}" } } } }`, "has no x-hydra.tls"},
+		"a front's port is taken like any other": {
+			`x-hydra: { slot_stride: 100, max_slots: 3 }
+processes:
+  db: { command: x, x-hydra: { port: 5432, tls: 5532 } }`, "collides with"},
+	} {
+		if _, err := Parse([]byte(tc.yaml)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
+	}
+}

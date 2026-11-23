@@ -67,7 +67,22 @@ func routerState(commonDir, file string) (*router.State, error) {
 	if err != nil {
 		return nil, err
 	}
-	state := &router.State{Host: st.Hydra.Host, Services: map[string]router.Service{}, Worktrees: map[string]router.Worktree{}}
+	state := &router.State{Host: st.Hydra.Host, Services: map[string]router.Service{}, Worktrees: map[string]router.Worktree{}, Fronts: map[string]router.Front{}}
+	if st.HasTLS() {
+		// A front without a certificate can't open; say why and keep routing.
+		files, err := tlsFilesFor(&target{file: file, stack: st})
+		if err == nil {
+			state.Cert, err = frontCert(files)
+		}
+		if err != nil {
+			warnOnce("tls", fmt.Sprintf("no certificate for the TLS fronts: %v", err))
+		}
+		for name, s := range st.Services {
+			if s.TLS != nil {
+				state.Fronts[name] = router.Front{Listen: s.TLS.Port, Target: s.Port, ALPN: s.TLS.ALPN}
+			}
+		}
+	}
 	dispatched := map[string]bool{}
 	for _, name := range st.Dispatched() {
 		dispatched[name] = true
@@ -100,6 +115,17 @@ func routerState(commonDir, file string) (*router.State, error) {
 		state.Worktrees[f.Tag()] = wt
 	}
 	return state, nil
+}
+
+// warned is what the router last said about each subject, so a problem it
+// meets twice a second is logged once.
+var warned = map[string]string{}
+
+func warnOnce(key, msg string) {
+	if warned[key] != msg {
+		warned[key] = msg
+		logf("%s", msg)
+	}
 }
 
 // publishRoutes tells the baseline's router what this worktree runs, and

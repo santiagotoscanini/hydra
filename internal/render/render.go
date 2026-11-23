@@ -28,6 +28,10 @@ type Options struct {
 	// NodeHook is the path of hydra's Node preload, loaded into services
 	// marked `routed: node`.
 	NodeHook string
+	// CAFile is the CA behind the baseline's TLS fronts. A baseline process
+	// that is given a front's address gets it as NODE_EXTRA_CA_CERTS, so
+	// Node accepts the front.
+	CAFile string
 }
 
 const idle = "while :; do sleep 3600; done"
@@ -213,6 +217,18 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 			deps["hydra-router"] = map[string]any{"condition": "process_started"}
 			proc["depends_on"] = deps
 		}
+		if p.Slot == 0 && usesFront(st.Services[source]) {
+			// A process told to use a TLS front needs the router up first,
+			// and the CA to accept the front with. Only such a process is
+			// touched: adding a front to a stack restarts nothing else.
+			if _, has := deps["hydra-router"]; !has && opt.Router != "" {
+				deps["hydra-router"] = map[string]any{"condition": "process_started"}
+				proc["depends_on"] = deps
+			}
+			if opt.CAFile != "" && !hasEnv(env, "NODE_EXTRA_CA_CERTS") {
+				env = append(env, "NODE_EXTRA_CA_CERTS="+opt.CAFile)
+			}
+		}
 		proc["environment"] = env
 
 		procs[row.Name] = proc
@@ -270,6 +286,26 @@ func routedOrigins(st *config.Stack, s *config.Service) []string {
 		}
 	}
 	return out
+}
+
+// usesFront reports whether the baseline's copy of s is given a TLS front's
+// address.
+func usesFront(s *config.Service) bool {
+	for _, u := range s.Upstreams {
+		if strings.Contains(u.BaselineValue, "{tls}") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnv(env []string, name string) bool {
+	for _, kv := range env {
+		if strings.HasPrefix(kv, name+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 // withNodeHook adds `--require <hook>` to NODE_OPTIONS, keeping what the

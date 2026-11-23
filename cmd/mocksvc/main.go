@@ -7,6 +7,8 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -32,6 +34,22 @@ type upstream struct {
 
 var client = &http.Client{Timeout: 2 * time.Second}
 
+// trustExtraCA makes the client accept the CA named by NODE_EXTRA_CA_CERTS,
+// as a Node service would: hydra hands that to processes that reach another
+// service through a TLS front.
+func trustExtraCA() {
+	pem, err := os.ReadFile(os.Getenv("NODE_EXTRA_CA_CERTS"))
+	if err != nil {
+		return
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	pool.AppendCertsFromPEM(pem)
+	client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -39,6 +57,7 @@ func main() {
 	}
 	name := os.Getenv("HYDRA_SERVICE")
 	slot := os.Getenv("HYDRA_SLOT")
+	trustExtraCA()
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		depth, _ := strconv.Atoi(r.Header.Get("X-Hydra-Depth"))

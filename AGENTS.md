@@ -9,9 +9,9 @@ main checkout's copies of the rest. See `README.md` for what it does and
 
 | Path | What |
 |---|---|
-| `cmd/hydra/` | The CLI: the process-compose wrapper (`wrap.go`), `plan`/`render`/`slots`, the checks behind `hydra status` and `hydra up` (`check.go`, `status.go`), the status page (`ui.go`, and `ui.html`, which is embedded in the binary), `hydra update` (`update.go`), and the processes hydra adds (`watch.go`, `router.go`, `prepare.go`) |
+| `cmd/hydra/` | The CLI: the process-compose wrapper (`wrap.go`), `plan`/`render`/`slots`, the checks behind `hydra status` and `hydra up` (`check.go`, `status.go`), the status page (`ui.go`, and `ui.html`, which is embedded in the binary), `hydra update` (`update.go`), the certificate behind TLS fronts and `hydra trust` (`tls.go`), and the processes hydra adds (`watch.go`, `router.go`, `prepare.go`) |
 | `internal/` | `config` (the `x-hydra` keys), `plan` (what runs where, and what is out of step with main), `render` (the generated file), `stack` (stacked worktrees), `router` + `routes` + `hook` (routed services), `pc` (process-compose's HTTP API), `slots`, `gitx`, `glob`, `changes` |
-| `examples/demo/` | Mock stacks and scripts that run hydra end to end (`run.sh`, `stack.sh`, `routed.sh`, `update.sh`) |
+| `examples/demo/` | Mock stacks and scripts that run hydra end to end (`run.sh`, `stack.sh`, `routed.sh`, `update.sh`, `tls.sh`) |
 | `site/` | The site at <https://hydra.toscanini.me>: static HTML, no build step, deployed by `.github/workflows/pages.yml` on push to `main` |
 
 ## Keep the docs in sync with the code
@@ -39,8 +39,9 @@ sample config it mirrors is the quick start in `site/docs/index.html`.
 
 - `go vet ./... && go test ./...` (the hook tests need `node`).
 - The demos: `./examples/demo/run.sh`, `./examples/demo/stack.sh`,
-  `./examples/demo/routed.sh`, `./examples/demo/update.sh`. Each builds hydra
-  and cleans up after itself. `update.sh` checks what every step printed and
+  `./examples/demo/routed.sh`, `./examples/demo/update.sh`,
+  `./examples/demo/tls.sh`. Each builds hydra and cleans up after itself.
+  `tls.sh` uses a CA of its own (`HYDRA_TLS_DIR`), never the user's. `update.sh` checks what every step printed and
   exits non-zero when one is off: it is the end-to-end test of `hydra
   status`, the checks before `hydra up`, and `hydra update`.
 - The site: open `site/index.html` in a browser, in light and dark, and at

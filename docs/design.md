@@ -251,6 +251,8 @@ processes:
       paths: ["pnpm-lock.yaml"]   # and `hydra update` runs it again when a pull changes this
   migrate:
     x-hydra: { shared: true, paths: ["db/migrations/**"] }  # main's job; rerun by `hydra update`
+  db:
+    x-hydra: { shared: true, port: 5432, tls: 5443 }  # the router answers TLS on 5443 for main's copy (see TLS fronts)
   docs:
     x-hydra:
       paths: ["apps/docs/**"]
@@ -461,6 +463,65 @@ Not covered: HTTP/2 and gRPC between services, calls that no request is
 behind (timers started at boot, webhooks from outside) which always reach the
 baseline's copy, and unchanged services that aren't routed (a baseline worker
 still calls the baseline's API).
+
+## TLS fronts
+
+A baseline process may need `https` where the service speaks plain HTTP: a
+production build whose Content-Security-Policy allows `https:` and `wss:`
+only, or an SDK that turns TLS on whenever an API key is set. `tls` on a
+service adds a front for the baseline's copy:
+
+```yaml
+supabase:
+  x-hydra: { port: 54321, tls: 54421 }
+temporal:
+  x-hydra: { shared: true, port: 7233, tls: { port: 7243, alpn: h2 } }
+```
+
+- **The router terminates TLS and nothing else.** After the handshake it
+  copies bytes both ways to the service's port. It never parses them, so the
+  front carries whatever the service speaks in the clear, provided ALPN names
+  it: `http/1.1` (the default, websockets included) or `h2` for a service that
+  takes HTTP/2 without TLS, as gRPC servers do. Offering one protocol only is
+  what keeps a browser from speaking HTTP/2 to an HTTP/1.1 service.
+- **Main's copy only.** A front is opened for the baseline's port. The
+  address is given with `baseline_value` on an upstream, which may use
+  `{tls}`; `value` and `url` may not, because a worktree's own copy has no
+  front. So main's process gets `https://127.0.0.1:54421` and a worktree's
+  gets the plain address, as before. Such an upstream isn't sent through the
+  router's per-worktree dispatch. A baseline process with a `{tls}` value
+  waits for `hydra-router`, which exists as soon as a service has `tls`.
+- **The certificate.** hydra keeps one CA per user
+  (`<user config dir>/hydra`: `ca.pem`, `ca-key.pem`, `cert.pem`, `key.pem`;
+  `HYDRA_TLS_DIR` moves it), so trusting it once covers every repository. The
+  CA is ECDSA P-256, valid ten years, path length 0, and name constrained
+  (critical) to `localhost`, names under it, `127.0.0.0/8` and `::1`: a
+  certificate for any other name signed with its key is refused. The
+  certificate covers `localhost`, `*.localhost`, `127.0.0.1` and `::1` for
+  800 days (Apple's limit is 825) and is made again when it is missing, a
+  month from expiry, or signed by another CA. The router reads it at every
+  handshake, so a new one needs no restart. `x-hydra.tls: { cert, key, ca }`
+  names a stack's own files (paths relative to the stack file), which hydra
+  only reads.
+- **Trust.** `hydra trust` adds the CA to the user's keychain, trusted for
+  TLS only (macOS; elsewhere it prints the file). `--remove` undoes it,
+  `--print` prints the path. Whether the machine trusts the certificate is
+  asked of the system verifier, and `hydra status` notes when it doesn't.
+  A baseline process that is given a front's address gets
+  `NODE_EXTRA_CA_CERTS=<ca>`, unless it sets its own; no other process is
+  touched, so adding a front to a running stack restarts nothing.
+  Firefox keeps its own list of authorities.
+- **`hydra status`** fails when a front isn't accepting connections.
+
+Two things learned on the monorepo this was built for:
+
+- grpc-js on recent Node refuses TLS to an IP address (it can't put one in the
+  TLS server name), so a gRPC client's address has to be `localhost:<port>`.
+- Don't put a front before a web app that sends `Strict-Transport-Security`
+  and open it as `https://localhost`: HSTS is kept per host name, not per
+  port, so the browser would insist on https for every port on localhost.
+  Fronts are for the services a page talks to; the page itself can stay on
+  http, where `'self'` covers it. (An IP address is never pinned.)
 
 ## Slots
 

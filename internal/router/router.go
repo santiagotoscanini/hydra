@@ -8,6 +8,8 @@
 //   - One port per service that routed services call (the api). A call there
 //     goes to the tagged worktree's copy of that service if the worktree
 //     runs one, and to the baseline's otherwise.
+//   - A TLS front for a baseline service that asks for one: TLS is accepted
+//     there and the bytes go on, as they are, to the service's plain port.
 //
 // In between, the routed service has to copy the tag from the request it is
 // serving onto the calls it makes. The router checks that it does before it
@@ -16,6 +18,7 @@ package router
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,11 +71,25 @@ type Worktree struct {
 	Entries map[string]Entry // routed service -> its port in this worktree
 }
 
+// Front is a TLS front: TLS is accepted on Listen and the bytes are passed
+// to Target, the baseline service's plain port. ALPN is the protocol the
+// front offers, which has to be the one the service speaks in the clear:
+// "http/1.1" or "h2".
+type Front struct {
+	Listen int
+	Target int
+	ALPN   string
+}
+
 // State is everything the router routes by at one moment.
 type State struct {
 	Host      string
 	Services  map[string]Service
 	Worktrees map[string]Worktree // by tag
+	// Fronts are the TLS fronts, by service, and Cert what they present. A
+	// new Cert is used from the next handshake on.
+	Fronts map[string]Front
+	Cert   *tls.Certificate
 }
 
 // Router keeps its listeners in step with the state Load returns.
@@ -93,6 +110,7 @@ type Router struct {
 
 type listener struct {
 	servers []*http.Server
+	raw     []net.Listener // TLS fronts: closed as they are
 	port    int
 	what    string
 }
@@ -148,26 +166,38 @@ func (r *Router) Reconcile() {
 		r.client = &http.Client{Timeout: 5 * time.Second}
 	}
 
-	want := map[string]func() (int, http.Handler, string){}
+	// Each wanted listener: its port, what it is for, and how to open it.
+	type opener struct {
+		port int
+		what string
+		open func() (*listener, error)
+	}
+	want := map[string]opener{}
 	for name, s := range st.Services {
 		if s.Dispatch != 0 {
 			name, port := name, s.Dispatch
-			want[fmt.Sprintf("dispatch %s :%d", name, port)] = func() (int, http.Handler, string) {
-				return port, r.dispatch(name), fmt.Sprintf("calls to %s from routed services", name)
-			}
+			want[fmt.Sprintf("dispatch %s :%d", name, port)] = opener{port, fmt.Sprintf("calls to %s from routed services", name),
+				func() (*listener, error) { return listen(st.Host, port, r.dispatch(name)) }}
 		}
 	}
 	for tag, wt := range st.Worktrees {
 		for name, e := range wt.Entries {
-			tag, name, port, wtName := tag, name, e.Port, wt.Name
-			want[fmt.Sprintf("entry %s %s :%d", tag, name, port)] = func() (int, http.Handler, string) {
-				return port, r.entry(tag, name), fmt.Sprintf("%s for worktree %s", name, wtName)
-			}
+			tag, name, port := tag, name, e.Port
+			want[fmt.Sprintf("entry %s %s :%d", tag, name, port)] = opener{port, fmt.Sprintf("%s for worktree %s", name, wt.Name),
+				func() (*listener, error) { return listen(st.Host, port, r.entry(tag, name)) }}
+		}
+	}
+	if st.Cert != nil {
+		for name, f := range st.Fronts {
+			f := f
+			want[fmt.Sprintf("tls %s :%d>%d %s", name, f.Listen, f.Target, f.ALPN)] = opener{f.Listen,
+				fmt.Sprintf("TLS for %s (:%d, %s)", name, f.Target, f.ALPN),
+				func() (*listener, error) { return r.listenTLS(st.Host, f) }}
 		}
 	}
 
 	for key, l := range r.listeners {
-		if want[key] == nil {
+		if _, wanted := want[key]; !wanted {
 			l.close()
 			delete(r.listeners, key)
 			r.logf("closed :%d: %s", l.port, l.what)
@@ -182,8 +212,8 @@ func (r *Router) Reconcile() {
 		if r.listeners[key] != nil {
 			continue
 		}
-		port, handler, what := want[key]()
-		l, err := listen(st.Host, port, handler)
+		port, what := want[key].port, want[key].what
+		l, err := want[key].open()
 		if err != nil {
 			if r.failed[key] != err.Error() { // say it once; the port may free up
 				r.failed[key] = err.Error()
@@ -230,6 +260,74 @@ func listen(host string, port int, handler http.Handler) (*listener, error) {
 func (l *listener) close() {
 	for _, srv := range l.servers {
 		srv.Close()
+	}
+	for _, ln := range l.raw {
+		ln.Close()
+	}
+}
+
+// listenTLS opens a TLS front. It doesn't look inside the connection: after
+// the handshake the bytes go to the service as they came, so it carries
+// whatever the service speaks in the clear (HTTP/1.1 with its websockets, or
+// HTTP/2 for a gRPC server), as long as ALPN names it. The certificate is
+// read from the state at every handshake, so a renewed one needs no restart.
+func (r *Router) listenTLS(host string, f Front) (*listener, error) {
+	cfg := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{f.ALPN},
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			if st := r.state.Load(); st != nil && st.Cert != nil {
+				return st.Cert, nil
+			}
+			return nil, errors.New("hydra has no certificate for its TLS fronts")
+		},
+	}
+	target := net.JoinHostPort(host, strconv.Itoa(f.Target))
+	ln, err := tls.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(f.Listen)), cfg)
+	if err != nil {
+		return nil, err
+	}
+	l := &listener{raw: []net.Listener{ln}}
+	go forward(ln, target)
+	// As for the other ports: a client may resolve localhost to the other
+	// loopback family.
+	if other := map[string]string{"127.0.0.1": "::1", "::1": "127.0.0.1"}[host]; other != "" {
+		if ln2, err := tls.Listen("tcp", net.JoinHostPort(other, strconv.Itoa(f.Listen)), cfg); err == nil {
+			l.raw = append(l.raw, ln2)
+			go forward(ln2, target)
+		}
+	}
+	return l, nil
+}
+
+// forward passes every connection accepted on ln to target, until ln closes.
+func forward(ln net.Listener, target string) {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer c.Close()
+			up, err := net.DialTimeout("tcp", target, 5*time.Second)
+			if err != nil {
+				return // the service is down: the client sees the connection close
+			}
+			defer up.Close()
+			done := make(chan struct{}, 2)
+			pipe := func(dst, src net.Conn) {
+				io.Copy(dst, src)
+				// Pass the end of one direction on, and let the other finish.
+				if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+					cw.CloseWrite()
+				}
+				done <- struct{}{}
+			}
+			go pipe(up, c)
+			go pipe(c, up)
+			<-done
+			<-done
+		}()
 	}
 }
 

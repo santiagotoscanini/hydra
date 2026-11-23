@@ -43,6 +43,7 @@
   <a href="#stacks">Stacked branches</a>
   <a href="#routed">One copy for every worktree</a>
   <a href="#supabase">A database per worktree</a>
+  <a href="#tls">HTTPS in front of a service</a>
   <a href="#generated">The generated file</a>
   <a href="#slots">Slots and ports</a>
   <h4>Reference</h4>
@@ -266,7 +267,7 @@ web      main, routed  3400  ready
     <p>A line marked ✗ is an error: the command exits 1, and <code>hydra up</code> won't start the worktree. A line marked ! is a note. Each comes with the command that fixes it.</p>
     <div class="table"><table>
       <tr><th>Checked</th><th>Error when</th></tr>
-      <tr><td>Main's stack</td><td>Nothing answers where it was started.</td></tr>
+      <tr><td>Main's stack</td><td>Nothing answers where it was started, or a <a href="#tls">TLS front</a> isn't accepting connections.</td></tr>
       <tr><td>What this worktree takes from main</td><td>A service it calls, waits for or is routed to has failed or was stopped. The end of its log is shown.</td></tr>
       <tr><td>Main's stack against main's files</td><td>The checkout moved without <code>hydra update</code>, and a process this worktree uses still runs the old code.</td></tr>
       <tr><td>The branch against main</td><td>They disagree on a service the worktree takes from main. See <a href="#instep">in step with main</a>.</td></tr>
@@ -463,6 +464,39 @@ const queue = globalThis.__hydra?.upstream('JOBS_QUEUE') ?? process.env.JOBS_QUE
     <p>Not routed: HTTP/2 and gRPC between services, work that no request is behind (a timer started at boot, a webhook from outside), and unchanged services that aren't marked <code>routed</code>, which keep calling the baseline's copies.</p>
   </section>
 
+  <section id="tls">
+    <h2>HTTPS in front of a service</h2>
+    <p>Some programs only take <code>https</code> addresses: a production build whose security policy lets the browser connect to nothing else, or a client that turns TLS on whenever it is given an API key. Local services speak plain HTTP. <code>tls</code> on a service has hydra's router accept TLS on another port and pass the bytes on to the service.</p>
+    <div class="code">
+<pre data-lang="yaml">
+supabase:
+  x-hydra:
+    port: 54321
+    tls: 54421                         # https://127.0.0.1:54421 goes to :54321
+
+temporal:
+  x-hydra:
+    shared: true
+    port: 7233
+    tls: { port: 7243, alpn: h2 }      # a gRPC server: HTTP/2 inside
+
+web:
+  x-hydra:
+    upstreams:
+      NEXT_PUBLIC_SUPABASE_URL: { service: supabase, baseline_value: "https://{host}:{tls}" }
+    baseline_command: pnpm build && exec pnpm start
+</pre>
+    </div>
+    <ul>
+      <li><b>Main's copy only.</b> The front is opened for the main checkout's copy of the service, and <code>baseline_value</code> hands its address to main's process alone. Worktrees keep the plain address, of main's copy or of their own. That is what lets the main checkout run a production build of a frontend while worktrees run dev servers: on the stack this was built for, a third of the memory and no compiling on the first request.</li>
+      <li><b>It only terminates TLS.</b> After the handshake the bytes go on as they came, so the front carries what the service speaks in the clear: HTTP/1.1 and its websockets by default, HTTP/2 with <code>alpn: h2</code>.</li>
+      <li><b>The certificate.</b> hydra makes a local CA and a certificate signed by it, once per user. The CA can only vouch for <code>localhost</code>, names under it and loopback addresses: a certificate for any other name signed with its key is refused. A process of main that is given a front's address gets the CA as <code>NODE_EXTRA_CA_CERTS</code>.</li>
+      <li><b>Trusting it.</b> <code>hydra trust</code> makes this machine accept the CA, for TLS only. On macOS it adds it to your keychain, and the system asks you to confirm. <code>hydra trust --remove</code> undoes it. Until then <code>hydra status</code> notes that a browser will refuse the fronts. Firefox keeps its own list of authorities.</li>
+      <li><b>Your own certificate.</b> <code>x-hydra: { tls: { cert, key, ca } }</code> at the top level names files hydra reads and never writes, from mkcert for example.</li>
+    </ul>
+    <div class="note"><b>Front the services, not the page.</b> A browser keeps <code>Strict-Transport-Security</code> per host name, not per port. A web app that sends it, opened as <code>https://localhost</code>, would make the browser insist on https for every port on localhost. Leave the page on http and put fronts before what it talks to.</div>
+  </section>
+
   <section id="generated">
     <h2>The generated file</h2>
     <p><code>hydra render</code> prints what hydra hands to process-compose. Compared with your file:</p>
@@ -503,6 +537,7 @@ $ hydra slots free         # free this worktree's slot
       <tr><td><code>port_env</code><span class="type">string</span></td><td class="def">PORT</td><td>The variable a service reads its port from, unless the process sets its own.</td></tr>
       <tr><td><code>global_paths</code><span class="type">list of globs</span></td><td class="def">[]</td><td>Files that count as a change to every service that declares <code>paths</code>, such as a lockfile.</td></tr>
       <tr><td><code>ignore</code><span class="type">list of globs</span></td><td class="def">[]</td><td>Files that belong to no service, such as docs and CI. A changed file that matches neither a service's <code>paths</code> nor this list is <a href="#changes">reported</a>.</td></tr>
+      <tr><td><code>tls</code><span class="type">map</span></td><td class="def">hydra's own</td><td><code>{ cert, key, ca }</code>: the certificate <a href="#tls">TLS fronts</a> present, its key, and the CA processes should trust, as paths relative to the stack file. Left out, hydra makes and renews its own.</td></tr>
     </table></div>
   </section>
 
@@ -515,7 +550,7 @@ $ hydra slots free         # free this worktree's slot
       <tr><td><code>port_env</code><span class="type">string</span></td><td class="def">stack's</td><td>The variable this service reads its port from.</td></tr>
       <tr><td><code>ports</code><span class="type">map</span></td><td class="def">{}</td><td>More ports of the same service by name, such as <code>{ db: 54322 }</code>. Shifted per slot like <code>port</code>, and reached as <code>{port.db}</code>.</td></tr>
       <tr><td><code>paths</code><span class="type">list of globs</span></td><td class="def">[]</td><td>Files that belong to the service, relative to the repository root. A change to one makes the service run in the worktree. In the main checkout, <a href="#updating"><code>hydra update</code></a> restarts the process when a pull changes one, so jobs list theirs too.</td></tr>
-      <tr><td><code>upstreams</code><span class="type">map</span></td><td class="def">{}</td><td>Environment variable → the service it points at. Write <code>API_URL: api</code>, or <code>API_PORT: { service: api, value: "{port}" }</code> to change what the variable receives. A service may point at itself. On a routed service, <code>per_request: true</code> marks a value the app picks per request.</td></tr>
+      <tr><td><code>upstreams</code><span class="type">map</span></td><td class="def">{}</td><td>Environment variable → the service it points at. Write <code>API_URL: api</code>, or <code>API_PORT: { service: api, value: "{port}" }</code> to change what the variable receives. A service may point at itself. On a routed service, <code>per_request: true</code> marks a value the app picks per request. <code>baseline_value</code> replaces <code>value</code> for the main checkout's copy alone, and may use <code>{tls}</code>.</td></tr>
       <tr><td><code>url</code><span class="type">string</span></td><td class="def">http://{host}:{port}</td><td>What an upstream variable pointing at this service receives. It doesn't have to be a URL.</td></tr>
       <tr><td><code>baseline_url</code><span class="type">string</span></td><td class="def"><code>url</code></td><td>Replaces <code>url</code> for the baseline's copy, for values that don't come from a port.</td></tr>
       <tr><td><code>shared</code><span class="type">boolean</span></td><td class="def">false</td><td>Always use the baseline's copy. A change to its <code>paths</code> is reported as a warning, unless a service running in the worktree takes the same file.</td></tr>
@@ -523,6 +558,7 @@ $ hydra slots free         # free this worktree's slot
       <tr><td><code>routed</code><span class="type">true or node</span></td><td class="def">false</td><td>The baseline's copy serves every worktree that didn't change the service, on that worktree's port. <code>node</code> has hydra pass the worktree header along inside the Node process; <code>true</code> means the service does it itself. Needs <code>port</code>. See <a href="#routed">one copy for every worktree</a>.</td></tr>
       <tr><td><code>follow</code><span class="type">boolean</span></td><td class="def">false</td><td>Run in a worktree whenever a local service depends on it.</td></tr>
       <tr><td><code>prepare</code><span class="type">string</span></td><td class="def">none</td><td>A shell command run once before the service starts in a worktree, for example to create the queue or namespace named by <code>url</code>.</td></tr>
+      <tr><td><code>tls</code><span class="type">integer or map</span></td><td class="def">none</td><td>A port where the router accepts TLS for the main checkout's copy and passes it on to <code>port</code>: <code>tls: 8443</code>, or <code>tls: { port: 8443, alpn: h2 }</code> for a service that speaks HTTP/2 in the clear. See <a href="#tls">HTTPS in front of a service</a>.</td></tr>
       <tr><td><code>baseline_command</code><span class="type">string</span></td><td class="def">none</td><td>Replaces the process's <code>command</code> in the main checkout, where the code only changes on <code>hydra update</code>: a production build, say, where worktrees run a dev server.</td></tr>
     </table></div>
     <p>A process with <code>disabled: true</code> is listed as <code>here (off)</code> when its paths change, and stays off until someone starts it. In a worktree, naming it does: <code>hydra up mobile</code>.</p>
@@ -587,6 +623,7 @@ web:
       <tr><td><code>{port}</code></td><td>The service's port in this slot.</td></tr>
       <tr><td><code>{port.NAME}</code></td><td>The service's port <code>NAME</code> from <code>ports</code>, in this slot.</td></tr>
       <tr><td><code>{slot}</code></td><td>The slot number. 0 for the baseline.</td></tr>
+      <tr><td><code>{tls}</code></td><td>In an upstream's <code>baseline_value</code> only: the port of the target's <a href="#tls">TLS front</a>.</td></tr>
       <tr><td><code>{value}</code></td><td>In <code>prepare</code> only: the service's own rendered <code>url</code>.</td></tr>
     </table></div>
     <h3>Globs</h3>
@@ -654,6 +691,7 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>hydra status [--all] [--wait]</code></td><td>Says whether everything this checkout uses is up and <a href="#instep">in step with main</a>, and exits 1 if not. See <a href="#status">checking</a>.</td></tr>
       <tr><td><code>hydra ui</code></td><td>Serves <a href="#ui">a local web page</a> with all of it: main, every worktree, what each runs and takes from main, commits, memory.</td></tr>
       <tr><td><code>hydra update</code></td><td>Pulls main, restarts what the new commits touched in its stack, and merges main into the worktrees. See <a href="#updating">updating main</a>.</td></tr>
+      <tr><td><code>hydra trust</code></td><td>Makes this machine trust the local CA behind <a href="#tls">TLS fronts</a>. <code>--remove</code> undoes it; <code>--print</code> prints the CA's file.</td></tr>
       <tr><td><code>hydra plan</code></td><td>Shows what this checkout runs, on which ports, wired to what, and why.</td></tr>
       <tr><td><code>hydra render [-o FILE]</code></td><td>Prints or writes the generated process-compose file.</td></tr>
       <tr><td><code>hydra slots</code></td><td>Lists worktree slots.</td></tr>

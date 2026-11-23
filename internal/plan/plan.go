@@ -208,6 +208,9 @@ func expandPort(st *config.Stack, s *config.Service, port, slot int, tmpl, value
 	for name, p := range s.Ports {
 		pairs = append(pairs, "{port."+name+"}", strconv.Itoa(p+slot*st.Hydra.SlotStride))
 	}
+	if s.TLS != nil {
+		pairs = append(pairs, "{tls}", strconv.Itoa(s.TLS.Port)) // the baseline's front; config keeps it out of worktree values
+	}
 	return strings.NewReplacer(pairs...).Replace(tmpl)
 }
 
@@ -230,6 +233,9 @@ func BaselinePlan(st *config.Stack) *Plan {
 			u := s.Upstreams[env]
 			t := st.Services[u.Service]
 			up := Upstream{Env: env, Service: t.Name, Target: Baseline, Value: Value(st, t, 0, u.Value), Why: "baseline"}
+			if u.BaselineValue != "" {
+				up.Value, up.Why = Value(st, t, 0, u.BaselineValue), "baseline_value"
+			}
 			if st.Dispatches(s, u) {
 				up.Value, up.Why = dispatchValue(st, t, u.Value), "through the router, per request"
 				row.Dispatch = append(row.Dispatch, env)

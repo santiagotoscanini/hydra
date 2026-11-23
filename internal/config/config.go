@@ -47,6 +47,10 @@ type Global struct {
 	// A changed file that matches neither a service's paths nor these is
 	// reported, so a path someone forgot to list doesn't go unnoticed.
 	Ignore []string `yaml:"ignore"`
+	// TLS names the certificate hydra's TLS fronts present, for a stack that
+	// brings its own (from mkcert, say). Left out, hydra makes a local CA
+	// and a certificate signed by it.
+	TLS TLSFiles `yaml:"tls"`
 
 	// Exe is the hydra binary that generated steps call (a kind's prepare
 	// step). Set by the caller; "hydra" when empty.
@@ -92,6 +96,32 @@ var SupabasePorts = []struct {
 	{"SUPABASE_EDGE_RUNTIME_INSPECTOR_PORT", "", -2},
 }
 
+// TLSFiles are a certificate, its key, and the CA processes have to trust
+// to accept it. Paths are relative to the stack file.
+type TLSFiles struct {
+	Cert string `yaml:"cert"`
+	Key  string `yaml:"key"`
+	CA   string `yaml:"ca"`
+}
+
+// TLSFront is a port where hydra's router accepts TLS for the baseline's
+// copy of a service and passes the bytes on to its plain port. ALPN is the
+// one protocol it offers: "http/1.1" (the default; websockets included) or
+// "h2" for a service that speaks HTTP/2 without TLS, such as a gRPC server.
+type TLSFront struct {
+	Port int    `yaml:"port"`
+	ALPN string `yaml:"alpn"`
+}
+
+// UnmarshalYAML accepts `tls: 8443` or `tls: { port: 8443, alpn: h2 }`.
+func (f *TLSFront) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		return n.Decode(&f.Port)
+	}
+	type plain TLSFront
+	return n.Decode((*plain)(f))
+}
+
 // Upstream says which service an env var points at and how to format it.
 type Upstream struct {
 	Service string `yaml:"service"`
@@ -99,6 +129,11 @@ type Upstream struct {
 	// "{port}" when the consumer wants only the port. Placeholders as in
 	// Service.URL.
 	Value string `yaml:"value"`
+	// BaselineValue replaces Value for the main checkout's copy alone, where
+	// it may use {tls}: the target's TLS front. For a baseline process that
+	// runs differently from the worktrees' (a production build that only
+	// accepts https), while they keep the plain address.
+	BaselineValue string `yaml:"baseline_value"`
 	// PerRequest says a routed service picks this value per request itself,
 	// from the value hydra's hook hands it, instead of once from its
 	// environment. For targets a proxy can't route, such as a Temporal
@@ -163,6 +198,8 @@ type Service struct {
 	// where the code only changes on `hydra update`: a compiled binary or a
 	// production build instead of a dev server that watches files.
 	BaselineCommand string `yaml:"baseline_command"`
+	// TLS puts a TLS front before the baseline's copy (see TLSFront).
+	TLS *TLSFront `yaml:"tls"`
 
 	// DependsOn lists the process names this process waits for, from the
 	// regular process-compose `depends_on`.
@@ -223,7 +260,7 @@ func (st *Stack) Routable(u Upstream) bool {
 // runs its own copy of s too, so main's copy only ever serves worktrees that
 // use main's, and its calls can go there directly.
 func (st *Stack) Dispatches(s *Service, u Upstream) bool {
-	if s.Routed == NotRouted || u.Service == s.Name || !st.Routable(u) {
+	if s.Routed == NotRouted || u.Service == s.Name || !st.Routable(u) || u.BaselineValue != "" {
 		return false
 	}
 	for _, o := range s.Upstreams {
@@ -297,6 +334,16 @@ func (st *Stack) SupabaseEnv(s *Service, slot int) []string {
 		env = append(env, fmt.Sprintf("%s=%d", sp.Env, p+shift))
 	}
 	return env
+}
+
+// HasTLS reports whether any service has a TLS front.
+func (st *Stack) HasTLS() bool {
+	for _, s := range st.Services {
+		if s.TLS != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // HasRouted reports whether any service is routed.
@@ -410,6 +457,9 @@ func Parse(data []byte) (*Stack, error) {
 				s.Ports["db"] = s.Port + 1
 			}
 		}
+		if s.TLS != nil && s.TLS.ALPN == "" {
+			s.TLS.ALPN = "http/1.1"
+		}
 		if s.URL == "" {
 			s.URL = "http://{host}:{port}"
 		}
@@ -469,11 +519,27 @@ func (st *Stack) validate() error {
 				return fmt.Errorf("%s: routed needs x-hydra.port, the port worktrees reach it through", name)
 			}
 		}
+		if s.TLS != nil {
+			switch {
+			case s.Port == 0:
+				return fmt.Errorf("%s: tls needs x-hydra.port, the port the front passes connections to", name)
+			case s.TLS.Port == 0:
+				return fmt.Errorf("%s: tls needs a port of its own: `tls: 8443` or `tls: { port: 8443 }`", name)
+			case s.TLS.ALPN != "http/1.1" && s.TLS.ALPN != "h2":
+				return fmt.Errorf("%s: tls.alpn: want http/1.1 or h2, got %q", name, s.TLS.ALPN)
+			}
+		}
 		for _, env := range s.UpstreamEnvs() {
 			u := s.Upstreams[env]
 			t, ok := st.Services[u.Service]
 			if !ok {
 				return fmt.Errorf("%s: upstream %s points at unknown service %q", name, env, u.Service)
+			}
+			if strings.Contains(u.Value, "{tls}") || strings.Contains(t.URL, "{tls}") {
+				return fmt.Errorf("%s: upstream %s: {tls} is the main checkout's TLS front, so it belongs in baseline_value; a worktree's own %s has none", name, env, t.Name)
+			}
+			if strings.Contains(u.BaselineValue, "{tls}") && t.TLS == nil {
+				return fmt.Errorf("%s: upstream %s uses {tls}, but %s has no x-hydra.tls", name, env, t.Name)
 			}
 			tmpl := u.Value
 			if tmpl == "" {
@@ -532,6 +598,17 @@ func (st *Stack) checkPorts() error {
 				owner[p] = who
 			}
 		}
+	}
+	for _, name := range st.Names() {
+		s := st.Services[name]
+		if s.TLS == nil {
+			continue
+		}
+		who := name + "'s TLS front"
+		if prev, taken := owner[s.TLS.Port]; taken {
+			return fmt.Errorf("port %d: %s collides with %s; change it, slot_stride, max_slots or the base ports", s.TLS.Port, who, prev)
+		}
+		owner[s.TLS.Port] = who
 	}
 	for _, name := range st.Dispatched() {
 		p := st.DispatchPort(st.Services[name])

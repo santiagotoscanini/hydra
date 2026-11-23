@@ -372,6 +372,48 @@ Every other worktree shares main's, and one that is behind main's migrations
 is told to update, like for any other service. An idle stack takes about
 110 MB.
 
+### HTTPS in front of a service
+
+Some programs only take `https` addresses: a production build whose security
+policy lets the browser connect to nothing else, or a client that turns TLS on
+whenever it is given an API key. Local services speak plain HTTP. `tls` on a
+service has hydra's router accept TLS on another port and pass the bytes on to
+the service:
+
+```yaml
+supabase:
+  x-hydra:
+    port: 54321
+    tls: 54421                         # https://127.0.0.1:54421 goes to :54321
+temporal:
+  x-hydra:
+    shared: true
+    port: 7233
+    tls: { port: 7243, alpn: h2 }      # a gRPC server: HTTP/2 inside
+web:
+  x-hydra:
+    upstreams:
+      NEXT_PUBLIC_SUPABASE_URL: { service: supabase, baseline_value: "https://{host}:{tls}" }
+    baseline_command: pnpm build && exec pnpm start
+```
+
+- The front belongs to the main checkout's copy of the service, and
+  `baseline_value` hands its address to main's process alone. Worktrees keep
+  the plain address, of main's copy or of their own. This is what lets the
+  main checkout run a production build of a frontend (a third of the memory,
+  no compiling on the first request) while worktrees run dev servers.
+- hydra makes a local CA and a certificate signed by it, once per user. The
+  CA can only vouch for `localhost`, names under it and loopback addresses.
+  `hydra trust` makes this machine accept it; until then `hydra status` says
+  a browser will refuse the fronts. A process of main that is given a front's
+  address gets the CA as `NODE_EXTRA_CA_CERTS`. A stack can bring its own files instead:
+  `x-hydra: { tls: { cert: ..., key: ..., ca: ... } }`.
+- The front doesn't read what passes through, so it carries what the service
+  speaks in the clear: HTTP/1.1 and its websockets by default, HTTP/2 with
+  `alpn: h2`.
+
+`./examples/demo/tls.sh` shows it.
+
 See [docs/design.md](docs/design.md) for the `x-hydra` fields and the rules
 in full.
 

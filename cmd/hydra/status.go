@@ -338,6 +338,8 @@ func statusAll(co gitx.Checkout, ms *mainState) error {
 	}
 	if len(problems) == 0 {
 		fmt.Println("ok: main's stack is up and runs what main has checked out.")
+	} else {
+		fmt.Println("\nok, with the notes above.")
 	}
 	return nil
 }

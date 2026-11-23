@@ -58,6 +58,8 @@ Hydra's own commands:
   hydra ui [--port N] [--no-open]  a local web page of all of it: main, every
                                  worktree, what each runs and takes from main,
                                  commits, memory (default port 4937)
+  hydra trust [--remove|--print] make this machine trust the local CA behind
+                                 hydra's TLS fronts (x-hydra.tls on a service)
   hydra plan   [flags]           show what this checkout runs and how it is wired
   hydra render [flags] [-o FILE] print (or write) the rendered process-compose file
   hydra slots                    list worktree slots
@@ -111,6 +113,8 @@ func run(args []string) error {
 			return updateCmd(args[1:])
 		case "ui":
 			return uiCmd(args[1:])
+		case "trust":
+			return trustCmd(args[1:])
 		case "watch":
 			return watchCmd(args[1:])
 		case "router":
@@ -315,14 +319,24 @@ func shortBranch(b string) string {
 
 func (t *target) render(p *plan.Plan, watch string) ([]byte, error) {
 	opt := render.Options{Dir: t.checkout.Root, Watch: watch}
-	if p.Slot == 0 && t.stack.HasRouted() {
+	if p.Slot == 0 && (t.stack.HasRouted() || t.stack.HasTLS()) {
 		var err error
 		if opt.Router, err = routerCommand(t); err != nil {
 			return nil, err
 		}
+	}
+	if p.Slot == 0 && t.stack.HasRouted() {
+		var err error
 		if opt.NodeHook, err = hook.Install(t.checkout.CommonDir); err != nil {
 			return nil, err
 		}
+	}
+	if p.Slot == 0 && t.stack.HasTLS() {
+		files, err := tlsFilesFor(t)
+		if err != nil {
+			return nil, err
+		}
+		opt.CAFile = files.CA
 	}
 	return render.Render(t.stack, p, opt)
 }

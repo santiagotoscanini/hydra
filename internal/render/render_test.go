@@ -320,3 +320,71 @@ processes:
 		t.Errorf("the baseline must keep a disabled process off: %v", m)
 	}
 }
+
+func TestBaselineWithATLSFront(t *testing.T) {
+	st, err := config.Parse([]byte(`
+processes:
+  db:
+    command: db
+    x-hydra: { shared: true, port: 5432, tls: 5443 }
+  web:
+    command: web
+    environment: ["FOO=1"]
+    x-hydra:
+      port: 3000
+      upstreams:
+        DB_URL: { service: db, baseline_value: "https://{host}:{tls}" }
+  job:
+    command: job
+    environment: ["NODE_EXTRA_CA_CERTS=/my/own.pem"]
+    x-hydra:
+      upstreams:
+        DB_URL: { service: db, baseline_value: "https://{host}:{tls}" }
+  other:
+    command: other
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := Render(st, plan.BaselinePlan(st), Options{Dir: "/repo", Router: "exec hydra router", CAFile: "/ca.pem"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Processes map[string]struct {
+			Environment []string       `yaml:"environment"`
+			DependsOn   map[string]any `yaml:"depends_on"`
+		} `yaml:"processes"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	web := doc.Processes["web"]
+	env := strings.Join(web.Environment, "\n")
+	// Main's web is given the front's address, and the CA to accept it with.
+	for _, want := range []string{"DB_URL=https://127.0.0.1:5443", "NODE_EXTRA_CA_CERTS=/ca.pem", "FOO=1"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("web env lacks %s:\n%s", want, env)
+		}
+	}
+	// The router opens the front, so it starts first, and exists though no
+	// service is routed.
+	if _, ok := web.DependsOn["hydra-router"]; !ok {
+		t.Errorf("web should wait for hydra-router: %v", web.DependsOn)
+	}
+	if _, ok := doc.Processes["hydra-router"]; !ok {
+		t.Error("no hydra-router in the baseline")
+	}
+	// A process that names its own CA keeps it.
+	if got := strings.Join(doc.Processes["job"].Environment, ","); !strings.HasPrefix(got, "NODE_EXTRA_CA_CERTS=/my/own.pem,") || strings.Contains(got, "/ca.pem") {
+		t.Errorf("job env = %s", got)
+	}
+	// One that uses no front is left exactly as it was: adding a front to a
+	// running stack must not restart everything.
+	if got := strings.Join(doc.Processes["other"].Environment, ","); got != "HYDRA_SERVICE=other,HYDRA_SLOT=0,HYDRA_UPSTREAMS=" {
+		t.Errorf("other env = %s", got)
+	}
+	if len(doc.Processes["other"].DependsOn) != 0 || len(doc.Processes["db"].DependsOn) != 0 {
+		t.Errorf("processes that use no front were given dependencies")
+	}
+}
