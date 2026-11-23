@@ -19,14 +19,16 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
-(cd "$root" && go build -o bin/ ./cmd/...)
-H="$root/bin/hydra"
 pc_port=${PC_PORT:-8197}
 unset PC_PORT_NUM PC_ADDRESS
 
 repo="$(mktemp -d "${TMPDIR:-/tmp}/hydra-tls.XXXXXX")"
 repo="$(cd "$repo" && pwd -P)"
 main="$repo/main"
+# Built into the throwaway directory, not the checkout's bin/: with
+# `make link`, that one is the hydra on your PATH.
+(cd "$root" && go build -o "$repo/bin/" ./cmd/...)
+H="$repo/bin/hydra"
 export HYDRA_TLS_DIR="$repo/ca"
 cleanup() {
   (cd "$repo/wt" 2>/dev/null && "$H" down >/dev/null 2>&1) || true
@@ -45,7 +47,7 @@ db_url() { python3 -c 'import json, sys; u = json.load(sys.stdin)["upstreams"]["
 
 mkdir -p "$main" && cd "$main"
 g init -q -b main
-sed "s#command: bin/mocksvc#command: $root/bin/mocksvc#" "$here/tls.yaml" >process-compose.yaml
+sed "s#command: bin/mocksvc#command: $repo/bin/mocksvc#" "$here/tls.yaml" >process-compose.yaml
 printf '.process-compose/\n' >.gitignore
 mkdir -p apps/web && echo page >apps/web/page.tsx
 g add -A; g commit -qm init

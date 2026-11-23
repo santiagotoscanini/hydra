@@ -7,18 +7,20 @@
 #  2. An edit to the worker in b2's worktree starts the worker (from b2).
 #  3. Reverting that edit stops it again.
 #  4. Reverting b2's api edit stops the api; web-b is pointed back at the
-#     baseline's api. 5. Redoing the edit brings it back and rewires web-b.
+#     main's api. 5. Redoing the edit brings it back and rewires web-b.
 #
 # Everything happens in a throwaway repo under $TMPDIR.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
-(cd "$root" && go build -o bin/ ./cmd/...)
-H="$root/bin/hydra"
-pc_port=${PC_PORT:-8199} # the baseline's process-compose server; 8099 may be yours
+pc_port=${PC_PORT:-8199} # main's process-compose server; 8099 may be yours
 
 repo="$(mktemp -d "${TMPDIR:-/tmp}/hydra-stack.XXXXXX")"
 main="$repo/main"
+# Built into the throwaway directory, not the checkout's bin/: with
+# `make link`, that one is the hydra on your PATH.
+(cd "$root" && go build -o "$repo/bin/" ./cmd/...)
+H="$repo/bin/hydra"
 cleanup() {
   (cd "$repo/b3" 2>/dev/null && "$H" down >/dev/null 2>&1) || true
   (cd "$main" && "$H" down -p "$pc_port" >/dev/null 2>&1) || true
@@ -31,14 +33,14 @@ commit() { mkdir -p "$(dirname "$1")"; echo "$1" >"$1"; g add -A; g commit -qm "
 
 mkdir -p "$main" && cd "$main"
 g init -q -b main
-sed "s#command: bin/mocksvc.*#command: $root/bin/mocksvc#" "$here/process-compose.yaml" >process-compose.yaml
+sed "s#command: bin/mocksvc.*#command: $repo/bin/mocksvc#" "$here/process-compose.yaml" >process-compose.yaml
 printf '.process-compose/\n' >.gitignore
 commit README
 g worktree add -q -b b1 "$repo/b1" main && (cd "$repo/b1" && commit apps/web-a/page.tsx)
 g worktree add -q -b b2 "$repo/b2" b1 && (cd "$repo/b2" && mkdir -p apps/api && echo edit >apps/api/users.go)
 g worktree add -q -b b3 "$repo/b3" b2 && (cd "$repo/b3" && mkdir -p apps/web-b && echo edit >apps/web-b/page.tsx)
 
-echo "--- baseline in main"
+echo "--- the main checkout's stack"
 "$H" up -D -p "$pc_port" -L "$repo/main.log" >/dev/null
 
 echo "--- stack, run from b3"

@@ -162,6 +162,7 @@ $ git ls-files --others --exclude-standard
     <p style="margin-top:18px">Services that point at it are restarted with the new address. Further edits to a service that already runs here are left to its own reload, like <code>next dev</code> or <code>air</code>.</p>
     <p>It asks git instead of watching the file system because only git knows whether a file differs from <code>main</code>. A revert has to stop the service, and <code>node_modules</code> must not start one. It reads git without taking the index lock, so it stays out of the way of an agent's commits.</p>
     <p>Stacked branches work too: each branch is compared with its parent, and each service runs from the worktree of the branch that changed it. <a href="docs/#stacks">How a stack is found</a>.</p>
+    <p>A worktree that is removed takes its stack with it. The watcher notices that its directory is gone and stops everything that ran there, and the ports go to the next worktree only after that. <a href="docs/#cleanup">Stopping and cleaning up</a>.</p>
   </div>
 </section>
 
@@ -175,15 +176,15 @@ $ git ls-files --others --exclude-standard
   <div class="code measure" style="margin-top:16px">
 <pre data-lang="text">
 $ hydra update
-main  ~/code/shop  moved f67f0e32d → 9a782732a (30 commits)
+main  ~/code/shop  moved 9a782732a → 66b4f7b80 (4 commits)
 
 main's stack
-  migrate  ran again  db/migrations/0042_orders.sql and 2 more  done in 6s
-  api      restarted  services/api/handler.go and 207 more      ready in 9s
+  migrate  ran again  db/migrations/0042_orders.sql  done in 6s
+  api      restarted  services/api/handler.go        ready in 9s
 
 worktrees
-  cart      main merged in (30 commits)
-  checkout  CONFLICTS with main in 2 files
+  shop-cart      cart      main merged in (4 commits); restarted there: web
+  shop-checkout  checkout  CONFLICTS with main in 1 file (4 commits behind)
 </pre>
   </div>
   <div class="measure">
@@ -193,7 +194,7 @@ worktrees
       <li>It merges main into every worktree where the merge is clean. Conflicts and uncommitted work are left alone and listed.</li>
     </ol>
     <p style="margin-top:14px">In between, hydra keeps watch. <code>hydra up</code> won't start a worktree whose branch and main disagree on a service it takes from main, or whose main isn't running. <code>hydra status</code> says what is wrong and which command fixes it, and <code>hydra ui</code> shows the same for every worktree as <a href="docs/#ui">a page in your browser</a>.</p>
-    <p><a href="docs/#status">What is checked</a> · <a href="docs/#updating">How an update works</a></p>
+    <p><a href="docs/#daily">The commands for every day</a> · <a href="docs/#messages">Every message, and its fix</a> · <a href="docs/#updating">How an update works</a></p>
   </div>
 </section>
 
@@ -242,7 +243,7 @@ you open  localhost:3400         slot 2's port for web. hydra's router answers,
     <button class="fchip" aria-pressed="false" data-path="README.md">README.md</button>
   </div>
   <div class="code"><pre id="plan-out" aria-live="polite"></pre></div>
-  <p class="aside">The api's paths exclude <code>**/*_test.go</code>, and <code>db</code> is shared. The config behind this is in the <a href="docs/#quickstart">quick start</a>.</p>
+  <p class="aside">The api's paths exclude <code>**/*_test.go</code>, and <code>db</code> is shared. The config behind this is the one in <a href="docs/#quickstart">set up a repository</a>.</p>
 </section>
 
 </main>
@@ -250,7 +251,7 @@ you open  localhost:3400         slot 2's port for web. hydra's router answers,
 <hr>
 
 <footer class="foot">
-  <p>hydra is about 3,500 lines of Go and has no daemon: the watcher and the router are ordinary processes in your process-compose projects.</p>
+  <p>hydra is about 9,000 lines of Go and has no daemon: the watcher and the router are ordinary processes in your process-compose projects.</p>
   <p>This page is static HTML, one stylesheet and one script, with its fonts served from here. No build step, no trackers.</p>
   <p><a href="docs/">docs</a> · <a href="https://github.com/santiagotoscanini/hydra">source</a> · <a href="https://github.com/F1bonacc1/process-compose">process-compose</a></p>
 </footer>

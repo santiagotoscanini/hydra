@@ -70,7 +70,7 @@ func TestRenderWorktree(t *testing.T) {
 		t.Errorf("watch path not made absolute:\n%s", data)
 	}
 	db := doc.Processes["db"]
-	if db["namespace"] != "baseline" || db["shutdown"] != nil || db["is_daemon"] != nil {
+	if db["namespace"] != "main" || db["shutdown"] != nil || db["is_daemon"] != nil {
 		t.Errorf("db stand-in must only wait: %v", db)
 	}
 	if db["readiness_probe"].(map[string]any)["http_get"].(map[string]any)["port"] != 5432 {
@@ -79,7 +79,7 @@ func TestRenderWorktree(t *testing.T) {
 	if doc.Processes["migrate"]["command"] != "true" {
 		t.Errorf("migrate stand-in should complete at once: %v", doc.Processes["migrate"])
 	}
-	if doc.Processes["deps"]["namespace"] == "baseline" {
+	if doc.Processes["deps"]["namespace"] == "main" {
 		t.Errorf("deps follows api, it should run for real")
 	}
 	if doc.Processes["hydra-prepare-api"]["command"] != "setup http://127.0.0.1:10080" {
@@ -202,7 +202,9 @@ processes:
 		t.Fatal(err)
 	}
 	sb := doc.Processes["supabase"]
-	if want := "mkdir -p '/wt/supabase/.temp/tmp' && (\nsupabase start\n) && '/bin/hydra' prepare supabase"; sb.Command != want {
+	// hydra's steps go around the stack file's command: one before, and one
+	// after that runs whether or not the start worked.
+	if want := "mkdir -p '/wt/supabase/.temp/tmp' && '/bin/hydra' prepare supabase --before || exit 1\n(\nsupabase start\n)\n'/bin/hydra' prepare supabase --started $?"; sb.Command != want {
 		t.Errorf("command = %q, want %q", sb.Command, want)
 	}
 	env := strings.Join(sb.Environment, " ")
@@ -212,9 +214,10 @@ processes:
 		}
 	}
 	// The stop names the stack itself: run without that environment, it
-	// would stop the baseline's Supabase.
+	// would stop the baseline's Supabase. hydra's step follows it, for a
+	// stack the CLI's own stop no longer finds.
 	stop, _ := sb.Shutdown["command"].(string)
-	if !strings.HasPrefix(stop, "export SUPABASE_EXPERIMENTAL_STACK='1' ") || !strings.Contains(stop, "SUPABASE_API_PORT='54521'") || !strings.HasSuffix(stop, "\nsupabase stop") {
+	if !strings.HasPrefix(stop, "export SUPABASE_EXPERIMENTAL_STACK='1' ") || !strings.Contains(stop, "SUPABASE_API_PORT='54521'") || !strings.HasSuffix(stop, "\nsupabase stop\n'/bin/hydra' prepare supabase --stopped") {
 		t.Errorf("shutdown command = %q", stop)
 	}
 	if sb.Shutdown["timeout_seconds"] != 60 {

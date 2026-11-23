@@ -187,7 +187,7 @@ document.addEventListener("click", function (e) {
 
   function build() {
     var html = '<div class="g-row head"><div>checkout</div>' + ORDER.map(function (s) { return "<div>" + s + "</div>"; }).join("") + "</div>";
-    html += '<div class="g-row base"><div><div class="co-name">main<small>baseline</small></div><div class="co-line remark">Runs the whole stack, once.</div></div>' + ORDER.map(cellHTML).join("") + "</div>";
+    html += '<div class="g-row base"><div><div class="co-name">main<small>slot 0</small></div><div class="co-line remark">Runs the whole stack, once.</div></div>' + ORDER.map(cellHTML).join("") + "</div>";
     scene.lanes.forEach(function (l) {
       html += '<div class="g-row"><div><div class="co-name">' + l.name + "<small>" + l.tag + "</small></div>" +
         '<div class="co-line agent idle">idle</div><div class="co-line changed"></div><div class="co-line remark"></div></div>' +
@@ -279,7 +279,7 @@ document.addEventListener("click", function (e) {
       if (next[k]) return;
       var c = rows[shown[k].row].querySelector('[data-svc="' + shown[k].svc + '"]');
       c.classList.remove("is-on", "pop", "rewire");
-      say("minus", shown[k].row, "- " + shown[k].svc + " stopped; the baseline's copy is used again");
+      say("minus", shown[k].row, "- " + shown[k].svc + " stopped; main's copy is used again");
     });
     Object.keys(next).sort(function (a, b) { return next[a].svc < next[b].svc ? -1 : 1; }).forEach(function (k) {
       var n = next[k], c = rows[n.row].querySelector('[data-svc="' + n.svc + '"]');
@@ -479,8 +479,8 @@ document.addEventListener("click", function (e) {
         return s.paths.some(function (p) { return f.indexOf(p) === 0; }) && !/_test\.go$/.test(f);
       })[0];
       if (s.shared) {
-        why[n] = hit ? "shared, always baseline (changed: " + hit + ")" : "shared";
-        if (hit) warnings.push("warning: " + n + " is shared, but its paths changed: " + hit + "; the baseline's copy is used");
+        why[n] = hit ? "shared, always main's (changed: " + hit + ")" : "shared";
+        if (hit) warnings.push("warning: " + n + " is shared, but its paths changed: " + hit + "; main's copy is used");
       } else if (hit) {
         local[n] = true; why[n] = "changed: " + hit;
       } else {
@@ -508,7 +508,7 @@ document.addEventListener("click", function (e) {
     var rows = pad([["SERVICE", "RUNS", "PORT", "WHY"]].concat(names.map(function (n) {
       var s = services[n];
       var routed = s.routed && !local[n];
-      return [n, local[n] ? "here" : routed ? "main, routed" : "baseline",
+      return [n, local[n] ? "here" : routed ? "main, routed" : "main",
         s.port ? String(s.port + (local[n] || routed ? SLOT * STRIDE : 0)) : "-",
         routed ? "main's copy, tagged for this worktree" : why[n]];
     })));
@@ -519,14 +519,14 @@ document.addEventListener("click", function (e) {
         if (services[n].routed) Object.keys(services[n].upstreams).sort().forEach(function (env) {
           var t = services[n].upstreams[env];
           if (t === n || !routable(t)) return;
-          wires.push([n, env, "-> " + t + " (" + (local[t] ? "local" : "baseline") + ")", value(t, !!local[t]),
+          wires.push([n, env, "-> " + t + " (" + (local[t] ? "here" : "main") + ")", value(t, !!local[t]),
             "per request: " + t + (local[t] ? " running here" : " not running here")]);
         });
         return;
       }
       Object.keys(services[n].upstreams || {}).sort().forEach(function (env) {
         var t = services[n].upstreams[env];
-        wires.push([n, env, "-> " + t + " (" + (local[t] ? "local" : "baseline") + ")", value(t, !!local[t]),
+        wires.push([n, env, "-> " + t + " (" + (local[t] ? "here" : "main") + ")", value(t, !!local[t]),
           "default: " + t + (local[t] ? " running here" : " not running here")]);
       });
     });

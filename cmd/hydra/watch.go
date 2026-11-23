@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -101,7 +102,19 @@ func watchCmd(args []string) error {
 	sock := socketPath(t.checkout)
 
 	logf("watching %s every %s", describeStack(t), *interval)
+	parent := os.Getppid()
 	for {
+		if orphaned(parent) {
+			logf("the process-compose that started this watcher is gone; stopping")
+			return nil
+		}
+		if _, err := os.Stat(t.checkout.Root); errors.Is(err, os.ErrNotExist) {
+			// The worktree was removed with its stack still up. Nothing here
+			// can work without its directory, and the ports belong to the
+			// slot's next worktree.
+			stopGone(t)
+			return nil
+		}
 		if err := step(t, o, cmd, out, sock); err != nil {
 			logf("%v", err) // a failed git call (mid-rebase, say) shouldn't end the watch
 		}
@@ -111,6 +124,12 @@ func watchCmd(args []string) error {
 		time.Sleep(*interval)
 	}
 }
+
+// orphaned reports whether the process that started this one is gone.
+// process-compose starts the watcher and the router; when it is killed they
+// live on under another parent, and would fight the ones its successor
+// starts: two watchers updating one project, two routers after one port.
+func orphaned(parent int) bool { return os.Getppid() != parent }
 
 func step(t *target, o options, cmd, out, sock string) error {
 	// Re-read the stack file: an edit to x-hydra applies without a restart.
@@ -164,7 +183,7 @@ func step(t *target, o options, cmd, out, sock string) error {
 	}
 	for _, name := range sortedNames(prev) {
 		if now[name] == "" {
-			logf("- %s stopped; the baseline's copy is used again", name)
+			logf("- %s stopped; main's copy is used again", name)
 		}
 	}
 	migrateSupabase(t, p)
@@ -266,7 +285,7 @@ func running(data []byte) map[string]string {
 		return m
 	}
 	for name, p := range doc.Processes {
-		if p.Namespace != "baseline" && p.Namespace != "hydra" {
+		if p.Namespace != "main" && p.Namespace != "baseline" && p.Namespace != "hydra" { // "baseline": files rendered by an older hydra
 			m[name] = p.WorkingDir
 		}
 	}

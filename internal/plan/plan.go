@@ -228,11 +228,11 @@ func BaselinePlan(st *config.Stack) *Plan {
 	p := &Plan{Slot: 0}
 	for _, name := range st.Names() {
 		s := st.Services[name]
-		row := Service{Name: name, Source: name, Local: true, Why: "baseline", Port: Port(st, s, 0), PortEnv: s.PortEnv, Disabled: disabled(st, name)}
+		row := Service{Name: name, Source: name, Local: true, Why: "the main checkout runs everything", Port: Port(st, s, 0), PortEnv: s.PortEnv, Disabled: disabled(st, name)}
 		for _, env := range s.UpstreamEnvs() {
 			u := s.Upstreams[env]
 			t := st.Services[u.Service]
-			up := Upstream{Env: env, Service: t.Name, Target: Baseline, Value: Value(st, t, 0, u.Value), Why: "baseline"}
+			up := Upstream{Env: env, Service: t.Name, Target: Baseline, Value: Value(st, t, 0, u.Value), Why: "main's own copy"}
 			if u.BaselineValue != "" {
 				up.Value, up.Why = Value(st, t, 0, u.BaselineValue), "baseline_value"
 			}
@@ -250,7 +250,7 @@ func BaselinePlan(st *config.Stack) *Plan {
 // Build plans a worktree.
 func Build(st *config.Stack, req Request) (*Plan, error) {
 	if req.Slot < 1 || req.Slot > st.Hydra.MaxSlots {
-		return nil, fmt.Errorf("worktree slot must be 1..%d (0 is the baseline), got %d", st.Hydra.MaxSlots, req.Slot)
+		return nil, fmt.Errorf("worktree slot must be 1..%d (0 is the main checkout), got %d", st.Hydra.MaxSlots, req.Slot)
 	}
 	for _, n := range append(append([]string{}, req.With...), req.Without...) {
 		if st.Services[n] == nil {
@@ -289,7 +289,7 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 		s := st.Services[n]
 		switch {
 		case s.Shared:
-			skipped[n] = "shared, always baseline (" + reason + ")"
+			skipped[n] = "shared, always main's (" + reason + ")"
 			return false
 		case without[n]:
 			skipped[n] = "excluded (--without), " + reason
@@ -386,7 +386,7 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 				}
 				if _, known := skipped[name]; !known && without[name] {
 					p.Warnings = append(p.Warnings, fmt.Sprintf(
-						"%s is excluded, but its %s; those calls reach the baseline's %s", name, reason, u.Service))
+						"%s is excluded, but its %s; those calls reach main's %s", name, reason, u.Service))
 				}
 				changed = want(name, reason) || changed
 				break
@@ -406,7 +406,7 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 		}
 		if !taken {
 			p.Warnings = append(p.Warnings, fmt.Sprintf(
-				"%s is shared, but its paths %s; the baseline's copy is used", h.name, h.reason))
+				"%s is shared, but its paths %s; main's copy is used", h.name, h.reason))
 		}
 	}
 

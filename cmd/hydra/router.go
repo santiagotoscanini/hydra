@@ -57,6 +57,13 @@ func routerCmd(args []string) error {
 		Logf: logf,
 	}
 	logf("routing for %s", co.Root)
+	go func(parent int) {
+		for !orphaned(parent) {
+			time.Sleep(2 * time.Second)
+		}
+		logf("the process-compose that started this router is gone; stopping")
+		stop()
+	}(os.Getppid())
 	return r.Run(ctx)
 }
 

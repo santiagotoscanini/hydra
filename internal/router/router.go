@@ -369,7 +369,7 @@ func (r *Router) entry(tag, name string) http.Handler {
 		},
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
 			port := r.state.Load().Services[name].Port
-			fail(w, http.StatusBadGateway, "main's %s isn't answering on :%d (%v). Is the baseline running?", name, port, err)
+			fail(w, http.StatusBadGateway, "main's %s isn't answering on :%d (%v). Is main's stack running?", name, port, err)
 		},
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -509,7 +509,7 @@ func (r *Router) check(name string, st *State, tag string) (reason string, runni
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK || json.Unmarshal(body, &out) != nil || !out.Hook {
-		return "it isn't running hydra's hook (start the baseline with `hydra up` so it is loaded)", true
+		return "it isn't running hydra's hook (start main's stack with `hydra up` so it is loaded)", true
 	}
 	if t, ok := strings.CutPrefix(out.Temporal, "broken: "); ok {
 		return "hydra can't switch its Temporal namespace per worktree (" + t + ")", true

@@ -23,7 +23,7 @@ processes:
       paths: ["db/**"]
       url: "postgres://{host}:{port}/app" # what upstreams receive
       # A worktree that touches db/ gets its own (mock) database.
-      # Mark `shared: true` to always use the baseline one instead.
+      # Mark `shared: true` to always use main's instead.
 
   api:
     command: bin/mocksvc # paths resolve from the repo root

@@ -57,6 +57,7 @@ func updateCmd(args []string) error {
 			return err
 		}
 		defer unlock()
+		reapGone(co, os.Stdout) // worktrees removed since the last start
 	}
 	ms, err := loadMain(co)
 	if err != nil {
@@ -484,7 +485,7 @@ func restartInOrder(out io.Writer, st *config.Stack, c *pc.Client, before map[st
 		if err != nil {
 			fmt.Fprintf(w, "  %s\tFAILED\t%v, after %s\n", name, err, took)
 			w.Flush()
-			if tail := logTail(c, name); tail != "" {
+			if tail, _ := logTail(c, name); tail != "" {
 				fmt.Fprint(out, "   "+tail+"\n")
 			}
 			if rest := order[i+1:]; len(rest) > 0 {

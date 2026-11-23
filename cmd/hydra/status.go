@@ -13,6 +13,7 @@ import (
 
 	"github.com/santiagotoscanini/hydra/internal/gitx"
 	"github.com/santiagotoscanini/hydra/internal/pc"
+	"github.com/santiagotoscanini/hydra/internal/slots"
 	"github.com/santiagotoscanini/hydra/internal/stack"
 )
 
@@ -326,6 +327,7 @@ func statusAll(co gitx.Checkout, ms *mainState) error {
 	if ms.Up {
 		problems = append(problems, failing(ms, nil)...)
 	}
+	problems = append(problems, goneProblems(co)...)
 	fmt.Println()
 	if len(problems) > 0 {
 		printProblems(os.Stdout, problems)
@@ -342,6 +344,25 @@ func statusAll(co gitx.Checkout, ms *mainState) error {
 		fmt.Println("\nok, with the notes above.")
 	}
 	return nil
+}
+
+// goneProblems names the worktrees that were removed with their stack still
+// up: memory and ports in use for nothing. The stack's own watcher stops it
+// within seconds, so this shows when that didn't work. (A removed worktree
+// with nothing running only holds a slot, until the next start frees it;
+// `hydra slots` lists those.)
+func goneProblems(co gitx.Checkout) []problem {
+	gone, _ := slots.Gone(co.CommonDir)
+	var out []problem
+	for _, e := range gone {
+		if pc.Unix(socketFor(e.Root)).Alive() {
+			out = append(out, problem{
+				Text: fmt.Sprintf("%s was removed, but its stack is still running (slot %d). The next `hydra up` in any checkout stops it.", e.Root, e.Slot),
+				Fix:  "hydra slots free " + shQuote(e.Root),
+			})
+		}
+	}
+	return out
 }
 
 // enabledLocal lists the services a worktree runs, leaving out the ones

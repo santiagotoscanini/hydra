@@ -12,7 +12,12 @@
 #     older stack, and says what to run.
 #  5. A migration that fails stops the update before the API restarts.
 #  6. A change to the stack file itself reaches the running stack.
-#  7. With main's stack down, a worktree won't start.
+#  7. Starting a stack that is up is not an error, and `hydra up NAME` adds
+#     a process to it. A worktree removed with its stack up stops by itself,
+#     and its slot goes to the next worktree only after that.
+#  8. A process-compose that is killed leaves its services holding their
+#     ports; `hydra status` names the one in the way.
+#  9. With main's stack down, a worktree won't start.
 #
 # Along the way it reads the status page (`hydra ui`) for the same facts.
 #
@@ -21,8 +26,6 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
-(cd "$root" && go build -o bin/ ./cmd/...)
-H="$root/bin/hydra"
 pc_port=${PC_PORT:-8198} # main's process-compose server; 8099 may be yours
 ui_port=${UI_PORT:-4898} # the status page; 4937 may be yours
 unset PC_PORT_NUM PC_ADDRESS
@@ -30,6 +33,10 @@ unset PC_PORT_NUM PC_ADDRESS
 repo="$(mktemp -d "${TMPDIR:-/tmp}/hydra-update.XXXXXX")"
 repo="$(cd "$repo" && pwd -P)"
 main="$repo/main"
+# Built into the throwaway directory, not the checkout's bin/: with
+# `make link`, that one is the hydra on your PATH.
+(cd "$root" && go build -o "$repo/bin/" ./cmd/...)
+H="$repo/bin/hydra"
 cleanup() {
   [ -n "${ui_pid:-}" ] && kill "$ui_pid" 2>/dev/null
   for wt in api web conflict dirty fresh; do
@@ -59,7 +66,7 @@ g init -q --bare -b main "$repo/origin.git"
 g clone -q "$repo/origin.git" "$main" 2>/dev/null
 cd "$main"
 git config commit.gpgsign false; git config user.name demo; git config user.email demo@example.com
-sed "s#command: bin/mocksvc#command: $root/bin/mocksvc#" "$here/update.yaml" >process-compose.yaml
+sed "s#command: bin/mocksvc#command: $repo/bin/mocksvc#" "$here/update.yaml" >process-compose.yaml
 printf '.process-compose/\n' >.gitignore
 put README; put lock.txt v1; put db/migrations/001.sql; put apps/api/users.go; put apps/web/page.tsx
 g add -A; g commit -qm init; g push -q origin main
@@ -215,15 +222,56 @@ run "$H" status --wait; [ "$status" -eq 0 ] || fail "main should be clean again:
 expect "$out" "ok: main's stack is up and runs what main has checked out"
 
 echo
-echo "--- 7. main's stack goes down"
-(cd "$main" && "$H" down -p "$pc_port" >/dev/null 2>&1)
-cd "$repo/web"
-run "$H" up -D -L "$repo/web.log"; echo "$out" | show
-refuse "$out" "main's stack isn't running"
+echo "--- 7. a second start, one more process, and a worktree that is removed"
 cd "$repo/api"
+run "$H" up -D -L "$repo/api.log"; echo "$out" | show
+[ "$status" -eq 0 ] || fail "starting a stack that is up is not an error"
+expect "$out" "this checkout's stack is already up"
+run "$H" up seed; echo "$out" | grep '^hydra' | show # off by default, and not changed here
+[ "$status" -eq 0 ] || fail "hydra up seed: $out"
+expect "$out" 'hydra: seed runs here'
+run "$H" status --wait; expect "$out" 'seed +here +- +running'
+slot=$("$H" slots | awk '$1=="*"{print $2}')
+api_port=$((21010 + slot * 100))
+# Removed with its stack up, the way a tool that manages worktrees does it.
+cd "$main"; g worktree remove --force "$repo/api"
+for _ in $(seq 150); do curl -sf "localhost:$api_port" >/dev/null 2>&1 || break; sleep 0.1; done
+curl -sf "localhost:$api_port" >/dev/null 2>&1 && fail "the removed worktree's api still answers on :$api_port"
+echo "the removed worktree's stack stopped by itself; its slot is held until the next start:"
+run "$H" slots; echo "$out" | sed 's/(removed.*/(removed; ...)/' | show
+expect "$out" " $slot +$repo/api +\(removed"
+cd "$repo/web"
+g merge -q main # steps 5 and 6 moved main without the worktrees
+run "$H" up -D -L "$repo/web.log"; echo "$out" | grep '^hydra' | show
+[ "$status" -eq 0 ] || fail "web should start: $out"
+expect "$out" "hydra: slot $slot, running here"
+run "$H" slots; expect "$out" "\* +$slot +$repo/web"
+grep -q removed <<<"$out" && fail "the removed worktree still holds a slot: $out"
+run "$H" status --wait; [ "$status" -eq 0 ] || fail "web should be up: $out"
+
+echo
+echo "--- 8. process-compose is killed, and its services live on"
+kill -9 "$(pgrep -f "process-compose up -f $repo/web/" | head -1)"
+sleep 1
+run "$H" up -D -L "$repo/web.log"; [ "$status" -eq 0 ] || fail "web should start again: $out"
+run "$H" status --wait; echo "$out" | sed -n '/^✗/,$p' | sed -e 's/pid [0-9]*/pid <pid>/' -e 's/kill [0-9]*/kill <pid>/' -e 's#^\(      | \)[0-9/]* [0-9:]* #\1#' | show
+refuse "$out" 'Port [0-9]+ is held by mocksvc \(pid [0-9]+\), left over from an earlier run of this stack'
+fix="$(sed -n 's/^  fix: //p' <<<"$out" | head -1)"
+expect "$fix" '^kill [0-9]+ && hydra process restart web$'
+kill "$(grep -oE '^kill [0-9]+' <<<"$fix" | cut -d' ' -f2)"; "$H" process restart web >/dev/null
+run "$H" status --wait; echo "$out" | tail -1 | show
+[ "$status" -eq 0 ] || fail "web should be up after the fix: $out"
+
+echo
+echo "--- 9. main's stack goes down"
+(cd "$main" && "$H" down -p "$pc_port" >/dev/null 2>&1)
+cd "$repo/dirty"
+run "$H" up -D -L "$repo/dirty.log"; echo "$out" | show
+refuse "$out" "main's stack isn't running"
+cd "$repo/fresh"
 run "$H" status; echo "$out" | grep -E '^(✗|  fix)' | show
 refuse "$out" "main's stack isn't running"
 sleep 3
-expect "$(cat "$repo/api/.process-compose/logs"/* 2>/dev/null; "$H" process logs hydra-watch 2>/dev/null | tail -5)" "main's stack isn't answering"
+expect "$(cat "$repo/fresh/.process-compose/logs"/* 2>/dev/null; "$H" process logs hydra-watch 2>/dev/null | tail -5)" "main's stack isn't answering"
 echo
 echo "all checks passed"

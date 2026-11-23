@@ -1,5 +1,12 @@
 # Design
 
+The rules, and the decisions behind them. The manual for someone using hydra
+is <https://hydra.toscanini.me/docs/> (`site/docs/index.html`).
+
+A word on words: the **baseline** is the main checkout's stack. The config
+keys and flags use that name (`baseline_command`, `--route web.api=baseline`)
+and so do these notes; everything hydra prints says `main`.
+
 ## Usage
 
 `hydra` stands in for `process-compose`; arguments pass through.
@@ -17,7 +24,29 @@
   instance and never the baseline's. Before it starts anything, it runs the
   checks of `hydra status` and stops on a ✗ (`--force` starts anyway).
 - `hydra up web` in a worktree also runs `web` there, changed or not, and
-  switches it on if it is `disabled: true`.
+  switches it on if it is `disabled: true`. The name goes into the rendered
+  file and is not handed to process-compose, which would start `web` alone
+  and leave what the branch changed off. In the main checkout the name
+  passes through, as process-compose's own `up web`.
+- `hydra up` on a stack that is already up starts nothing: a second
+  process-compose would fail on the taken socket or port, unseen with `-D`.
+  hydra asks its own server first (and checks that what answers there was
+  started from this checkout's file: another repository on the same port is
+  an error with the way out). Then `-D` says the stack is up and exits 0, a
+  terminal gets `process-compose attach`, and `hydra up NAME` adds the names
+  to the ones the stack was started with (read back from the watcher's
+  command line in the rendered file), renders again and lets
+  `process-compose project update` take the difference; in the main
+  checkout it starts the named process.
+- In the main checkout, a command that talks to the running stack (`down`,
+  `attach`, `process ...`, a second `up`) first looks where this shell
+  would start process-compose (its flags, `PC_PORT_NUM`, the default). If
+  nothing answers there and the recorded address does, with this checkout's
+  file, hydra passes that address on: the stack is reached from any shell,
+  whatever environment started it.
+- `hydra down` on a stack that isn't running says so and exits 0.
+  `hydra down --worktrees` stops every worktree's stack and leaves the main
+  checkout's: nothing stops an idle stack by itself.
 - A file without an `x-hydra` block runs unchanged.
 - A worktree without its own `process-compose.yaml` uses the main checkout's.
 - process-compose is started without the variables that mark an AI agent's
@@ -71,13 +100,15 @@ problem is an error (✗: exit 1, and `hydra up` refuses) or a note (!).
 | What this worktree takes from main | a service it calls, waits for or is routed to has failed or was stopped (with the end of its log) |
 | Main's stack against main's files | the checkout moved since the stack was last brought to a commit, and a process this worktree uses has files in between |
 | Branch against main | main changed a service the worktree takes from it since the branch left main, or main is older than the branch's starting point (see below) |
-| This worktree's stack | a process that should run here failed, was skipped (the step it waited for is shown) or isn't running; `hydra-watch` is down |
+| This worktree's stack | a process that should run here failed, was skipped (the step it waited for is shown) or isn't running; `hydra-watch` is down. A process whose output says its port was taken comes with the program listening there (`lsof`): one started from inside this checkout is a leftover of an earlier run, and the fix kills it; anyone else's is only named |
 | Routed services | the router doesn't answer on the worktree's port, or main's copy doesn't pass the worktree's tag on (`/__hydra/status` on that port) |
 
 Notes: a process that is still starting (`--wait` waits for these), main's
 stack file or hydra being newer than the running stack, the main checkout
-on another branch or with uncommitted changes, plan warnings, and changed
-files that no service's `paths` (nor `ignore`) cover.
+on another branch or with uncommitted changes, plan warnings, changed
+files that no service's `paths` (nor `ignore`) cover, a worktree's own
+Supabase that was started for another branch than the one checked out now,
+and (in the main checkout) a removed worktree whose stack still answers.
 
 "What this worktree takes from main" is: the upstream targets and
 `depends_on` entries of its local, enabled services that don't run here, and
@@ -206,9 +237,10 @@ records "Created from HEAD"; once b1 gets new commits, b2 needs `parent: b1`.
 
 Commands of its own: `hydra status` (is it all up and in step), `hydra ui`
 (the same as a web page), `hydra update` (move main and bring everything
-along), `hydra plan` (what runs
-where, and why), `hydra render` (the generated file), `hydra slots` (which
-worktree has which slot).
+along), `hydra plan` (what runs where, and why), `hydra render` (the
+generated file), `hydra slots` (which worktree has which slot, and freeing
+one), `hydra trust` (the CA behind TLS fronts) and `hydra version` (the
+commit it was built from, read from the build's VCS stamp).
 
 ## The `x-hydra` extension
 
@@ -331,11 +363,13 @@ jobs on its own worker and a worktree's calls on its own agent.
 - Readiness and liveness probes on the base port moved to the slot port.
   Without this, a worktree's api probe hits the baseline's and passes at once.
 - A **stand-in** for every baseline process a local one depends on, with the
-  same name, in the `baseline` namespace. It runs nothing and copies only the
+  same name, in the `main` namespace. It runs nothing and copies only the
   readiness probe (or ready log line). `process_healthy` therefore waits for
   the baseline's Supabase instead of starting a second one, and stopping the
   worktree never runs the baseline's shutdown commands.
-- A `hydra-prepare-<service>` step before each service with `prepare`.
+- A `hydra-prepare-<service>` step before each service with `prepare`, with
+  `HYDRA_SERVICE`, `HYDRA_SLOT` and `HYDRA_ROOT` (the worktree that holds the
+  slot) in its environment.
 
 ## Kinds
 
@@ -344,7 +378,7 @@ keys you'd otherwise write by hand; any key you set yourself wins.
 
 | Kind | Fills in | Also |
 |---|---|---|
-| `temporal` | `url: hydra-{slot}`, `baseline_url: default`, and a prepare step `hydra prepare temporal --namespace hydra-N --from default` | Routed services switch upstreams pointing at it per request (`per_request` is implied) |
+| `temporal` | `url: hydra-{slot}`, `baseline_url: default`, and a prepare step `hydra prepare temporal --namespace hydra-N --from default` | Routed services switch upstreams pointing at it per request (`per_request` is implied). A namespace left by the slot's previous worktree is replaced |
 | `supabase` | `port: 54321`, `ports.db: port + 1` | In a worktree, a stack of its own (below) |
 
 `hydra prepare temporal` creates the namespace if needed, waits until
@@ -352,16 +386,29 @@ Temporal knows it, and adds every custom search attribute the baseline's
 namespace has. It is safe to run again and reads `TEMPORAL_ADDRESS` like the
 temporal CLI. Calls that time out are tried again: the CLI checks its
 connection against the namespace before every command, and a namespace that
-was just created often isn't known everywhere yet. A kind can't be `shared`, `follow` or `routed`: its point is a
-separate copy per worktree.
+was just created often isn't known everywhere yet.
+
+The namespace is named after the slot, and slots are handed on. So the
+namespace's description records the worktree it was made for
+(`hydra worktree <root>`, from `HYDRA_ROOT`). When the step finds a
+namespace made for another worktree, it deletes it and creates it again,
+empty: otherwise the new worktree's worker would pick up the workflows the
+old one left running and run them with another branch's code. Temporal
+renames a deleted namespace at once, so the name is free immediately, but
+its services cache which namespace a name stands for; the step waits a few
+seconds after a replacement for that to pass. A namespace with no such
+description (an older hydra made it) is kept and labelled. The same
+worktree's namespace survives restarts.
+
+A kind can't be `shared`, `follow` or `routed`: its point is a separate copy
+per worktree.
 
 ### `kind: supabase`
 
 The baseline's Supabase is the user's command, untouched (classic
 `supabase start`, its data in the usual Docker volumes). A worktree's copy is
-a Supabase CLI stack (`supabase stack`, stack mode): its identity is the
-worktree's path plus its branch, so each worktree has its own containers and
-data. Rendering adds to the worktree's process:
+a Supabase CLI stack (`supabase stack`, stack mode), with its own containers
+and data. Rendering adds to the worktree's process:
 
 - `SUPABASE_EXPERIMENTAL_STACK=1`, every port setting on the slot's (the API
   and `ports.db` shifted per slot, the rest at fixed offsets from the API:
@@ -371,13 +418,39 @@ data. Rendering adds to the worktree's process:
   requests and clash with the baseline's; port 0 is rejected, so hydra picks.
 - `TMPDIR` inside the worktree (`supabase/.temp/tmp`): the CLI bind-mounts
   temp files into containers, and Colima's VM only sees the home directory.
-- After the command, `hydra prepare supabase`: `supabase migration up
-  --include-all` (a resumed stack doesn't apply new migrations on its own),
-  then puts back `supabase/.gitignore` when the CLI's appended lines are all
-  that changed, and adds the CLI's lock and link files to `info/exclude`. It
-  refuses to run without stack mode, which would migrate main's database.
-- The shutdown command exports the same environment itself: a `supabase
-  stop` without it stops the baseline's Supabase.
+- Around the command, `hydra prepare supabase`. `--before`: see the next
+  paragraph. `--started $?`, which runs whether or not the start worked:
+  it puts back `supabase/.gitignore` when the CLI's appended lines are all
+  that changed and adds the CLI's lock and link files to `info/exclude`;
+  then, if the start worked, `supabase migration up --include-all --db-url
+  <the slot's database>` (a resumed stack doesn't apply new migrations on
+  its own). It refuses to run without stack mode, which would reach main's
+  database.
+- The shutdown command exports the same environment itself (a `supabase
+  stop` without it stops the baseline's Supabase), and is followed by
+  `hydra prepare supabase --stopped`.
+
+**hydra goes by the directory, not by the CLI's idea of the current
+stack.** The CLI derives a stack's id from the project root, the stack's
+name and the branch in `HEAD` (`refs/heads/NAME`), with no way to override
+the last. A worktree whose branch is renamed (apps that manage worktrees do
+this when they name a task) or switched therefore has a running stack that
+`supabase start`, `supabase stop` and `supabase migration up` no longer
+find, still holding the slot's ports. So:
+
+- migrations are applied through the database's address, not through the
+  CLI's lookup;
+- `--before` stops the stacks this directory has for other branches
+  (`supabase stack list`, matched on `project_root`, stopped by id), so the
+  start can have the ports; they keep their data, and checking the first
+  branch out again brings its stack back;
+- `--stopped` stops whatever stack of this directory still runs;
+- `--started` records the branch in `.process-compose/supabase-branch`, and
+  `hydra status` notes when it differs from the branch checked out now:
+  the services keep working, but `supabase` commands typed in the worktree
+  won't find the stack until the process is restarted;
+- when the worktree is removed, every stack of that directory is destroyed
+  (below).
 
 The watcher applies migrations that appear while the stack runs, and keeps a
 block of the same settings in the worktree's root `.env.local` (never through
@@ -530,9 +603,53 @@ Two things learned on the monorepo this was built for:
 ## Slots
 
 `hydra-slots.json` in the shared `.git` directory maps worktree paths to
-slots, guarded by flock. A worktree keeps its slot across runs, and entries
-for deleted worktrees are dropped. Ports for every slot up to `max_slots` are
-checked against each other and `reserved_ports` when the config loads.
+slots, guarded by flock. A worktree keeps its slot across runs. Ports for
+every slot up to `max_slots` are checked against each other and
+`reserved_ports` when the config loads. They are computed, not probed:
+another program may sit on one, which `hydra status` then names.
+
+A slot stays taken until it is released. An entry whose directory is gone
+is not dropped on sight, as it once was: whatever that worktree ran may
+still hold the slot's ports.
+
+## Removed worktrees
+
+Nothing tells hydra that a worktree was removed: git has no hook for it,
+and tools that manage worktrees delete the directory. A worktree removed
+with its stack up used to leave process-compose and its services running
+with no directory under them, on ports the freed slot handed to the next
+worktree, and its Supabase stack's containers and data for good. Now:
+
+- **The stack stops itself.** `hydra-watch` checks on every tick that its
+  worktree's directory exists. When it doesn't, it destroys the Supabase
+  stacks made for that directory and runs `process-compose down` on its own
+  project, which is the last thing it does. (process-compose's own shutdown
+  commands fail there, having no directory to run in.)
+- **The next start finishes the job.** `hydra up` (any checkout, before it
+  takes a slot), `hydra update` and `hydra down --worktrees` go through the
+  slots whose directory is gone: stop the stack if its socket still answers
+  (the socket's path is derived from the worktree's path, so it can be
+  found without the worktree), destroy its Supabase stacks, remove its
+  routes file and socket, and only then release the slot. A step that
+  fails leaves the slot taken, with a warning, and the next start tries
+  again.
+- **`hydra slots free PATH`** does the same for one worktree, removed or
+  not. For one that is still there, the Supabase stack is stopped, not
+  destroyed.
+- **Temporal** needs no cleanup at removal: the namespace is replaced when
+  the slot's next worktree prepares it (see Kinds), which also works when
+  Temporal was down at the time of the removal.
+- **A killed process-compose** is the other way to leave things behind: the
+  services live on and keep their ports. The watcher and the router compare
+  their parent process on every tick and exit when it changes, so two
+  watchers never update one project and two routers never fight over a
+  port. The services are the stack's own programs; `hydra status` names
+  each one in the way of a restart.
+
+A `prepare` command of the stack file has no counterpart that runs at
+removal. What it creates is named after the slot, so it is found again by
+the slot's next worktree; a step that must start clean has `HYDRA_ROOT` to
+tell whose it was.
 
 ## Open problems
 
@@ -558,6 +675,15 @@ checked against each other and `reserved_ports` when the config loads.
   package-level deps would also tell api changes apart from worker changes.
 - **Hard-coded ports** in app code or dev scripts need a small patch each
   (or a command override in the process-compose file).
+- **Idle stacks.** A worktree's stack runs until someone stops it or the
+  worktree is removed. With many worktrees and agents that start stacks and
+  move on, memory fills up. `hydra down --worktrees` and the status page's
+  memory column are what there is; a watcher that stops a stack nobody has
+  touched for some hours would need a definition of "touched" that doesn't
+  stop one a person is clicking through.
+- **Ports are computed.** A slot's port can already be taken by another
+  program (anything above 49152 is in the range the system hands out).
+  hydra reports it once a service fails to bind; it doesn't probe first.
 - **Routing to another worktree** (`web.api=slot:3`), and hostnames instead of
   ports (`api.slot1.localhost`), so cookies and CORS behave as on the
   baseline. Worktree ports for a routed service share `localhost` cookies

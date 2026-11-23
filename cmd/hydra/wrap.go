@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"hash/fnv"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/santiagotoscanini/hydra/internal/gitx"
 	"github.com/santiagotoscanini/hydra/internal/pc"
 	"github.com/santiagotoscanini/hydra/internal/plan"
+	"github.com/santiagotoscanini/hydra/internal/stack"
 )
 
 // process-compose subcommands that load the config file, so they get the
@@ -35,11 +37,37 @@ var valueFlags = map[string]bool{
 }
 
 type pcArgs struct {
-	sub   string   // subcommand, "" when implicit up
-	file  string   // the user's -f, if any
-	names []string // positional process names after up/run
-	rest  []string // everything else, in order, minus -f
-	force bool     // hydra's own --force: start despite what the checks found
+	sub    string   // subcommand, "" when implicit up
+	file   string   // the user's -f, if any
+	names  []string // positional process names after up/run
+	nameAt []int    // where each of them sits in rest
+	rest   []string // everything else, in order, minus -f
+	force  bool     // hydra's own --force: start despite what the checks found
+}
+
+// dropNames removes from rest the process names that keep rejects. It goes
+// by position, so a flag's value that happens to equal a name stays.
+func (a *pcArgs) dropNames(keep func(name string) bool) {
+	drop := map[int]bool{}
+	for i, at := range a.nameAt {
+		if !keep(a.names[i]) {
+			drop[at] = true
+		}
+	}
+	var rest []string
+	var nameAt []int
+	for i, r := range a.rest {
+		if drop[i] {
+			continue
+		}
+		for _, at := range a.nameAt {
+			if at == i {
+				nameAt = append(nameAt, len(rest))
+			}
+		}
+		rest = append(rest, r)
+	}
+	a.rest, a.nameAt = rest, nameAt
 }
 
 func parsePC(args []string) pcArgs {
@@ -71,6 +99,7 @@ func parsePC(args []string) pcArgs {
 			continue
 		case !strings.HasPrefix(arg, "-") && (a.sub == "up" || a.sub == "run"):
 			a.names = append(a.names, arg)
+			a.nameAt = append(a.nameAt, len(a.rest))
 		}
 		a.rest = append(a.rest, arg)
 	}
@@ -96,6 +125,15 @@ func wrap(args []string) error {
 	var conn []string
 	if !co.IsMain() {
 		conn = []string{"-U", "-u", socketPath(co)}
+	} else {
+		conn = mainConn(co, a.rest)
+	}
+	if a.sub == "down" && contains(a.rest, "--worktrees") {
+		return downWorktrees(co)
+	}
+	if a.sub == "down" && !ownServer(co, a.rest).Alive() {
+		fmt.Fprintln(os.Stderr, "hydra: this checkout's stack isn't running; nothing to stop.")
+		return nil
 	}
 
 	var final []string
@@ -114,11 +152,21 @@ func wrap(args []string) error {
 		}
 		if !config.HasHydra(data) {
 			if !co.IsMain() {
-				fmt.Fprintf(os.Stderr, "hydra: %s has no x-hydra block; running everything, which will clash with the baseline's ports\n", file)
+				fmt.Fprintf(os.Stderr, "hydra: %s has no x-hydra block; running everything, which will clash with main's ports\n", file)
 			}
 			final = append(final, "-f", file)
 		} else {
 			starting := a.sub == "" || a.sub == "up" || a.sub == "run"
+			if starting {
+				// Before a slot is taken: a removed worktree may still hold one,
+				// with its stack running on that slot's ports.
+				reapGone(co, os.Stderr)
+			}
+			if a.sub == "" || a.sub == "up" {
+				if c := ownServer(co, a.rest); c.Alive() {
+					return alreadyUp(co, file, a, c, pc, conn)
+				}
+			}
 			out, local, err := renderFor(co, file, a.names, starting, a.force)
 			if err != nil {
 				return err
@@ -128,9 +176,23 @@ func wrap(args []string) error {
 				ensureFrontCert(co, file)
 			}
 			final = append(final, "-f", out)
-			a.rest = keepRunnable(a.rest, a.names, local)
-			if len(a.names) > 0 && local["hydra-watch"] {
-				// `up web` starts only web and what it needs; keep the watcher.
+			// Names that don't run in this checkout (shared, or excluded) are
+			// dropped: process-compose would reject them.
+			a.dropNames(func(n string) bool {
+				if !local[n] {
+					fmt.Fprintf(os.Stderr, "hydra: %s doesn't run in this checkout (shared or excluded); main's copy is used\n", n)
+				}
+				return local[n]
+			})
+			switch {
+			case !co.IsMain() && a.sub != "run":
+				// In a worktree, `hydra up web` means "run web here as well":
+				// the name is in the rendered file now, and the whole project
+				// starts. Handing the name on would have process-compose start
+				// web alone and leave what the branch changed switched off.
+				a.dropNames(func(string) bool { return false })
+			case len(a.nameAt) > 0 && local["hydra-watch"]:
+				// `run web` starts only web and what it needs; keep the watcher.
 				a.rest = append(a.rest, "hydra-watch")
 			}
 		}
@@ -157,7 +219,7 @@ func recordStart(co gitx.Checkout, args []string) {
 		return
 	}
 	if err := writeBaseline(co.CommonDir, baselineRecord{Commit: head, At: time.Now(), Address: host, Port: port}); err != nil {
-		fmt.Fprintln(os.Stderr, "hydra: warning: can't record the baseline's commit:", err)
+		fmt.Fprintln(os.Stderr, "hydra: warning: can't record the commit main's stack starts on:", err)
 	}
 }
 
@@ -257,34 +319,229 @@ func renderFor(co gitx.Checkout, file string, names []string, starting, force bo
 	return out, local, nil
 }
 
-// keepRunnable drops process names given to `up`/`run` that don't run in
-// this checkout (shared, or excluded), which process-compose would reject.
-func keepRunnable(rest, names []string, local map[string]bool) []string {
-	drop := map[string]bool{}
-	for _, n := range names {
-		if !local[n] {
-			drop[n] = true
-			fmt.Fprintf(os.Stderr, "hydra: %s doesn't run in this checkout (shared or excluded); the baseline's copy is used\n", n)
+func socketPath(co gitx.Checkout) string { return socketFor(co.Root) }
+
+// socketFor is where the process-compose server of the worktree at root
+// listens. It is worked out from the path alone, so it can be found again
+// after the worktree is removed.
+func socketFor(root string) string {
+	h := fnv.New32a()
+	h.Write([]byte(root))
+	return filepath.Join(os.TempDir(), fmt.Sprintf("hydra-%08x.sock", h.Sum32()))
+}
+
+// ownServer is this checkout's process-compose server: a worktree's on its
+// socket; the main checkout's where these arguments and this environment
+// would start it, or, if nothing answers there, where hydra recorded that it
+// was started (another shell may have had another PC_PORT_NUM).
+func ownServer(co gitx.Checkout, args []string) *pc.Client {
+	if !co.IsMain() {
+		return pc.Unix(socketPath(co))
+	}
+	here := pc.TCP(pcAddress(args))
+	if here.Alive() {
+		return here
+	}
+	if rec := mainClient(co.CommonDir); rec.Where != here.Where && rec.Alive() {
+		if files, err := rec.Files(); err == nil && len(files) > 0 && sameFile(files[0], renderedPath(co.Root)) {
+			return rec
 		}
 	}
+	return here
+}
+
+// mainConn is what a command in the main checkout needs to reach its stack
+// when that runs somewhere else than this shell would look: the flags that
+// name the recorded address. Nothing when the shell already points there, or
+// when the command line says where to go.
+func mainConn(co gitx.Checkout, args []string) []string {
+	if len(connFlags(args)) > 0 {
+		return nil
+	}
+	c := ownServer(co, args)
+	if c.Where == pc.TCP(pcAddress(args)).Where {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(c.Where)
+	if err != nil {
+		return nil
+	}
+	return []string{"--address", host, "-p", port}
+}
+
+// alreadyUp is `hydra up` in a checkout whose stack is running. A second
+// process-compose would fail on the taken socket or port, in the background
+// and unseen with -D, so hydra answers instead:
+//
+//   - `hydra up NAME` runs NAME here as well, as it would have at the start;
+//   - `hydra up` in a terminal opens the running stack;
+//   - `hydra up -D` says it is up, and exits 0: starting twice is not an error.
+func alreadyUp(co gitx.Checkout, file string, a pcArgs, c *pc.Client, pcBin string, conn []string) error {
+	// Something answers there. Is it this checkout's stack?
+	if files, err := c.Files(); err == nil && len(files) > 0 && !sameFile(files[0], renderedPath(co.Root)) {
+		return fmt.Errorf("another process-compose project is running on %s (from %s); give this one its own port: hydra up -p PORT, or PC_PORT_NUM", c.Where, files[0])
+	}
+	if len(a.names) > 0 {
+		return alsoRun(co, file, a.names, c)
+	}
+	if !detached(a.rest) && isTerminal(os.Stdout) && isTerminal(os.Stdin) {
+		fmt.Fprintln(os.Stderr, "hydra: this checkout's stack is already up; opening it.")
+		return execPC(pcBin, append(append([]string{"attach"}, conn...), connFlags(a.rest)...))
+	}
+	fmt.Fprintln(os.Stderr, "hydra: this checkout's stack is already up. `hydra status` says how it is doing; `hydra attach` opens it.")
+	return nil
+}
+
+// alsoRun is `hydra up NAME...` while the stack is up. In a worktree the
+// names join the ones the stack was started with, the file is rendered again
+// and process-compose takes the difference; the watcher restarts with the
+// longer list, so it stays that way. In the main checkout every process is
+// already in the project, and one that is off is started.
+func alsoRun(co gitx.Checkout, file string, names []string, c *pc.Client) error {
+	if !co.IsMain() {
+		t, err := resolve(co.Root, file)
+		if err != nil {
+			return err
+		}
+		o := runningOptions(co.Root)
+		for _, n := range names {
+			if !contains(o.with, n) {
+				o.with = append(o.with, n)
+			}
+		}
+		watch, err := watchCommand(t, o)
+		if err != nil {
+			return err
+		}
+		if err := step(t, o, watch, renderedPath(co.Root), socketPath(co)); err != nil {
+			return err
+		}
+	}
+	procs, err := c.Processes()
+	if err != nil {
+		return err
+	}
+	state := map[string]pc.Process{}
+	for _, p := range procs {
+		state[p.Name] = p
+	}
+	for _, n := range names {
+		p, ok := state[n]
+		switch {
+		case !ok && co.IsMain():
+			fmt.Fprintf(os.Stderr, "hydra: there is no process named %s in this stack.\n", n)
+		case !ok:
+			fmt.Fprintf(os.Stderr, "hydra: %s doesn't run in this checkout (shared or excluded); main's copy is used\n", n)
+		case p.Health() == pc.Off:
+			if err := c.Start(n); err != nil {
+				return fmt.Errorf("starting %s: %w", n, err)
+			}
+			fmt.Fprintf(os.Stderr, "hydra: started %s here.\n", n)
+		default:
+			fmt.Fprintf(os.Stderr, "hydra: %s runs here (%s).\n", n, p.Describe())
+		}
+	}
+	return nil
+}
+
+// downWorktrees is `hydra down --worktrees`: it stops the stack of every
+// worktree of this repository and leaves the main checkout's running. A
+// worktree's stack costs memory for as long as it is up, whether or not
+// anyone still works there; this is the end of the day in one command.
+// Nothing is lost: `hydra up -D` in a worktree brings its stack back.
+func downWorktrees(co gitx.Checkout) error {
+	reapGone(co, os.Stdout)
+	wts, err := stack.List(co.Main)
+	if err != nil {
+		return err
+	}
+	stopped, failed := 0, 0
+	for _, wt := range wts {
+		wco, err := gitx.Find(wt.Root)
+		if err != nil || wco.IsMain() {
+			continue
+		}
+		sock := socketPath(wco)
+		if !pc.Unix(sock).Alive() {
+			continue
+		}
+		fmt.Printf("stopping %s ... ", filepath.Base(wco.Root))
+		if err := downSocket(sock, 3*time.Minute); err != nil {
+			fmt.Println("FAILED:", err)
+			failed++
+			continue
+		}
+		fmt.Println("stopped")
+		stopped++
+	}
+	switch {
+	case failed > 0:
+		return fmt.Errorf("%d worktree stack%s didn't stop", failed, plural(failed))
+	case stopped == 0:
+		fmt.Println("no worktree's stack is running.")
+	default:
+		fmt.Printf("stopped %d worktree stack%s; the main checkout's stack is untouched.\n", stopped, plural(stopped))
+	}
+	return nil
+}
+
+func contains(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
+// detached reports whether process-compose was asked not to take the
+// terminal: -D, or the TUI switched off.
+func detached(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "-D", "--detached", "--detached-with-tui", "-t=false", "--tui=false":
+			return true
+		}
+	}
+	return false
+}
+
+// connFlags keeps the flags that say where a process-compose server is.
+func connFlags(args []string) []string {
 	var out []string
-	for _, r := range rest {
-		if !drop[r] {
-			out = append(out, r)
+	for i := 0; i < len(args); i++ {
+		name, _, inline := strings.Cut(args[i], "=")
+		switch name {
+		case "-p", "--port", "--address", "-u", "--unix-socket", "--token-file":
+			out = append(out, args[i])
+			if !inline && i+1 < len(args) {
+				out = append(out, args[i+1])
+				i++
+			}
+		case "-U", "--use-uds":
+			out = append(out, args[i])
 		}
 	}
 	return out
 }
 
-func socketPath(co gitx.Checkout) string {
-	h := fnv.New32a()
-	h.Write([]byte(co.Root))
-	return filepath.Join(os.TempDir(), fmt.Sprintf("hydra-%08x.sock", h.Sum32()))
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+func sameFile(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ia, errA := os.Stat(a)
+	ib, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(ia, ib)
 }
 
 func orNone(xs []string) []string {
 	if len(xs) == 0 {
-		return []string{"(nothing, everything comes from the baseline)"}
+		return []string{"(nothing, everything comes from main)"}
 	}
 	return xs
 }

@@ -2,9 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
-
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -22,7 +23,7 @@ func prepareCmd(args []string) error {
 		return prepareSupabase(args[1:])
 	}
 	if len(args) == 0 || args[0] != "temporal" {
-		return fmt.Errorf("usage: hydra prepare temporal --namespace NAME --from NAME | hydra prepare supabase")
+		return fmt.Errorf("usage: hydra prepare temporal --namespace NAME --from NAME | hydra prepare supabase ...")
 	}
 	fs := flag.NewFlagSet("prepare temporal", flag.ContinueOnError)
 	ns := fs.String("namespace", "", "")
@@ -34,8 +35,21 @@ func prepareCmd(args []string) error {
 	if *ns == "" {
 		return fmt.Errorf("prepare temporal: --namespace is required")
 	}
-	return prepareTemporal(temporalCLI, *ns, *from, *retention)
+	// HYDRA_ROOT is the worktree that holds the slot (set on the rendered
+	// step): the namespace is named after the slot, and belongs to whoever
+	// holds it now.
+	return prepareTemporal(temporalCLI, *ns, *from, *retention, os.Getenv("HYDRA_ROOT"))
 }
+
+// ownerMark starts the description hydra gives a namespace it creates,
+// followed by the worktree it was created for.
+const ownerMark = "hydra worktree "
+
+// settleAfterReplace is how long a namespace that replaced another of the
+// same name is left alone: Temporal's services cache which namespace a name
+// stands for, and until that is refreshed a call by name can still reach the
+// one that was deleted.
+var settleAfterReplace = 5 * time.Second
 
 // temporalCLI runs the temporal CLI and returns its stdout.
 func temporalCLI(args ...string) ([]byte, error) {
@@ -46,7 +60,17 @@ func temporalCLI(args ...string) ([]byte, error) {
 	return out, err
 }
 
-func prepareTemporal(run func(...string) ([]byte, error), ns, from, retention string) error {
+// prepareTemporal makes sure the namespace exists, belongs to owner (the
+// worktree that holds the slot it is named after) and has the search
+// attributes of from.
+//
+// Slots are handed on: when a worktree is removed, the next one gets its
+// slot and with it the namespace's name. Workflows the old worktree left
+// running there would be picked up by the new worktree's worker and run with
+// another branch's code. So a namespace created for another worktree is
+// deleted and made again, empty. owner "" (an older rendered file) skips
+// this.
+func prepareTemporal(run func(...string) ([]byte, error), ns, from, retention, owner string) error {
 	// Any call can time out while the server is busy, and the first calls
 	// that name a new namespace often do: the CLI checks the connection
 	// against that namespace before every command. Try those again.
@@ -59,9 +83,30 @@ func prepareTemporal(run func(...string) ([]byte, error), ns, from, retention st
 		}
 		return out, err
 	}
-	if _, err := cli("operator", "namespace", "describe", "--namespace", ns); err != nil {
+	create := []string{"operator", "namespace", "create", "--namespace", ns, "--retention", retention}
+	if owner != "" {
+		create = append(create, "--description", ownerMark+owner)
+	}
+	desc, err := cli("operator", "namespace", "describe", "--namespace", ns, "-o", "json")
+	replaced := false
+	if was, mine := namespaceOwner(desc); err == nil && owner != "" && !mine(owner) {
+		if was == "" {
+			// Made by an older hydra, or by hand: nothing says whose it was.
+			// Keep it, and put this worktree's name on it.
+			if _, err := cli("operator", "namespace", "update", "--namespace", ns, "--description", ownerMark+owner); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("Temporal namespace %s was made for %s, which held this slot before; replacing it, so what that worktree left running doesn't run here\n", ns, was)
+			if _, err := cli("operator", "namespace", "delete", "--namespace", ns, "--yes"); err != nil {
+				return err
+			}
+			err, replaced = errors.New("deleted"), true
+		}
+	}
+	if err != nil {
 		fmt.Printf("creating Temporal namespace %s\n", ns)
-		if _, err := cli("operator", "namespace", "create", "--namespace", ns, "--retention", retention); err != nil {
+		if _, err := retryWhile("already exists", func() ([]byte, error) { return cli(create...) }); err != nil {
 			return err
 		}
 		// A new namespace takes a moment to be usable everywhere.
@@ -73,6 +118,9 @@ func prepareTemporal(run func(...string) ([]byte, error), ns, from, retention st
 				return fmt.Errorf("namespace %s was created but never became visible", ns)
 			}
 			time.Sleep(500 * time.Millisecond)
+		}
+		if replaced {
+			time.Sleep(settleAfterReplace)
 		}
 	}
 	want, err := customAttributes(cli, from)
@@ -107,6 +155,35 @@ func prepareTemporal(run func(...string) ([]byte, error), ns, from, retention st
 		}
 	}
 	return nil
+}
+
+// namespaceOwner reads `namespace describe -o json`: the worktree the
+// namespace was made for ("" when its description doesn't say), and a
+// function that tells whether that is the given one.
+func namespaceOwner(describe []byte) (string, func(string) bool) {
+	var doc struct {
+		Info struct {
+			Description string `json:"description"`
+		} `json:"namespaceInfo"`
+	}
+	json.Unmarshal(describe, &doc)
+	was, ok := strings.CutPrefix(doc.Info.Description, ownerMark)
+	if !ok {
+		was = ""
+	}
+	return was, func(owner string) bool { return was == owner }
+}
+
+// retryWhile runs fn again while its error mentions what: a namespace that
+// was just deleted keeps its name for a moment.
+func retryWhile(what string, fn func() ([]byte, error)) (out []byte, err error) {
+	for i := 0; i < 40; i++ {
+		if out, err = fn(); err == nil || !strings.Contains(strings.ToLower(err.Error()), what) {
+			return out, err
+		}
+		time.Sleep(retryGap)
+	}
+	return out, err
 }
 
 // retry gives a namespace that was just created time to show up: Temporal

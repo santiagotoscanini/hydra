@@ -9,6 +9,8 @@
 //	hydra status [--all]           check this checkout against main's stack
 //	hydra update                   pull main and bring everything along
 //	hydra ui                       the same as a local web page
+//	hydra trust                    trust the CA behind TLS fronts
+//	hydra version                  which hydra, which process-compose
 package main
 
 import (
@@ -28,26 +30,32 @@ import (
 	"github.com/santiagotoscanini/hydra/internal/hook"
 	"github.com/santiagotoscanini/hydra/internal/plan"
 	"github.com/santiagotoscanini/hydra/internal/render"
-	"github.com/santiagotoscanini/hydra/internal/routes"
 	"github.com/santiagotoscanini/hydra/internal/slots"
 	"github.com/santiagotoscanini/hydra/internal/stack"
 )
 
-const usage = `hydra: run only what a worktree changed, point the rest at the baseline.
+const usage = `hydra: run only what a worktree changed, and take the rest from main.
 
 Use it in place of process-compose; arguments pass through:
   hydra                    start this checkout (TUI)
   hydra up -D              start it in the background
-  hydra up web             also run web here, even if unchanged
+  hydra up web             also run web here, even if unchanged; on a stack
+                           that is already up, it adds web to it
   hydra attach | down | process ...
+  hydra down --worktrees   stop every worktree's stack; main's keeps running
 
 In the main checkout everything runs, as plain process-compose would. In a
 worktree only the services it changed run, on that worktree's own ports, with
-their upstreams pointing at the baseline or at each other.
+their upstreams pointing at main's copies or at each other. (The config and
+the flags call the main checkout's stack the baseline.)
 
 Before it starts anything in a worktree, hydra checks the main checkout:
 its stack has to be running, and in step with the branch for every service
-the worktree takes from it. hydra up --force starts anyway.
+the worktree takes from it. hydra up --force starts anyway. Starting a stack
+that is already up changes nothing and is not an error.
+
+A worktree that is removed while its stack runs stops that stack by itself,
+and the next start in any checkout frees its slot.
 
 Hydra's own commands:
   hydra status [--all] [--wait]  is everything this checkout uses up and in step
@@ -63,7 +71,9 @@ Hydra's own commands:
   hydra plan   [flags]           show what this checkout runs and how it is wired
   hydra render [flags] [-o FILE] print (or write) the rendered process-compose file
   hydra slots                    list worktree slots
-  hydra slots free [PATH]        free a worktree's slot (default: this one)
+  hydra slots free [PATH]        stop a worktree's stack and free its slot
+                                 (default: this worktree)
+  hydra version                  which hydra this is, and which process-compose
 
 Flags for update:
   -n, --dry-run    say what would happen, change nothing
@@ -74,11 +84,12 @@ Flags for update:
 Flags for plan and render:
   -f FILE          stack file (default <checkout>/process-compose.yaml)
   --root DIR       checkout to plan for (default: the one containing the cwd)
-  --slot N         pretend to be worktree slot N (0 = baseline)
+  --slot N         pretend to be worktree slot N (0 = the main checkout)
   --changed PATHS  comma-separated changed paths instead of asking git
   --with SVC       also run SVC here (repeatable, comma-separated ok)
   --without SVC    never run SVC here (repeatable)
   --route S.U=T    point service S's upstream U at T = baseline|local
+                   (main's copy, or the one here)
   --unclaimed      (plan) only list the changed files no service's paths cover
 
 A git-ignored .hydra.local.yaml in the checkout adds the same settings:
@@ -86,10 +97,15 @@ A git-ignored .hydra.local.yaml in the checkout adds the same settings:
   without: [worker]
   routes:
     web: { api: baseline }
+
+Docs: https://hydra.toscanini.me/docs/
 `
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
+		if code, ok := err.(errExit); ok {
+			os.Exit(int(code))
+		}
 		if _, said := err.(errProblems); !said {
 			fmt.Fprintln(os.Stderr, "hydra:", err)
 		}
@@ -97,12 +113,20 @@ func main() {
 	}
 }
 
+// errExit ends the command with a status that isn't hydra's to explain: the
+// one of a command it ran, which already said what went wrong.
+type errExit int
+
+func (e errExit) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
+
 func run(args []string) error {
 	if len(args) > 0 {
 		switch args[0] {
 		case "help", "-h", "--help":
 			fmt.Print(usage)
 			return nil
+		case "version", "--version":
+			return versionCmd()
 		case "plan", "render":
 			return planOrRender(args[0], args[1:])
 		case "slots":
@@ -402,11 +426,20 @@ func slotsCmd(args []string) error {
 			}
 		}
 		for _, e := range mustList(co.CommonDir) {
-			if e.Root == root {
-				routes.Remove(co.CommonDir, e.Slot)
+			if e.Root != root {
+				continue
 			}
+			// Freeing a slot hands its ports on, so first stop what holds
+			// them. A worktree that is still there keeps its database
+			// (stopped); a removed one loses it.
+			did, err := reap(co, e)
+			if err != nil {
+				return fmt.Errorf("slot %d stays taken: %w", e.Slot, err)
+			}
+			fmt.Printf("slot %d is free%s\n", e.Slot, andDid(did))
+			return nil
 		}
-		return slots.Release(co.CommonDir, root)
+		return fmt.Errorf("%s holds no slot (`hydra slots` lists them)", root)
 	}
 	entries, err := slots.List(co.CommonDir)
 	if err != nil {
@@ -416,13 +449,23 @@ func slotsCmd(args []string) error {
 		fmt.Println("no worktree slots taken")
 	}
 	for _, e := range entries {
-		mark := " "
+		mark, note := " ", ""
 		if e.Root == co.Root {
 			mark = "*"
 		}
-		fmt.Printf("%s %2d  %s\n", mark, e.Slot, e.Root)
+		if e.Missing() {
+			note = "  (removed; the next `hydra up` cleans up after it, or now: hydra slots free " + shQuote(e.Root) + ")"
+		}
+		fmt.Printf("%s %2d  %s%s\n", mark, e.Slot, e.Root, note)
 	}
 	return nil
+}
+
+func andDid(did []string) string {
+	if len(did) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(did, ", ") + ")"
 }
 
 func mustList(commonDir string) []slots.Entry {
@@ -461,10 +504,20 @@ func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
+// whose words an upstream's target the way the rest of the output does: the
+// copy in the main checkout, or the one here. (The flags and the config say
+// baseline and local.)
+func whose(t plan.Target) string {
+	if t == plan.Local {
+		return "here"
+	}
+	return "main"
+}
+
 func printPlan(t *target, p *plan.Plan) {
 	kind := "worktree"
 	if p.Slot == 0 {
-		kind = "baseline"
+		kind = "main checkout"
 	}
 	fmt.Printf("%s, slot %d: %s\n", kind, p.Slot, t.checkout.Root)
 	stacked := len(p.Layers) > 1
@@ -479,7 +532,7 @@ func printPlan(t *target, p *plan.Plan) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "SERVICE\tRUNS\tPORT\tWHY")
 	for _, s := range p.Services {
-		where := "baseline"
+		where := "main"
 		if s.Routed {
 			where = "main, routed"
 		}
@@ -507,7 +560,7 @@ func printPlan(t *target, p *plan.Plan) {
 		for _, s := range p.Services {
 			for _, u := range s.Upstreams {
 				n++
-				fmt.Fprintf(w, "  %s\t%s\t-> %s (%s)\t%s\t%s\n", s.Name, u.Env, u.Service, u.Target, u.Value, u.Why)
+				fmt.Fprintf(w, "  %s\t%s\t-> %s (%s)\t%s\t%s\n", s.Name, u.Env, u.Service, whose(u.Target), u.Value, u.Why)
 			}
 		}
 		w.Flush()

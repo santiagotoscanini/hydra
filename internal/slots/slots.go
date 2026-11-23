@@ -3,6 +3,12 @@
 //
 // The registry is one JSON file in the repository's shared .git directory,
 // guarded by an flock, so every worktree of a repo sees the same one.
+//
+// A slot stays taken until it is released. An entry whose directory is gone
+// is a worktree that was removed, and it may have left a stack running on
+// that slot's ports: the caller cleans up after it and then releases the
+// slot (see Gone), so the ports are never handed on while something still
+// holds them.
 package slots
 
 import (
@@ -28,14 +34,13 @@ type Entry struct {
 }
 
 // Acquire returns the slot for root, allocating the lowest free one in
-// 1..max if root has none. Entries whose directory is gone are dropped.
+// 1..max if root has none.
 func Acquire(commonDir, root string, max int) (int, error) {
 	var slot int
 	err := withRegistry(commonDir, func(r *registry) (bool, error) {
-		dirty := prune(r)
 		if s, ok := r.Slots[root]; ok && s <= max {
 			slot = s
-			return dirty, nil
+			return false, nil
 		}
 		used := map[int]bool{}
 		for _, s := range r.Slots {
@@ -48,7 +53,7 @@ func Acquire(commonDir, root string, max int) (int, error) {
 				return true, nil
 			}
 		}
-		return dirty, fmt.Errorf("all %d slots are taken; remove a worktree or raise x-hydra.max_slots", max)
+		return false, fmt.Errorf("all %d slots are taken; free one (`hydra slots` lists them, `hydra slots free PATH` frees one) or raise x-hydra.max_slots", max)
 	})
 	return slot, err
 }
@@ -62,29 +67,40 @@ func Release(commonDir, root string) error {
 	})
 }
 
-// List returns the live entries, sorted by slot.
+// List returns every entry, sorted by slot. It only reads: a repository
+// that never handed out a slot has no registry, and gets none from a look.
 func List(commonDir string) ([]Entry, error) {
 	var out []Entry
+	if _, err := os.Stat(filepath.Join(commonDir, fileName)); commonDir == "" || errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	err := withRegistry(commonDir, func(r *registry) (bool, error) {
-		dirty := prune(r)
 		for root, s := range r.Slots {
 			out = append(out, Entry{root, s})
 		}
-		return dirty, nil
+		return false, nil
 	})
 	sort.Slice(out, func(i, j int) bool { return out[i].Slot < out[j].Slot })
 	return out, err
 }
 
-func prune(r *registry) bool {
-	dirty := false
-	for root := range r.Slots {
-		if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
-			delete(r.Slots, root)
-			dirty = true
+// Gone returns the entries whose directory no longer exists: worktrees that
+// were removed and still hold their slot.
+func Gone(commonDir string) ([]Entry, error) {
+	all, err := List(commonDir)
+	var out []Entry
+	for _, e := range all {
+		if e.Missing() {
+			out = append(out, e)
 		}
 	}
-	return dirty
+	return out, err
+}
+
+// Missing reports whether the entry's worktree directory is gone.
+func (e Entry) Missing() bool {
+	_, err := os.Stat(e.Root)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func withRegistry(commonDir string, fn func(*registry) (bool, error)) error {

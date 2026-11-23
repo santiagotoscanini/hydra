@@ -292,8 +292,20 @@ pre.has-xh .ln:not(.xh) .k { color: var(--ink-3); }
 .table td { padding: 10px 14px 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.5; }
 .table tr:last-child td { border-bottom: 0; }
 .table td:first-child { white-space: nowrap; }
+/* A table whose first column is prose, not a name: let it wrap. */
+.table.wrap td:first-child { white-space: normal; width: 32%; }
 .table td .type { display: block; font-family: var(--mono); font-size: 12px; color: var(--ink-3); margin-top: 3px; }
 .table td.def { font-family: var(--mono); font-size: 13px; color: var(--ink-2); white-space: nowrap; }
+
+/* On a phone a long command inside a sentence wraps instead of pushing the page sideways. */
+@media (max-width: 600px) { .doc :not(pre) > code { white-space: normal; overflow-wrap: anywhere; } }
+
+/* A list of messages hydra prints, each with what it means. */
+.msgs { margin: 0 0 18px; border-top: 1px solid var(--line-2); border-bottom: 1px solid var(--line-2); }
+.msgs > div { padding: 11px 0 12px; border-bottom: 1px solid var(--line); }
+.msgs > div:last-child { border-bottom: 0; }
+.doc .msgs p { font-size: 15px; line-height: 1.55; margin: 0; color: var(--ink-2); }
+.doc .msgs .said { font-family: var(--mono); font-size: 13px; line-height: 1.5; color: var(--ink); margin-bottom: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .note { border-left: 2px solid var(--edit); padding: 2px 0 2px 14px; margin: 0 0 18px; font-size: 15px; color: var(--ink-2); line-height: 1.6; }
 .note b { color: var(--ink); }

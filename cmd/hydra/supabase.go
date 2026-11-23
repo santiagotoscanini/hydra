@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -16,30 +17,69 @@ import (
 	"github.com/santiagotoscanini/hydra/internal/plan"
 )
 
-// prepareSupabase runs after a worktree's Supabase stack starts, with the
-// stack's environment. It applies migrations the stack hasn't seen (a new
-// stack applies them all on its first start; a resumed one doesn't), then
-// puts back the files the CLI touches in the checkout.
+// prepareSupabase is hydra's part in running a worktree's own Supabase
+// stack. The rendered process calls it three times, with the stack's
+// environment:
 //
-// It refuses to run without stack mode: without it, the CLI would apply this
-// branch's migrations to the main checkout's database.
+//	hydra prepare supabase --before      before the stack file's start command
+//	hydra prepare supabase --started N   after it; N is its exit status
+//	hydra prepare supabase --stopped     after the stack file's stop command
+//
+// The Supabase CLI names a stack after the directory and the branch checked
+// out in it. A worktree whose branch is renamed or switched therefore has a
+// stack its own `supabase start` and `supabase stop` no longer find, still
+// holding the slot's ports. hydra goes by the directory instead:
+//
+//   - before a start, it stops the stacks this directory has for other
+//     branches (they keep their data until the worktree is removed);
+//   - after a start, it applies the migrations the stack hasn't seen, through
+//     the database's address rather than the CLI's idea of the current stack
+//     (a new stack applies them all on its first start; a resumed one
+//     doesn't), and puts back the files the CLI touches in the checkout;
+//   - after a stop, it stops whatever stack of this directory still runs.
+//
+// It refuses to run without stack mode: without it, the CLI would reach the
+// main checkout's database.
 func prepareSupabase(args []string) error {
-	if len(args) > 0 {
-		return fmt.Errorf("usage: hydra prepare supabase (run by the rendered supabase process)")
+	fs := flag.NewFlagSet("prepare supabase", flag.ContinueOnError)
+	before := fs.Bool("before", false, "")
+	stopped := fs.Bool("stopped", false, "")
+	started := fs.Int("started", 0, "")
+	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
+		return fmt.Errorf("usage: hydra prepare supabase [--before | --started STATUS | --stopped] (run by the rendered supabase process)")
 	}
 	if os.Getenv("SUPABASE_EXPERIMENTAL_STACK") != "1" {
-		return fmt.Errorf("prepare supabase: SUPABASE_EXPERIMENTAL_STACK isn't 1, so the Supabase CLI would reach the main checkout's database; not applying migrations")
+		return fmt.Errorf("prepare supabase: SUPABASE_EXPERIMENTAL_STACK isn't 1, so the Supabase CLI would reach the main checkout's database; not touching it")
 	}
 	co, err := gitx.Find(".")
 	if err != nil {
 		return err
 	}
+	branch := branchContext(co.Root)
+	switch {
+	case *before:
+		n, err := retireSupabase(co.Root, branch, false)
+		if n > 0 {
+			fmt.Printf("hydra: stopped the Supabase stack this worktree had for another branch; the one for %s starts now (the other keeps its data until the worktree is removed)\n", strings.TrimPrefix(branch, "refs/heads/"))
+		}
+		return err
+	case *stopped:
+		os.Remove(supabaseMarker(co.Root))
+		_, err := retireSupabase(co.Root, "", false)
+		return err
+	}
+
+	// After the start. Whatever it did, the checkout is put back first.
+	terr := tidySupabase(co)
+	if *started != 0 {
+		return errExit(*started) // the start failed, and said why
+	}
 	var out bytes.Buffer
-	cmd := exec.Command("supabase", "migration", "up", "--include-all")
+	cmd := exec.Command("supabase", "migration", "up", "--include-all", "--db-url", supabaseDBURL())
 	cmd.Dir = co.Root
 	cmd.Stdout, cmd.Stderr = io.MultiWriter(os.Stdout, &out), io.MultiWriter(os.Stderr, &out)
 	err = cmd.Run()
-	if terr := tidySupabase(co); terr != nil && err == nil {
+	if err == nil {
 		err = terr
 	}
 	if err != nil && strings.Contains(out.String(), "MigrationMissingLocalError") {
@@ -51,7 +91,52 @@ func prepareSupabase(args []string) error {
 	if err != nil {
 		return fmt.Errorf("supabase migration up: %w", err)
 	}
-	return nil
+	return writeFile(supabaseMarker(co.Root), []byte(branch+"\n"))
+}
+
+// supabaseDBURL is the address of this worktree's own database: the slot's
+// port, with the Supabase CLI's local credentials.
+func supabaseDBURL() string {
+	port := os.Getenv("SUPABASE_DB_PORT")
+	if port == "" {
+		port = "54322"
+	}
+	return "postgresql://postgres:postgres@127.0.0.1:" + port + "/postgres"
+}
+
+// branchContext is what the Supabase CLI calls the branch of a checkout:
+// the full ref HEAD points at, or "detached".
+func branchContext(root string) string {
+	ref, err := gitOut(root, "symbolic-ref", "-q", "HEAD")
+	if err != nil || ref == "" {
+		return "detached"
+	}
+	return ref
+}
+
+// supabaseMarker records the branch a worktree's running Supabase stack was
+// started for, so `hydra status` can tell when the branch has since been
+// renamed or switched.
+func supabaseMarker(root string) string {
+	return filepath.Join(root, ".process-compose", "supabase-branch")
+}
+
+// supabaseBranchNote is the problem to report when a worktree's Supabase
+// stack runs for another branch than the one checked out now: the services
+// keep using it (they go by its ports), but the CLI no longer finds it.
+func supabaseBranchNote(root, name string) *problem {
+	data, err := os.ReadFile(supabaseMarker(root))
+	was := strings.TrimSpace(string(data))
+	now := branchContext(root)
+	if err != nil || was == "" || was == now {
+		return nil
+	}
+	short := func(ref string) string { return strings.TrimPrefix(ref, "refs/heads/") }
+	return &problem{
+		Text: fmt.Sprintf("%s here was started for branch %s, and the branch is now %s. The services here keep using it, but `supabase` commands typed in this worktree won't find it.",
+			name, short(was), short(now)),
+		Fix: fmt.Sprintf("hydra process restart %s   (starts the database of %s, from its migrations and seeds)", name, short(now)),
+	}
 }
 
 // cliIgnoreLine matches the lines stack mode appends to supabase/.gitignore

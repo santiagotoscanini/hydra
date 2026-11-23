@@ -481,9 +481,16 @@ func failing(ms *mainState, only map[string]string) []problem {
 		}
 		switch p.Health() {
 		case pc.Failed:
-			out = append(out, problem{Blocks: true,
-				Text: fmt.Sprintf("main's %s %s%s.%s", name, p.Describe(), suffix, logTail(ms.Client, name)),
-				Fix:  "cd " + shQuote(ms.target.checkout.Root) + " && hydra process restart " + name})
+			main := ms.target.checkout.Root
+			tail, lines := logTail(ms.Client, name)
+			pr := problem{Blocks: true,
+				Text: fmt.Sprintf("main's %s %s%s.%s", name, p.Describe(), suffix, tail),
+				Fix:  "cd " + shQuote(main) + " && hydra process restart " + name}
+			if h := portTaken(ms.target.stack, name, 0, lines); h != nil {
+				pr.Text += takenText(h, main)
+				pr.Fix = "cd " + shQuote(main) + " && " + takenFix(h, main, "hydra process restart "+name)
+			}
+			out = append(out, pr)
 		case pc.Starting:
 			out = append(out, problem{Passing: true, Text: fmt.Sprintf("main's %s is still %s%s.", name, p.Describe(), suffix)})
 		case pc.Off:
@@ -591,11 +598,22 @@ func localProblems(ms *mainState, ws *wtState) []problem {
 	// Anything that failed in this worktree's project, the steps hydra adds
 	// (a Temporal namespace, say) included: a service that waits for one of
 	// those is skipped, and the reason is in the step's output.
+	sources := map[string]string{}
+	for _, row := range ws.Plan.Services {
+		sources[row.Name] = row.Source
+	}
 	for _, name := range sortedProcs(ws.Procs) {
 		if p := ws.Procs[name]; p.Health() == pc.Failed && name != "hydra-watch" {
-			out = append(out, problem{Blocks: true,
-				Text: fmt.Sprintf("%s here %s.%s", name, p.Describe(), logTail(ws.Client, name)),
-				Fix:  "hydra process restart " + name})
+			tail, lines := logTail(ws.Client, name)
+			pr := problem{Blocks: true,
+				Text: fmt.Sprintf("%s here %s.%s", name, p.Describe(), tail),
+				Fix:  "hydra process restart " + name}
+			if h := portTaken(st, sources[name], ws.Plan.Slot, lines); h != nil {
+				root := ws.target.checkout.Root
+				pr.Text += takenText(h, root)
+				pr.Fix = takenFix(h, root, "hydra process restart "+name)
+			}
+			out = append(out, pr)
 		}
 	}
 	for _, row := range ws.Plan.Services {
@@ -605,6 +623,15 @@ func localProblems(ms *mainState, ws *wtState) []problem {
 			if !ok {
 				out = append(out, problem{Passing: true, Text: row.Name + " should run here but isn't in the running project yet; hydra-watch adds it within seconds."})
 				continue
+			}
+			if src := st.Services[row.Source]; src != nil && src.Kind == config.KindSupabase && p.Health() == pc.Up {
+				root := ws.target.checkout.Root
+				if row.Root != "" {
+					root = row.Root
+				}
+				if pr := supabaseBranchNote(root, row.Name); pr != nil {
+					out = append(out, *pr)
+				}
 			}
 			switch p.Health() {
 			case pc.Starting:
@@ -658,11 +685,12 @@ func routedReason(host string, port int) string {
 	return out.Reason
 }
 
-// logTail is the end of a process's output, indented under a message.
-func logTail(c *pc.Client, name string) string {
+// logTail is the end of a process's output, indented under a message, and
+// the same lines as they came.
+func logTail(c *pc.Client, name string) (string, []string) {
 	lines, err := c.Logs(name, 10)
 	if err != nil || len(lines) == 0 {
-		return ""
+		return "", nil
 	}
 	var b strings.Builder
 	b.WriteString(" Its last output:")
@@ -672,7 +700,7 @@ func logTail(c *pc.Client, name string) string {
 		}
 		b.WriteString("\n    | " + l)
 	}
-	return b.String()
+	return b.String(), lines
 }
 
 // someFiles shows the first few of a list and counts the rest. Long paths

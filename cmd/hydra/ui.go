@@ -509,6 +509,7 @@ func uiMainOf(ms *mainState, mem func(int) int64) *uiMain {
 	if ms.Up {
 		problems = append(problems, failing(ms, nil)...)
 	}
+	problems = append(problems, goneProblems(ms.target.checkout)...)
 	m.Problems = uiProblems(problems)
 	for _, name := range sortedProcs(ms.Procs) {
 		p := ms.Procs[name]

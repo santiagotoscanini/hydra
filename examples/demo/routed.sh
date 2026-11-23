@@ -13,12 +13,14 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
-(cd "$root" && go build -o bin/ ./cmd/...)
-H="$root/bin/hydra"
-pc_port=${PC_PORT:-8199} # the baseline's process-compose server; 8099 may be yours
+pc_port=${PC_PORT:-8199} # main's process-compose server; 8099 may be yours
 
 repo="$(mktemp -d "${TMPDIR:-/tmp}/hydra-routed.XXXXXX")"
 main="$repo/main"
+# Built into the throwaway directory, not the checkout's bin/: with
+# `make link`, that one is the hydra on your PATH.
+(cd "$root" && go build -o "$repo/bin/" ./cmd/...)
+H="$repo/bin/hydra"
 cleanup() {
   for wt in backend docs; do (cd "$repo/$wt" 2>/dev/null && "$H" down >/dev/null 2>&1) || true; done
   (cd "$main" && "$H" down -p "$pc_port" >/dev/null 2>&1) || true
@@ -31,7 +33,7 @@ commit() { mkdir -p "$(dirname "$1")"; echo "$1" >"$1"; g add -A; g commit -qm "
 
 mkdir -p "$main" && cd "$main"
 g init -q -b main
-sed "s#command: bin/mocksvc#command: $root/bin/mocksvc#" "$here/routed.yaml" >process-compose.yaml
+sed "s#command: bin/mocksvc#command: $repo/bin/mocksvc#" "$here/routed.yaml" >process-compose.yaml
 cp "$here/web.cjs" web.cjs
 printf '.process-compose/\n' >.gitignore
 commit README
@@ -48,7 +50,7 @@ wait_chain() { # port pattern
   echo "never saw '$2' on :$1 (last: $(chain "$1" 2>&1))" >&2; return 1
 }
 
-echo "--- baseline in main"
+echo "--- the main checkout's stack"
 "$H" up -D -p "$pc_port" -L "$repo/main.log" >/dev/null
 wait_for 21000
 

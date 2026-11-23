@@ -2,17 +2,20 @@
 
 Run many branches of a local stack in parallel without running many stacks.
 
-One **baseline** stack (the main checkout) stays up under
-[process-compose](https://github.com/F1bonacc1/process-compose). Each worktree
-starts only the services it changed (frontend, backend, database, workers) and
-points everything else at the baseline. A frontend-only branch reuses the
-baseline API and database, and a schema change gets its own database.
+The main checkout runs the one full stack, under
+[process-compose](https://github.com/F1bonacc1/process-compose). Each git
+worktree starts only the services its branch changed (frontend, backend,
+database, workers) and takes everything else from main. A frontend-only
+branch reuses main's API and database, and a schema change gets its own
+database.
 
-Site and docs: <https://hydra.toscanini.me> (source in `site/`, deployed by
-`.github/workflows/pages.yml`).
+**The manual is at <https://hydra.toscanini.me/docs/>**: setting up a
+repository, the commands for every day, what every message means, and every
+option. Its source is `site/docs/index.html`. This README is the short
+version; `docs/design.md` holds the rules and the decisions behind them.
 
-Status: exploration; the wrapper works against a real stack. Planning lives in the TickTick list
-"Hydra".
+Status: early, built against one real monorepo. Planning lives in the
+TickTick list "Hydra".
 
 ## Install
 
@@ -20,35 +23,54 @@ Status: exploration; the wrapper works against a real stack. Planning lives in t
 brew tap santiagotoscanini/tap
 brew install --HEAD santiagotoscanini/tap/hydra    # builds main
 brew upgrade --fetch-HEAD santiagotoscanini/tap/hydra
+hydra version                                      # which build, which process-compose
 ```
 
 Working on hydra itself: `make link` puts this checkout's build on PATH as
 `hydra` (and unlinks Homebrew's), `make build` refreshes it, `make unlink`
 goes back.
 
-## Usage
-
-Hydra wraps process-compose. Add `x-hydra` fields to the existing
-`process-compose.yaml` (which services own which paths, which env vars point
-at which service), then run `hydra` wherever you'd run `process-compose`:
-
-```sh
-hydra up -D        # main checkout: everything; worktree: only what it changed
-hydra status       # is everything this checkout uses up, and in step with main?
-hydra ui           # the same for every worktree, as a local web page
-hydra update       # pull main, restart what the pull touched, merge main into the worktrees
-hydra plan         # what runs here, on which ports, wired to what, and why
-hydra up web       # also run web in this worktree
-hydra down         # stops this checkout's instance only
-```
-
-The whole model is three sentences:
+## The model
 
 1. The main checkout runs the one full stack, and it only changes when you
    run `hydra update`.
 2. A worktree runs what its branch changed and takes the rest from main.
 3. `hydra status` says when either isn't true, with the command that fixes
    it, and `hydra up` won't start a worktree on top of something broken.
+
+hydra's output says `main` for the main checkout. The config keys and flags
+call its stack the baseline (`baseline_command`, `--route web.api=baseline`).
+They mean the same thing.
+
+## Day to day
+
+Hydra wraps process-compose. Add `x-hydra` fields to the existing
+`process-compose.yaml` (which services own which paths, which env vars point
+at which service), then run `hydra` wherever you'd run `process-compose`:
+
+| You want to | Run | Where |
+|---|---|---|
+| Start the full stack | `hydra up -D` | the main checkout |
+| Start a branch's stack | `hydra up -D` | its worktree |
+| Know when it is ready, or what broke | `hydra status --wait` | the checkout you started |
+| See every worktree at once | `hydra ui` (a local web page), `hydra status --all` | anywhere |
+| Look at a process | `hydra attach`, `hydra process logs web` | the checkout |
+| Also run a service the branch didn't change | `hydra up worker` | the worktree |
+| Bring main and the worktrees to the latest commit | `hydra update` (`--dry-run` first) | anywhere |
+| See what would run, and why | `hydra plan` | the checkout |
+| Stop one stack | `hydra down` | its checkout |
+| Stop every worktree's stack | `hydra down --worktrees` | anywhere |
+
+Every one of them is safe to run twice: starting a stack that is up, or
+stopping one that is down, says so and exits 0. On a stack that is already
+up, `hydra up NAME` adds NAME to it.
+
+Set up once per repository: the `x-hydra` keys; `.process-compose/` and
+`.hydra.local.yaml` in `.gitignore`; a port of its own for main's
+process-compose (`export PC_PORT_NUM=8099`, since its default 8080 is often
+an API's; hydra records where it started, so later commands find it from
+any shell); and nothing that moves main by itself (see
+[Updating main](#updating-main)).
 
 ## How it works
 
@@ -72,8 +94,8 @@ merged in between aren't its work.
 else a local `main` or `master`, else the branch the main checkout is on.
 `base_ref` in the top-level `x-hydra` block names another.
 
-Services left to the baseline run whatever the main checkout has checked
-out. When that isn't the code the branch was built on, hydra says so: see
+Services left to main run whatever the main checkout has checked out. When
+that isn't the code the branch was built on, hydra says so: see
 [In step with main](#in-step-with-main).
 
 A changed file that no service lists is easy to miss: nothing runs here
@@ -84,20 +106,26 @@ to no service (docs, CI, other apps) under `ignore` in the top-level
 
 ### Starting
 
-`hydra` in a worktree:
+`hydra up` in a worktree:
 
-1. Lists the changed files and picks the services to run here.
-2. Takes a **slot** for the worktree (kept across runs). Slot N listens on
-   each service's port + N × `slot_stride`.
-3. Checks the main checkout: its stack is running, the services this
+1. Cleans up after worktrees that were removed since the last start (see
+   [Stopping and cleaning up](#stopping-and-cleaning-up)).
+2. Lists the changed files and picks the services to run here.
+3. Takes a **slot** for the worktree, kept until the worktree is removed.
+   Slot N listens on each service's port + N × `slot_stride`.
+4. Checks the main checkout: its stack is running, the services this
    worktree takes from it are up, and they are the version the branch was
    built on. If not, it prints what is wrong and the fix, and doesn't start
    (`--force` starts anyway).
-4. Writes `.process-compose/hydra.yaml`: those services only, on the slot's
-   ports, with each upstream env var pointing at the local copy if the
-   service runs here and at the baseline otherwise.
-5. Starts process-compose on that file, on the worktree's own socket, so
-   `hydra down` or `hydra attach` there never touch the baseline.
+5. Writes `.process-compose/hydra.yaml`: those services only, on the slot's
+   ports, with each upstream env var pointing at the copy here if the
+   service runs here and at main's otherwise.
+6. Starts process-compose on that file, on the worktree's own socket, so
+   `hydra down` or `hydra attach` there never touch main's stack.
+
+If the stack is already up, nothing new starts: `hydra up -D` says so, plain
+`hydra up` opens the running stack's terminal UI, and `hydra up NAME` adds
+NAME to it.
 
 In the main checkout `hydra` runs the whole file, with two differences from
 plain process-compose. `watch` blocks are dropped: main's code only changes
@@ -120,23 +148,24 @@ then asks both process-compose servers what is really running:
 
 ```
 main      ~/code/shop  on main at 9a782732a  stack up
-worktree  ~/code/shop-cart  cart, slot 2  stack up
+worktree  ~/code/shop-notes  notes, slot 2  stack up
 
-SERVICE   RUNS          PORT   STATE
-api       here          8480   ready
-web       main, routed  3400   ready
-db        main          5432   ready
+SERVICE  RUNS          PORT  STATE
+api      here          8480  ready
+db       main          -     ready
+web      main, routed  3400  ready
+(2 more of main's services aren't used by anything here; `hydra plan` lists them)
 
 ✗ this branch is behind main: main changed these since the branch left it, and this worktree uses main's copy:
-    web (it serves this worktree's api): apps/web/cart.tsx and 11 more
+    web (it serves this worktree's api): apps/web/app/cart.tsx, apps/web/lib/totals.ts and 10 more
   fix: hydra update   (or, for this worktree alone: git merge main)
 ```
 
 It exits 1 when something is marked ✗, so a script or an agent can gate on
-it. `hydra status --wait` first waits for whatever is still starting.
-`--all` (and plain `hydra status` in the main checkout) lists every
-worktree: what it runs, whether its stack is up, and where it stands
-against main.
+it. A line marked ! is a note. `hydra status --wait` first waits for
+whatever is still starting. `--all` (and plain `hydra status` in the main
+checkout) lists every worktree: what it runs, whether its stack is up, and
+where it stands against main.
 
 What it checks:
 
@@ -146,19 +175,23 @@ What it checks:
   process-compose.yaml;
 - the branch and main agree on every service the worktree takes from main
   (next section);
-- everything that should run here does, including the steps hydra adds;
+- everything that should run here does, including the steps hydra adds. A
+  service that died because its port was taken comes with the program that
+  holds the port, and the command that clears it when that program is a
+  leftover of this stack;
 - main's copy of a routed service can serve this worktree;
 - no changed file is left out of every service's `paths`.
 
 The same checks run before `hydra up` starts a worktree, and the watcher
 writes to the worktree's log when main's stack stops answering or the
-branch falls out of step.
+branch falls out of step. The manual lists
+[every message](https://hydra.toscanini.me/docs/#messages) with its fix.
 
 `hydra ui` shows all of it in the browser, for the main checkout and every
 worktree at once: which services each one runs and which it takes from main,
 their state, ports (as links), memory, the commit each is on, how far it is
 from main, and the same problems with their fixes. The page keeps itself up
-to date. It listens on 127.0.0.1:4937 (`--port` changes it; a second
+to date. It listens on localhost:4937 (`--port` changes it; a second
 repository takes the next free port) and only reads. Run it when you want
 it, or keep it up with main's stack as one more process:
 
@@ -177,8 +210,8 @@ differ. That gives two transitions:
 
 | Transition | What happens |
 |---|---|
-| unchanged → changed (first matching file) | The service starts here. Local services that point at it restart with its URL. |
-| changed → unchanged (last change reverted) | The service stops. Local services that pointed at it restart on the baseline's URL. |
+| unchanged → changed (first matching file) | The service starts here. Services here that point at it restart with its URL. |
+| changed → unchanged (last change reverted) | The service stops. Services here that pointed at it restart on main's URL. |
 
 Further edits to a service that already runs here do nothing in Hydra: the
 service's own reload (`next dev`, `air`, process-compose `watch`) picks them
@@ -214,7 +247,8 @@ they run the branch's code. Neither do two services that both run in main.
 
 Worktrees take what the main checkout is running, so main moves only when
 you say so. Turn off anything that pulls it by itself (an editor's or agent
-app's auto-pull, a cron job); fetches are fine, they only move
+app's auto-pull, a cron job), and have new worktrees start from the local
+`main` rather than `origin/main`. Fetches are fine, they only move
 `origin/main`. Then, whenever you want the latest:
 
 ```sh
@@ -239,17 +273,17 @@ hydra update              # --dry-run says what it would do
    a conflict, rewrites a commit or pushes.
 
 ```
-main  ~/code/shop  moved f67f0e32d → 9a782732a (30 commits)
+main  ~/code/shop  moved 9a782732a → 66b4f7b80 (4 commits)
 
 main's stack
-  migrate  ran again  db/migrations/0042_orders.sql and 2 more  done in 6s
-  api      restarted  services/api/handler.go and 207 more      ready in 9s
-  web      restarted  apps/web/app/page.tsx and 242 more        ready in 31s
+  api  restarted  services/api/handler.go  ready in 9s
+  web  restarted  apps/web/app/page.tsx    ready in 31s
 
 worktrees
-  cart      cart      main merged in (30 commits); restarted there: api
-  checkout  checkout  CONFLICTS with main in 2 files (37 commits behind)
-  search    search    left alone, 30 commits behind main: 1 file with uncommitted changes
+  shop-cart      cart      fast-forwarded to main (4 commits; it has none of its own); restarted there: web
+  shop-checkout  checkout  CONFLICTS with main in 1 file (4 commits behind)
+  shop-notes     notes     main merged in (4 commits); restarted there: api
+  shop-search    search    left alone, 4 commits behind main: 1 file with uncommitted changes
 ```
 
 Jobs take part by listing `paths` like services do: give the migrations job
@@ -263,6 +297,33 @@ code, and `hydra update` restarts exactly those.
 
 `--main-only` leaves the worktrees alone, `--no-pull` skips the pull.
 `./examples/demo/update.sh` runs all of this on a throwaway repository.
+
+### Stopping and cleaning up
+
+`hydra down` stops this checkout's stack. `hydra down --worktrees` stops
+every worktree's stack and leaves main's running: a stack costs memory for
+as long as it is up, and nothing stops an idle one for you.
+
+A worktree can be removed without stopping anything first, with
+`git worktree remove` or by the tool that manages your worktrees:
+
+- Its stack stops by itself: the worktree's watcher notices within seconds
+  that its directory is gone.
+- A Supabase stack of its own is destroyed with it.
+- Its slot is freed by the next `hydra up` in any checkout (or the next
+  `hydra update`), after checking that nothing of the removed worktree still
+  answers. Ports are never handed on while something holds them.
+
+If a stack's process-compose is killed, its services live on and keep their
+ports. hydra's own processes (the watcher, the router) notice and exit, and
+after the next `hydra up -D`, `hydra status` names each program in the way:
+
+```
+✗ web here exited with code 1. Its last output:
+      | listen tcp 127.0.0.1:3200: bind: address already in use
+    Port 3200 is held by node (pid 4821), left over from an earlier run of this stack.
+  fix: kill 4821 && hydra process restart web
+```
 
 ### Stacked branches
 
@@ -352,9 +413,13 @@ worker:
     paths: ["services/core/**"]
 ```
 
-That creates the namespace before the worker starts (with the baseline
+That creates the namespace before the worker starts (with main's
 namespace's search attributes), hands it to every upstream pointing at the
-worker, and switches it per request on routed services.
+worker, and switches it per request on routed services. The namespace is
+named after the slot, and a slot goes to another worktree once its first
+one is removed, so hydra labels each namespace with the worktree it was
+made for and replaces one that was another worktree's: workflows the old
+worktree left running never run with the new branch's code.
 
 ```yaml
 supabase:
@@ -370,7 +435,14 @@ its own (stack mode) on its slot's ports, migrated and seeded from its
 files, and everything that reads that database runs in the worktree too.
 Every other worktree shares main's, and one that is behind main's migrations
 is told to update, like for any other service. An idle stack takes about
-110 MB.
+110 MB. It keeps its data across `hydra down` and `hydra up`, and is
+destroyed when the worktree is removed.
+
+The Supabase CLI keeps a stack per directory and branch, so after a branch
+is renamed or switched its own commands no longer find the running stack.
+Hydra goes by the directory: the services keep using it, migrations still
+apply, `hydra down` still stops it, and `hydra status` notes it until
+`hydra process restart supabase` starts the current branch's.
 
 ### HTTPS in front of a service
 
@@ -417,25 +489,34 @@ web:
 See [docs/design.md](docs/design.md) for the `x-hydra` fields and the rules
 in full.
 
-`examples/demo` is a mock stack; `./examples/demo/run.sh` starts a baseline
-and one worktree and shows which instance each request went through:
+## The demos
+
+`examples/demo` is a mock stack; `./examples/demo/run.sh` starts main's
+stack and one worktree and shows which copy each request went through:
 
 ```
-web-a baseline : web-a(slot 0, :20000) -> api(slot 0, :20010) -> db(slot 0, :20030)
-web-b baseline : web-b(slot 0, :20001) -> api(slot 0, :20010) -> db(slot 0, :20030)
+web-a main     : web-a(slot 0, :20000) -> api(slot 0, :20010) -> db(slot 0, :20030)
+web-b main     : web-b(slot 0, :20001) -> api(slot 0, :20010) -> db(slot 0, :20030)
 web-b worktree : web-b(slot 1, :20101) -> api(slot 1, :20110) -> db(slot 0, :20030)
 ```
 
 `./examples/demo/stack.sh` builds a throwaway stack of worktrees and shows
 the watcher starting and stopping services as files change in them.
-`./examples/demo/update.sh` shows `hydra status` and `hydra update` keeping
-worktrees in step with main, and checks every step.
+`./examples/demo/routed.sh` shows one frontend serving every worktree, and
+`./examples/demo/tls.sh` a TLS front. `./examples/demo/update.sh` is the
+end-to-end test: `hydra status`, the checks before `hydra up`,
+`hydra update`, a second start, a removed worktree and a killed
+process-compose, checking what every step printed. Each demo builds hydra
+into its own throwaway directory, so none of them changes the `hydra` on
+your PATH.
 
 ## Open questions
 
 - Database: a worktree's own Supabase starts from the seed files, not from
-  the baseline's data. Copying main's data in would need a dump per start.
+  main's data. Copying main's data in would need a dump per start.
 - Ports are per repository: two repositories whose stacks use the same
   ports can't run at once.
 - Deriving `paths` from the nx / Go dependency graph instead of by hand.
   Until then, the report of changed files nobody lists is the safety net.
+- Nothing stops an idle worktree's stack: it runs until `hydra down`,
+  `hydra down --worktrees` or the worktree's removal.
