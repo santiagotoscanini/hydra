@@ -35,6 +35,7 @@ at which service), then run `hydra` wherever you'd run `process-compose`:
 ```sh
 hydra up -D        # main checkout: everything; worktree: only what it changed
 hydra status       # is everything this checkout uses up, and in step with main?
+hydra ui           # the same for every worktree, as a local web page
 hydra update       # pull main, restart what the pull touched, merge main into the worktrees
 hydra plan         # what runs here, on which ports, wired to what, and why
 hydra up web       # also run web in this worktree
@@ -152,6 +153,19 @@ What it checks:
 The same checks run before `hydra up` starts a worktree, and the watcher
 writes to the worktree's log when main's stack stops answering or the
 branch falls out of step.
+
+`hydra ui` shows all of it in the browser, for the main checkout and every
+worktree at once: which services each one runs and which it takes from main,
+their state, ports (as links), memory, the commit each is on, how far it is
+from main, and the same problems with their fixes. The page keeps itself up
+to date. It listens on 127.0.0.1:4937 (`--port` changes it; a second
+repository takes the next free port) and only reads. Run it when you want
+it, or keep it up with main's stack as one more process:
+
+```yaml
+hydra-ui:
+  command: hydra ui --no-open
+```
 
 ### Watching
 

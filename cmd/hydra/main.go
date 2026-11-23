@@ -8,6 +8,7 @@
 //	hydra slots [free [PATH]]      list worktree slots, or free one
 //	hydra status [--all]           check this checkout against main's stack
 //	hydra update                   pull main and bring everything along
+//	hydra ui                       the same as a local web page
 package main
 
 import (
@@ -54,6 +55,9 @@ Hydra's own commands:
                                  --wait: first wait for what is still starting)
   hydra update [flags]           pull main, restart what the new commits touched
                                  in its stack, merge main into the worktrees
+  hydra ui [--port N] [--no-open]  a local web page of all of it: main, every
+                                 worktree, what each runs and takes from main,
+                                 commits, memory (default port 4937)
   hydra plan   [flags]           show what this checkout runs and how it is wired
   hydra render [flags] [-o FILE] print (or write) the rendered process-compose file
   hydra slots                    list worktree slots
@@ -105,6 +109,8 @@ func run(args []string) error {
 			return statusCmd(args[1:])
 		case "update":
 			return updateCmd(args[1:])
+		case "ui":
+			return uiCmd(args[1:])
 		case "watch":
 			return watchCmd(args[1:])
 		case "router":

@@ -1,0 +1,128 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/santiagotoscanini/hydra/internal/gitx"
+	"github.com/santiagotoscanini/hydra/internal/pc"
+	"github.com/santiagotoscanini/hydra/internal/plan"
+)
+
+func TestStatusPageIsServed(t *testing.T) {
+	u := newUI(gitx.Checkout{Root: "/repo/main", Main: "/repo/main"})
+	srv := httptest.NewServer(u.handler())
+	defer srv.Close()
+
+	resp, err := srv.Client().Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := make([]byte, 1<<20)
+	n, _ := resp.Body.Read(body)
+	resp.Body.Close()
+	if !strings.Contains(string(body[:n]), "<title>hydra</title>") {
+		t.Errorf("/ isn't the page: %.80q", body[:n])
+	}
+	// Another hydra finds out here whose page this is.
+	if got := uiRepoAt(strings.TrimPrefix(srv.URL, "http://")); got != "/repo/main" {
+		t.Errorf("uiRepoAt = %q", got)
+	}
+	if resp, _ := srv.Client().Get(srv.URL + "/nope"); resp.StatusCode != 404 {
+		t.Errorf("/nope = %d", resp.StatusCode)
+	}
+}
+
+func TestWhatThePageSaysAboutAWorktree(t *testing.T) {
+	st := checkSt(t)
+	mainT := &target{stack: st}
+	mainT.checkout.Root, mainT.checkout.Main = "/repo/main", "/repo/main"
+	ms := &mainState{target: mainT, Head: "abc", Branch: "main", Up: true, Client: pc.TCP("127.0.0.1", 1), Record: &baselineRecord{Commit: "abc"},
+		Procs: map[string]pc.Process{
+			"db": {Status: "Launched", IsReady: "Ready"}, "migrate": {Status: "Completed"}, "deps": {Status: "Completed"},
+			"api": {Status: "Running"}, "web": {Status: "Running"}, "mobile": {Status: "Disabled"},
+		}}
+	wtT := &target{stack: st}
+	wtT.checkout.Root, wtT.checkout.Main = "/repo/wt", "/repo/main"
+	build := func(slot int, up bool) uiWorktree {
+		t.Helper()
+		p, err := plan.Build(st, plan.Request{Slot: 1, Changed: []string{"api/users.go"}, MainChanged: []string{"web/page.tsx"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ws := &wtState{target: wtT, Name: "cart", Slot: slot, Plan: p, Client: pc.TCP("127.0.0.1", 1), Up: up}
+		if up {
+			ws.Procs = map[string]pc.Process{
+				"api": {Status: "Running", IsRunning: true, Pid: 42}, "deps": {Status: "Completed"},
+				"hydra-watch": {Status: "Running", IsRunning: true},
+			}
+		}
+		mem := func(pid int) int64 { return int64(pid) * 1000 }
+		return uiWorktreeOf(ms, "/repo/wt", &uiPlan{ws: ws, commit: "def", behind: 3, ahead: 1, at: time.Now()}, mem)
+	}
+	byName := func(w uiWorktree) map[string]uiService {
+		m := map[string]uiService{}
+		for _, s := range w.Services {
+			m[s.Name] = s
+		}
+		return m
+	}
+
+	// Its stack is up: the api runs here, web is main's copy at its port.
+	w := build(1, true)
+	svc := byName(w)
+	if a := svc["api"]; a.Runs != "here" || a.Port != 8180 || a.URL != "http://127.0.0.1:8180" || a.Health != "up" || a.Memory != 42000 {
+		t.Errorf("api = %+v", a)
+	}
+	if web := svc["web"]; web.Runs != "routed" || web.Port != 3100 || web.Health != "up" {
+		t.Errorf("web = %+v", web)
+	}
+	if db := svc["db"]; db.Runs != "main" || !db.Used || db.State != "ready" {
+		t.Errorf("db = %+v", db)
+	}
+	if m := svc["mobile"]; m.Runs != "main" || m.Used {
+		t.Errorf("mobile = %+v: nothing here uses it", m)
+	}
+	if w.Memory != 42000 || w.Behind != 3 || w.Branch != "cart" {
+		t.Errorf("worktree = %+v", w)
+	}
+	// main changed web since the branch left, and web serves this worktree.
+	if len(w.OutOfStep) != 1 || w.OutOfStep[0].Service != "web" {
+		t.Errorf("out of step = %+v", w.OutOfStep)
+	}
+	if len(w.Problems) == 0 || !w.Problems[0].Blocks {
+		t.Errorf("problems = %+v", w.Problems)
+	}
+
+	// It never ran: no slot, so no ports of its own to show.
+	w = build(0, false)
+	svc = byName(w)
+	if a := svc["api"]; a.Port != 0 || a.URL != "" || a.State != "not started" {
+		t.Errorf("api before a slot = %+v", a)
+	}
+	if web := svc["web"]; web.Port != 0 {
+		t.Errorf("web before a slot = %+v", web)
+	}
+	if db := svc["db"]; db.Port != 5432 {
+		t.Errorf("main's db keeps its port: %+v", db)
+	}
+
+	// The whole thing is what the page reads.
+	data, err := json.Marshal(uiSnapshot{Repo: "/repo/main", Main: uiMainOf(ms, func(int) int64 { return 0 }), Worktrees: []uiWorktree{w}})
+	if err != nil || !strings.Contains(string(data), `"outOfStep":[{"service":"web"`) {
+		t.Errorf("json: %v %s", err, data)
+	}
+}
+
+func TestMemoryCountsAProcessAndItsChildren(t *testing.T) {
+	if got := processTrees()(os.Getpid()); got <= 0 {
+		t.Errorf("this process holds %d bytes", got)
+	}
+	if got := processTrees()(0); got != 0 {
+		t.Errorf("pid 0 = %d", got)
+	}
+}

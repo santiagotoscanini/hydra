@@ -256,7 +256,11 @@ func updateMainStack(ms *mainState, to string, dry bool, timeout time.Duration) 
 				if b, was := before[p.Name]; !listed[p.Name] && (!was || b.StartTime != p.StartTime) &&
 					t.stack.Services[p.Name] != nil && mayRestart(t.stack, p.Name, p) {
 					listed[p.Name] = true
-					list = append(list, stale{Name: p.Name, Files: []string{"(its definition changed)"}})
+					reason := "(its definition changed)"
+					if !was {
+						reason = "(new in the stack file)"
+					}
+					list = append(list, stale{Name: p.Name, Files: []string{reason}})
 				}
 			}
 			sort.SliceStable(list, func(i, j int) bool { return list[i].Name < list[j].Name })

@@ -9,7 +9,7 @@ main checkout's copies of the rest. See `README.md` for what it does and
 
 | Path | What |
 |---|---|
-| `cmd/hydra/` | The CLI: the process-compose wrapper (`wrap.go`), `plan`/`render`/`slots`, the checks behind `hydra status` and `hydra up` (`check.go`, `status.go`), `hydra update` (`update.go`), and the processes hydra adds (`watch.go`, `router.go`, `prepare.go`) |
+| `cmd/hydra/` | The CLI: the process-compose wrapper (`wrap.go`), `plan`/`render`/`slots`, the checks behind `hydra status` and `hydra up` (`check.go`, `status.go`), the status page (`ui.go`, and `ui.html`, which is embedded in the binary), `hydra update` (`update.go`), and the processes hydra adds (`watch.go`, `router.go`, `prepare.go`) |
 | `internal/` | `config` (the `x-hydra` keys), `plan` (what runs where, and what is out of step with main), `render` (the generated file), `stack` (stacked worktrees), `router` + `routes` + `hook` (routed services), `pc` (process-compose's HTTP API), `slots`, `gitx`, `glob`, `changes` |
 | `examples/demo/` | Mock stacks and scripts that run hydra end to end (`run.sh`, `stack.sh`, `routed.sh`, `update.sh`) |
 | `site/` | The site at <https://hydra.toscanini.me>: static HTML, no build step, deployed by `.github/workflows/pages.yml` on push to `main` |
@@ -45,6 +45,9 @@ sample config it mirrors is the quick start in `site/docs/index.html`.
   status`, the checks before `hydra up`, and `hydra update`.
 - The site: open `site/index.html` in a browser, in light and dark, and at
   phone width; there must be no horizontal scroll.
+- The status page (`cmd/hydra/ui.html`): the same, with data. `update.sh`
+  reads its JSON; for the look, run `hydra ui` in a repository with a few
+  worktrees, some running and one behind main.
 
 ## Before touching a running stack
 

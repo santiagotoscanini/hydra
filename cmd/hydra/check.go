@@ -567,7 +567,7 @@ func localProblems(ms *mainState, ws *wtState) []problem {
 					Fix:  "hydra process start " + row.Name}
 				if p.Status == "Skipped" {
 					pr.Text = row.Name + " wasn't started here, because a process it waits for failed."
-					pr.Fix = "fix that one, then: hydra process start " + row.Name
+					pr.Fix = "hydra process start " + row.Name + "   (once what it waits for is fixed)"
 				}
 				out = append(out, pr)
 			}

@@ -192,7 +192,7 @@ worktrees
       <li>It runs the jobs again and restarts the services the pull touched, in order, waiting for each. A migration that fails stops it before the API restarts.</li>
       <li>It merges main into every worktree where the merge is clean. Conflicts and uncommitted work are left alone and listed.</li>
     </ol>
-    <p style="margin-top:14px">In between, hydra keeps watch. <code>hydra up</code> won't start a worktree whose branch and main disagree on a service it takes from main, or whose main isn't running. <code>hydra status</code> says what is wrong and which command fixes it.</p>
+    <p style="margin-top:14px">In between, hydra keeps watch. <code>hydra up</code> won't start a worktree whose branch and main disagree on a service it takes from main, or whose main isn't running. <code>hydra status</code> says what is wrong and which command fixes it, and <code>hydra ui</code> shows the same for every worktree as <a href="docs/#ui">a page in your browser</a>.</p>
     <p><a href="docs/#status">What is checked</a> · <a href="docs/#updating">How an update works</a></p>
   </div>
 </section>

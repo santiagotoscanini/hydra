@@ -14,6 +14,8 @@
 #  6. A change to the stack file itself reaches the running stack.
 #  7. With main's stack down, a worktree won't start.
 #
+# Along the way it reads the status page (`hydra ui`) for the same facts.
+#
 # Everything happens in a throwaway repo under $TMPDIR. Each step checks what
 # it printed, so this doubles as a test: it exits non-zero when one is off.
 set -euo pipefail
@@ -22,12 +24,14 @@ root="$(cd "$here/../.." && pwd)"
 (cd "$root" && go build -o bin/ ./cmd/...)
 H="$root/bin/hydra"
 pc_port=${PC_PORT:-8198} # main's process-compose server; 8099 may be yours
+ui_port=${UI_PORT:-4898} # the status page; 4937 may be yours
 unset PC_PORT_NUM PC_ADDRESS
 
 repo="$(mktemp -d "${TMPDIR:-/tmp}/hydra-update.XXXXXX")"
 repo="$(cd "$repo" && pwd -P)"
 main="$repo/main"
 cleanup() {
+  [ -n "${ui_pid:-}" ] && kill "$ui_pid" 2>/dev/null
   for wt in api web conflict dirty fresh; do
     (cd "$repo/$wt" 2>/dev/null && "$H" down >/dev/null 2>&1) || true
   done
@@ -75,6 +79,27 @@ echo "its web port: $(curl -s "localhost:$((21000 + slot * 100))" | python3 "$he
 run "$H" status --wait; echo "$out" | show
 [ "$status" -eq 0 ] || fail "status should be clean"
 expect "$out" 'ok: everything this worktree uses is up'
+
+# The same as a web page: `hydra ui` serves it, from any checkout.
+"$H" ui --no-open --port "$ui_port" >"$repo/ui.log" 2>&1 &
+ui_pid=$!
+wait_for "$ui_port"
+page="$(curl -s "localhost:$ui_port/api/status" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+wt = {w["branch"]: w for w in d["worktrees"]}["api"]
+svc = {s["name"]: s for s in wt["services"]}
+print("main up:", d["main"]["up"], "| processes:", len(d["main"]["processes"]))
+print("api worktree: slot", wt["slot"], "| up:", wt["up"], "| problems:", len(wt["problems"]))
+print("api runs", svc["api"]["runs"], "on", svc["api"]["port"], svc["api"]["state"], "| web is", svc["web"]["runs"], "on", svc["web"]["port"], "| db is", svc["db"]["runs"])
+')"
+echo "the status page says:"; echo "$page" | sed 's/^/  /'
+expect "$page" 'main up: True'
+expect "$page" "api worktree: slot $slot \| up: True \| problems: 0"
+expect "$page" "api runs here on $((21010 + slot * 100)) ready \| web is routed on $((21000 + slot * 100)) \| db is main"
+expect "$(curl -s "localhost:$ui_port/")" '<title>hydra</title>'
+run "$H" ui --no-open --port "$ui_port"   # a second one finds the first and steps aside
+expect "$out" 'already up at http://127.0.0.1:'"$ui_port"
 
 # More worktrees, in the states an update has to tell apart.
 cd "$main"

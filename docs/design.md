@@ -86,6 +86,28 @@ every routed service.
 `--all`, or `hydra status` in the main checkout, prints main's processes and
 one line per worktree without taking a slot for any of them.
 
+### The page
+
+`hydra ui` serves the same facts for every checkout at once as a local web
+page (127.0.0.1:4937; one page per repository, a second repository takes
+the next free port, and a second `hydra ui` for the same one opens the
+first). It is one HTML file inside the binary and one JSON endpoint,
+`/api/status`; it only reads.
+
+- Process states, and the memory each process holds with its children
+  (process-compose reports the process alone, which for a wrapped command is
+  the wrapper), are read on every request, at most once a second.
+- A worktree's plan needs git to walk its working tree for untracked files,
+  which is the expensive part with a dozen worktrees. Plans are cached and
+  worked out again in the background: every 10 seconds for a worktree whose
+  stack is up, every 90 otherwise, or all at once from the page's refresh
+  button. The page stops asking while its tab is hidden.
+- A worktree that never ran has no slot, so the page shows what it would
+  run without ports.
+
+It isn't part of the generated file. To have it up whenever main is, add it
+to the stack file as an ordinary process (`command: hydra ui --no-open`).
+
 ### In step with main
 
 Let B be the commit where the branch (or the bottom of its stack) left main,
@@ -178,8 +200,9 @@ checked out) are not parents: from ancestry alone a sibling looks the same as
 a parent that moved on. A branch made with `git checkout -b b2` while on b1
 records "Created from HEAD"; once b1 gets new commits, b2 needs `parent: b1`.
 
-Commands of its own: `hydra status` (is it all up and in step), `hydra
-update` (move main and bring everything along), `hydra plan` (what runs
+Commands of its own: `hydra status` (is it all up and in step), `hydra ui`
+(the same as a web page), `hydra update` (move main and bring everything
+along), `hydra plan` (what runs
 where, and why), `hydra render` (the generated file), `hydra slots` (which
 worktree has which slot).
 

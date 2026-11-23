@@ -281,6 +281,22 @@ web      main, routed  3400  ready
       <tr><td><code>--all</code></td><td>The main checkout's stack and one line per worktree: what it runs, whether its stack is up, where it stands against main. In the main checkout this is the default.</td></tr>
     </table></div>
     <p>The watcher runs two of these checks all the time. It writes to the worktree's log when main's stack stops answering and when the branch falls out of step with main.</p>
+    <h3 id="ui">In the browser</h3>
+    <p><code>hydra ui</code> opens a local page with the same facts for the main checkout and every worktree at once: which services each one runs and which it takes from main, their state, their ports as links, the memory each holds, the commit each is on, how far it is from main, and the problems with their fixes. The page keeps itself up to date and only reads.</p>
+    <figure class="shot"><img src="status-page.png" width="900" height="1262" loading="lazy" alt="The status page: the main checkout's processes with state, port and memory; then one card per worktree, with what runs there, what it takes from main, and a note that one branch is behind main in the api."></figure>
+    <div class="table"><table>
+      <tr><th>Flag</th><th>Meaning</th></tr>
+      <tr><td><code>--port N</code></td><td>Where it listens on 127.0.0.1. The default is 4937. A second repository's page takes the next free port; a second <code>hydra ui</code> for the same repository opens the first.</td></tr>
+      <tr><td><code>--no-open</code></td><td>Don't open the browser.</td></tr>
+    </table></div>
+    <p>Run it when you want it, from any checkout. To have it up whenever main's stack is, add it to the stack file as one more process:</p>
+    <div class="code">
+<pre data-lang="yaml">
+hydra-ui:
+  command: hydra ui --no-open
+</pre>
+    </div>
+    <p>Process states and memory are read every few seconds. What a worktree would run takes git a walk of its working tree, so that part is worked out again every 10 seconds while the worktree's stack is up and every 90 seconds otherwise; the page's refresh button does it at once.</p>
   </section>
 
   <section id="watching">
@@ -636,6 +652,7 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>hydra down</code></td><td>Stops this checkout's instance only.</td></tr>
       <tr><td><code>hydra process …</code></td><td>Any other process-compose command, sent to this checkout's instance.</td></tr>
       <tr><td><code>hydra status [--all] [--wait]</code></td><td>Says whether everything this checkout uses is up and <a href="#instep">in step with main</a>, and exits 1 if not. See <a href="#status">checking</a>.</td></tr>
+      <tr><td><code>hydra ui</code></td><td>Serves <a href="#ui">a local web page</a> with all of it: main, every worktree, what each runs and takes from main, commits, memory.</td></tr>
       <tr><td><code>hydra update</code></td><td>Pulls main, restarts what the new commits touched in its stack, and merges main into the worktrees. See <a href="#updating">updating main</a>.</td></tr>
       <tr><td><code>hydra plan</code></td><td>Shows what this checkout runs, on which ports, wired to what, and why.</td></tr>
       <tr><td><code>hydra render [-o FILE]</code></td><td>Prints or writes the generated process-compose file.</td></tr>
