@@ -186,13 +186,25 @@ func findParent(w Worktree, wts []Worktree, main string, opt Options) (*Worktree
 	if err != nil {
 		return nil, "", err
 	}
+	mbBase = strings.TrimSpace(mbBase)
+	// One git call names every branch whose tip w contains and that is past
+	// w's fork point: the only ones that can be its parent. Asking branch by
+	// branch cost a process per other worktree, for every worktree.
+	inside, err := git(w.Root, "for-each-ref", "--merged=HEAD", "--no-merged="+mbBase, "--format=%(refname)", "refs/heads/")
+	if err != nil {
+		return nil, "", err
+	}
+	past := map[string]bool{}
+	for _, ref := range strings.Fields(inside) {
+		past[strings.TrimPrefix(ref, "refs/heads/")] = true
+	}
 	var best []*Worktree
 	bestDepth := 0
 	candidates(func(c *Worktree) {
-		if !isAncestor(w.Root, c.Branch, "HEAD") || sameCommit(w.Root, c.Branch, "HEAD") {
-			return // not contained in w, or w has no commits of its own past it
+		if !past[c.Branch] || c.Head == w.Head {
+			return // not contained in w past its fork point, or w has no commits of its own past it
 		}
-		n, err := git(w.Root, "rev-list", "--count", strings.TrimSpace(mbBase)+".."+c.Branch)
+		n, err := git(w.Root, "rev-list", "--count", mbBase+".."+c.Branch)
 		if err != nil {
 			return
 		}
@@ -272,12 +284,6 @@ func createdFrom(w Worktree) string {
 
 func isAncestor(dir, a, b string) bool {
 	return exec.Command("git", "-C", dir, "merge-base", "--is-ancestor", a, b).Run() == nil
-}
-
-func sameCommit(dir, a, b string) bool {
-	x, err1 := git(dir, "rev-parse", a)
-	y, err2 := git(dir, "rev-parse", b)
-	return err1 == nil && err2 == nil && x == y
 }
 
 func canon(p string) string {
