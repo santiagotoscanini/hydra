@@ -197,6 +197,15 @@ func renderedPath(root string) string {
 	return filepath.Join(root, ".process-compose", "hydra.yaml")
 }
 
+// startedFromPath is the copy of the stack file the main checkout's running
+// stack was rendered from. hydra-router reads it, not the file itself: the
+// file can be ahead of what runs until `hydra update`, and the ports the
+// router listens on have to be the ones main's processes were given. A
+// dispatch port, say, moves with max_slots.
+func startedFromPath(root string) string {
+	return filepath.Join(root, ".process-compose", "hydra-source.yaml")
+}
+
 // sourceNames maps every service to itself: in the main checkout a process
 // runs the service of the same name.
 func sourceNames(st *config.Stack) map[string]string {

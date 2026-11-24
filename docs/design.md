@@ -616,6 +616,12 @@ browser -> :3400 (router, slot 2's port for web)      marks the request: X-Hydra
   (`hydra-router`). It opens a worktree's port for each routed service that
   worktree didn't change, and one port per service that routed services call.
   In the baseline, a routed service's HTTP upstreams point at those ports.
+  It reads the stack main's processes were rendered from, a copy kept in
+  `.process-compose/hydra-source.yaml` (written on `hydra up` in main and
+  after a `hydra update` reload), not the file itself: those ports sit one
+  stride past `max_slots`, so raising it in the file before `hydra update`
+  would move the router while main's web still calls the old ports, and
+  hand those to the worktree on the next slot.
 - **Each worktree publishes what it runs** in
   `<git common dir>/hydra-routes/slot-N.json`, on `hydra up` and on every
   watcher update. The router re-reads those files twice a second and only

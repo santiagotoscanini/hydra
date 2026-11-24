@@ -389,6 +389,10 @@ func reloadConfig(ms *mainState) (startedAgain []string, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// Now what runs is this file's: the router moves with it.
+	if err := writeFile(startedFromPath(t.checkout.Root), t.stack.Source); err != nil {
+		return nil, err
+	}
 	time.Sleep(500 * time.Millisecond)
 	after, err := ms.Client.Processes()
 	if err != nil {

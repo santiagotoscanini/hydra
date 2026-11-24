@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -54,7 +55,7 @@ func routerCmd(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	r := &router.Router{
-		Load: func() (*router.State, error) { return routerState(co.CommonDir, *file) },
+		Load: func() (*router.State, error) { return routerState(co.CommonDir, *file, startedFromPath(co.Root)) },
 		Logf: logf,
 	}
 	outliveOutput()
@@ -82,10 +83,15 @@ func routerCmd(args []string) error {
 	return err
 }
 
-// routerState is the stack file plus the routes of every worktree whose
-// process-compose server answers.
-func routerState(commonDir, file string) (*router.State, error) {
-	st, err := config.Load(file)
+// routerState is the stack main's processes were rendered from (startedFrom,
+// or file when main was started by a hydra that kept no copy) plus the
+// routes of every worktree whose process-compose server answers. Paths in
+// it are relative to file.
+func routerState(commonDir, file, startedFrom string) (*router.State, error) {
+	st, err := config.Load(startedFrom)
+	if errors.Is(err, os.ErrNotExist) {
+		st, err = config.Load(file)
+	}
 	if err != nil {
 		return nil, err
 	}

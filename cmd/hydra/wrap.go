@@ -308,6 +308,11 @@ func renderFor(co gitx.Checkout, file string, names []string, starting, force bo
 	if err := writeFile(out, data); err != nil {
 		return "", nil, err
 	}
+	if co.IsMain() {
+		if err := writeFile(startedFromPath(co.Root), t.stack.Source); err != nil {
+			return "", nil, err
+		}
+	}
 	if !co.IsMain() {
 		if err := publishRoutes(t, p); err != nil {
 			return "", nil, err

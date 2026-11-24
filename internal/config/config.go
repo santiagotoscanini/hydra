@@ -21,6 +21,7 @@ type Stack struct {
 	Hydra    Global
 	Services map[string]*Service
 	Raw      map[string]any
+	Source   []byte // the file as it was read
 }
 
 // Global is the top-level `x-hydra` block.
@@ -472,7 +473,7 @@ func Parse(data []byte) (*Stack, error) {
 		return nil, err
 	}
 
-	st := &Stack{Hydra: typed.Hydra, Services: map[string]*Service{}, Raw: raw}
+	st := &Stack{Hydra: typed.Hydra, Services: map[string]*Service{}, Raw: raw, Source: data}
 	g := &st.Hydra
 	if g.SlotStride == 0 {
 		g.SlotStride = 1000
