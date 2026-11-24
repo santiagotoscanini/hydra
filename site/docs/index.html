@@ -807,7 +807,7 @@ $ hydra down             # when the work is done
       <tr><td><code>command</code></td><td>Any hydra command ends: its arguments, where it ran, how long it took, its exit status and the error it printed.</td></tr>
       <tr><td><code>problem</code></td><td>A check shows a ✗ or a ! (<code>hydra status</code>, <code>hydra up</code>): its text and its fix.</td></tr>
       <tr><td><code>process</code></td><td>A process of a stack changes state: started, ready, exited, restarted, failed. With the last 30 lines of its output when it failed or restarted. Seen by the watcher in a worktree and by <code>hydra-router</code> in main, within two seconds.</td></tr>
-      <tr><td><code>usage</code></td><td>Once a minute for each stack that runs: the resident memory and CPU of each process and its children. Main's also records the machine's free memory and swap.</td></tr>
+      <tr><td><code>usage</code></td><td>Once a minute for each stack that runs: the resident memory and CPU of each process and its children, and of the checkout's native Supabase stack, which runs detached. Main's also records the machine's free memory and swap.</td></tr>
       <tr><td><code>slot</code></td><td>A worktree takes its slot on <code>hydra up</code>, or the slot of a stopped one.</td></tr>
       <tr><td><code>start</code>, <code>log</code></td><td>The watcher, the router or the status page starts; every line the watcher and the router print.</td></tr>
     </table></div>

@@ -20,13 +20,15 @@ const sampleEvery = time.Minute
 // seen, and once a minute what every process holds.
 type monitor struct {
 	client  *pc.Client
-	machine bool // also sample the machine (main's does, once for everyone)
+	root    string // the checkout whose stack this is
+	machine bool   // also sample the machine (main's does, once for everyone)
 	was     map[string]pc.Process
 	sampled time.Time
+	stacks  map[string]string // Supabase stack id -> its checkout, as the CLI said
 }
 
-func newMonitor(client *pc.Client, machine bool) *monitor {
-	return &monitor{client: client, machine: machine}
+func newMonitor(client *pc.Client, root string, machine bool) *monitor {
+	return &monitor{client: client, root: root, machine: machine}
 }
 
 // Processes is the client's, observed on the way.
@@ -108,6 +110,18 @@ func (m *monitor) sample(procs []pc.Process) {
 		mb += u.mb
 		cpu += u.cpu
 	}
+	// A native Supabase stack runs detached: process-compose's pid is the
+	// launcher's, long gone, and the stack's processes hang under a host
+	// process of the CLI's, named by the stack's id.
+	for id, host := range tree.supabaseHosts {
+		if m.stackRoot(id) != m.root {
+			continue
+		}
+		u := tree.sum(host)
+		per["supabase"] = map[string]any{"mb": round1(u.mb), "cpu": round1(u.cpu), "procs": u.n, "native_stack": id[:min(12, len(id))]}
+		mb += u.mb
+		cpu += u.cpu
+	}
 	f := journal.Fields{"mb": round1(mb), "cpu": round1(cpu), "procs": per}
 	if m.machine {
 		for k, v := range machineUsage() {
@@ -123,20 +137,27 @@ type psUsage struct {
 }
 
 type psTable struct {
-	kids map[int][]int
-	own  map[int]psUsage
+	kids          map[int][]int
+	own           map[int]psUsage
+	supabaseHosts map[string]int // stack id -> pid of the CLI process that hosts it
 }
 
 func psTree() *psTable {
-	out, err := exec.Command("ps", "-A", "-o", "pid=,ppid=,rss=,pcpu=").Output()
+	out, err := exec.Command("ps", "-A", "-o", "pid=,ppid=,rss=,pcpu=,args=").Output()
 	if err != nil {
 		return nil
 	}
-	t := &psTable{kids: map[int][]int{}, own: map[int]psUsage{}}
+	t := &psTable{kids: map[int][]int{}, own: map[int]psUsage{}, supabaseHosts: map[string]int{}}
 	for _, line := range strings.Split(string(out), "\n") {
 		f := strings.Fields(line)
-		if len(f) != 4 {
+		if len(f) < 5 {
 			continue
+		}
+		// supabase __supabase_stack_host__ STACKS_DIR CACHE_DIR STACK_ID
+		if len(f) >= 9 && f[5] == "__supabase_stack_host__" {
+			if pid, err := strconv.Atoi(f[0]); err == nil {
+				t.supabaseHosts[f[8]] = pid
+			}
 		}
 		pid, _ := strconv.Atoi(f[0])
 		ppid, _ := strconv.Atoi(f[1])
@@ -146,6 +167,28 @@ func psTree() *psTable {
 		t.own[pid] = psUsage{mb: kb / 1024, cpu: cpu, n: 1}
 	}
 	return t
+}
+
+// stackRoot is the checkout a Supabase stack belongs to. The CLI is asked
+// only about an id it hasn't named before.
+func (m *monitor) stackRoot(id string) string {
+	if root, ok := m.stacks[id]; ok {
+		return root
+	}
+	if m.stacks == nil {
+		m.stacks = map[string]string{}
+	}
+	stacks, err := supabaseStacks(supabaseCLI, "")
+	if err != nil {
+		return ""
+	}
+	for _, s := range stacks {
+		m.stacks[s.ID] = s.Root
+	}
+	if _, ok := m.stacks[id]; !ok {
+		m.stacks[id] = "" // unknown to the CLI: not asked again
+	}
+	return m.stacks[id]
 }
 
 func (t *psTable) sum(pid int) psUsage {

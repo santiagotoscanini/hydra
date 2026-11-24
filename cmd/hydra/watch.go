@@ -115,7 +115,7 @@ func watchCmd(args []string) error {
 	openJournalFor(t.checkout)
 	journal.Log("start", journal.Fields{"what": "watch"})
 	logf("watching %s every %s", describeStack(t), *interval)
-	mon := newMonitor(pc.Unix(sock), false)
+	mon := newMonitor(pc.Unix(sock), t.checkout.Root, false)
 	parent := os.Getppid()
 	var started roster // what process-compose runs here, as it last said
 	var (

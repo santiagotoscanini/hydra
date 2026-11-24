@@ -1037,7 +1037,9 @@ a JSON-lines file per local day, deleted after 30 days.
   when it failed or restarted, fetched while process-compose still has them.
 - **Usage once a minute** from the same loop: one `ps` for the machine,
   summed over each process's tree (`pnpm` and `go run` wrappers hold their
-  servers as children). Resident memory, not macOS's footprint, which takes
+  servers as children). A native Supabase stack runs detached, under a host
+  process of the CLI's named by the stack's id; the CLI says which checkout
+  an id belongs to, asked once per id. Resident memory, not macOS's footprint, which takes
   a call per process; it reads high for `next dev`, whose cache files are
   mapped, so the trend is what it is good for. Main's monitor adds the
   machine's free memory and swap, once for everyone. Main without a router

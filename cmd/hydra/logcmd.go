@@ -278,7 +278,7 @@ func writeReport(w io.Writer, co gitx.Checkout, recs []journal.Record, from time
 
 	p("## Versions\n\n")
 	p("- hydra %s\n", buildVersion())
-	p("- %s\n", firstLine(runOut(co.Main, 10*time.Second, "process-compose", "version", "--short"), "process-compose: not found"))
+	p("- process-compose %s\n", firstLine(runOut(co.Main, 10*time.Second, "process-compose", "version", "--short"), "not found"))
 	p("- %s %s, %s\n", runtime.GOOS, firstLine(runOut("", 5*time.Second, "sw_vers", "-productVersion"), "?"), runtime.GOARCH)
 	if mem := firstLine(runOut("", 5*time.Second, "sysctl", "-n", "hw.memsize"), ""); mem != "" {
 		if n, err := strconv.ParseFloat(mem, 64); err == nil {

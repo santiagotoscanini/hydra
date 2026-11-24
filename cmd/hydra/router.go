@@ -63,7 +63,7 @@ func routerCmd(args []string) error {
 	openJournalFor(co)
 	journal.Log("start", journal.Fields{"what": "router"})
 	logf("routing for %s", co.Root)
-	mon := newMonitor(mainClient(co.CommonDir), true)
+	mon := newMonitor(mainClient(co.CommonDir), co.Main, true)
 	var killed atomic.Bool // main's process-compose was, as opposed to asking this router to stop
 	go func(parent int) {
 		var started roster // what main's process-compose runs, as it last said
