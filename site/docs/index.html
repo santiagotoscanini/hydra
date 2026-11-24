@@ -942,7 +942,9 @@ const queue = globalThis.__hydra?.upstream('JOBS_QUEUE') ?? process.env.JOBS_QUE
     <div class="code">
 <pre data-lang="yaml">
 supabase:
-  command: supabase start
+  # A worktree's stack runs as plain processes (no Docker); an existing
+  # Docker one keeps its runtime, hence the fallback.
+  command: supabase start --runtime native || supabase start
   shutdown: { command: supabase stop }
   readiness_probe: { http_get: { host: 127.0.0.1, port: 54321, path: /rest/v1/ } }
   is_daemon: true
@@ -950,6 +952,8 @@ supabase:
     kind: supabase
     port: 54321               # the API (default)
     ports: { db: 54322 }      # the database (default: port + 1)
+    worktree_port: 40321      # slot N's API: 40321 + (N-1) × stride, below 49152
+    baseline_command: supabase start   # main's, as before
     paths: ["supabase/migrations/**", "supabase/seed/**", "supabase/config.toml"]
 
 api:
@@ -962,13 +966,14 @@ api:
     <ul>
       <li><b>When.</b> The branch changed a migration, a seed or the config. A branch that is only behind main's migrations keeps using main's database, and is told it is <a href="#instep">behind main</a>.</li>
       <li><b>What it is.</b> A Supabase CLI stack (stack mode, CLI 2.119 or later; 2.121 or later to move ports), on the slot's ports: the API on <code>port + slot × stride</code>, the database on <code>{port.db}</code>'s. The first start applies every migration and seed in the worktree (about 20 seconds on a large schema); later starts resume it in a couple of seconds and apply new migrations. An idle stack takes about 110 MB: services other than Postgres start on their first request.</li>
+      <li><b>Docker or not.</b> Without <code>--runtime</code>, the Supabase CLI runs a new stack in Docker whenever Docker answers: about ten containers inside Docker's VM, whose memory is capped (8 GiB by default on Colima), which fits about six worktree databases next to main's. <code>--runtime native</code> (macOS 14 or later on Apple silicon, or Linux) runs the same services as plain processes on the machine, with no VM. Measured in a large monorepo: a first start in 39 seconds (the Docker one took 81), a second stack in 21, a resume in 1; about 500–650 MB per stack once seeded, the same as in Docker. The CLI records the runtime when it creates a stack and keeps it, so <code>supabase start</code> resumes a native stack natively, and an existing Docker stack refuses <code>--runtime native</code>: the <code>|| supabase start</code> above resumes it in Docker instead.</li>
       <li><b>Who follows it.</b> Anything that reaches it through a value a proxy can't route, such as a database URL, runs in the worktree too.</li>
       <li><b>Who waits for it.</b> A database answers before it is usable: a new one is still applying migrations and seeds, a resumed one the migrations the branch gained since. So every service here that reads it starts only after hydra has started it and applied every migration. They wait for a step named <code>hydra-ready-supabase</code>, which ends at that moment, instead of for the database's own readiness probe; until then they show as <code>pending</code>. This holds for <code>hydra up</code> and for a migration added to a worktree whose services already run. If the database fails to start, <code>hydra status</code> names it; fix it, <code>hydra process restart supabase</code>, and what was waiting starts by itself.</li>
       <li><b>Migrations added while it runs</b> are applied within a couple of seconds. One that fails is an error in <code>hydra status</code>, with what the Supabase CLI said, until the file is corrected.</li>
       <li><b>Data.</b> A worktree's database starts from the seed files, not from main's data. It keeps its data across <code>hydra down</code> and <code>hydra up</code>, and is deleted when the worktree is <a href="#cleanup">removed</a>.</li>
       <li><b>Typing <code>supabase</code> commands.</b> hydra writes the stack's settings to a block in the worktree's root <code>.env.local</code>, which the CLI reads from the directory it runs in. <code>supabase db reset</code> at the worktree's root then resets the worktree's database, not main's. Run from a subdirectory, the CLI doesn't read it. hydra never writes through a symlinked <code>.env.local</code>, and refuses to write into one that git tracks.</li>
       <li><b>Files the CLI writes.</b> It adds lines to <code>supabase/.gitignore</code> and writes <code>supabase/supabase.lock</code> on every start. hydra undoes the first when it is all that changed and ignores the rest through <code>.git/info/exclude</code>, so the worktree shows no changes it didn't make.</li>
-      <li><b>Ports.</b> A stack also takes the ports from <code>port − 2</code> to <code>port + 8</code> in each slot, and none of them may fall in 10000–19999, which the CLI keeps for itself. With the API on 54321, keep <code>slot_stride × max_slots</code> under 11,000.</li>
+      <li><b>Ports.</b> A stack also takes the ports from <code>port − 2</code> to <code>port + 8</code> in each slot, and none of them may fall in 10000–19999, which the CLI keeps for itself. From 54321, a few slots in, they reach 49152 and up, where macOS picks the local port of every outgoing connection: a busy browser can hold one at the moment the stack binds it, and the start fails. <code>worktree_port</code> moves every worktree's stack below that: slot N listens on <code>worktree_port + (N − 1) × slot_stride</code>, while main keeps <code>port</code>.</li>
     </ul>
     <h3>When the branch is renamed or switched</h3>
     <p>The Supabase CLI keeps one stack per directory <em>and branch</em>. Rename a worktree's branch, or check out another one in it, and the CLI's own commands no longer find the stack that is running. hydra goes by the directory, so nothing breaks:</p>
@@ -1139,6 +1144,7 @@ api:
       <tr><td><code>port</code><span class="type">integer</span></td><td class="def">none</td><td>The port main's copy listens on. Leave it out for services that don't listen, such as workers.</td></tr>
       <tr><td><code>port_env</code><span class="type">string</span></td><td class="def">stack's</td><td>The variable this service reads its port from.</td></tr>
       <tr><td><code>ports</code><span class="type">map</span></td><td class="def">{}</td><td>More ports of the same service by name, such as <code>{ db: 54322 }</code>. Shifted per slot like <code>port</code>, and reached as <code>{port.db}</code>.</td></tr>
+      <tr><td><code>worktree_port</code><span class="type">integer</span></td><td class="def">none</td><td>Where the service's ports start in worktrees: slot N listens on <code>worktree_port + (N − 1) × slot_stride</code> instead of <code>port + N × slot_stride</code>, and its named ports move with it. Main keeps <code>port</code>. For a high base port whose worktree copies would reach 49152 and up, where macOS picks ports for outgoing connections: Supabase's 54321, say.</td></tr>
       <tr><td><code>paths</code><span class="type">list of globs</span></td><td class="def">[]</td><td>Files that belong to the service, relative to the repository root. A change to one makes the service run in the worktree. In the main checkout, <a href="#updating"><code>hydra update</code></a> restarts the process when a pull changes one, so jobs list theirs too.</td></tr>
       <tr><td><code>upstreams</code><span class="type">map</span></td><td class="def">{}</td><td>Environment variable → the service it points at. Write <code>API_URL: api</code>, or <code>API_PORT: { service: api, value: "{port}" }</code> to change what the variable receives. A service may point at itself. On a routed service, <code>per_request: true</code> marks a value the app picks per request. <code>baseline_value</code> replaces <code>value</code> for the main checkout's copy alone, and may use <code>{tls}</code>.</td></tr>
       <tr><td><code>url</code><span class="type">string</span></td><td class="def">http://{host}:{port}</td><td>What an upstream variable pointing at this service receives. It doesn't have to be a URL.</td></tr>

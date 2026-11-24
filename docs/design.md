@@ -362,6 +362,7 @@ processes:
     x-hydra:
       kind: supabase              # a stack of its own where the schema differs (see Kinds)
       ports: { db: 54322 }        # more ports, shifted per slot, reached as {port.db}
+      worktree_port: 40321        # worktrees' ports start here, out of macOS's ephemeral range
       paths: ["supabase/migrations/**", "supabase/seed/**"]
   redis:
     x-hydra: { shared: true }     # always baseline; warns when its paths change
@@ -559,6 +560,18 @@ baseline's, so only URLs differ.
 
 New kinds (SQS queues, Redis key prefixes) go in the same table.
 
+The runtime is the stack file's choice, not hydra's: `command: supabase
+start --runtime native || supabase start` with `baseline_command: supabase
+start`. Native runs the stack's services as processes on the host (macOS 14+
+on Apple silicon, Linux), so worktree databases aren't bound by Docker's VM
+(8 GiB on Colima, about six stacks next to main's). Measured in the
+monorepo: first start 39 s against Docker's 81, a second stack 21 s, resume
+1 s, 500-650 MB a stack once seeding is done; stop, resume with data, and
+`stack destroy` by id behave as with Docker, and `stack list` reports the
+same `project_root`, so the reap needs nothing new. The CLI fixes a stack's
+runtime at creation and refuses another later, hence the fallback, which
+resumes an existing Docker stack.
+
 ## Routed services
 
 A routed service has one copy, the baseline's, for every worktree that didn't
@@ -704,6 +717,13 @@ another program may sit on one, which `hydra status` then names.
 A slot stays taken until it is released. An entry whose worktree is gone
 is not dropped on sight, as it once was: whatever that worktree ran may
 still hold the slot's ports.
+
+`worktree_port` on a service moves its worktree ports to another base:
+slot N listens on `worktree_port + (N-1)*slot_stride`, named ports and a
+Supabase stack's own with it (one function, `Stack.Shift`, computes every
+port). From Supabase's 54321 with a stride of 200, slot 4 and up reach
+49152, macOS's ephemeral range, where any outgoing connection may hold the
+port at the moment a stack binds it.
 
 Only a start takes a slot. `hydra plan`, `render`, `status` and the page
 peek: the slot the worktree has, or the lowest free one, recorded nowhere.

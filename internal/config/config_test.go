@@ -166,6 +166,53 @@ processes:
 	}
 }
 
+// worktree_port moves a service's worktree ports to another base, named
+// ports and a Supabase stack's own with it; main keeps its port.
+func TestWorktreePortMovesEveryWorktreePort(t *testing.T) {
+	st, err := Parse([]byte(`
+x-hydra: { slot_stride: 200, max_slots: 20 }
+processes:
+  supabase: { command: x, x-hydra: { kind: supabase, port: 54321, ports: { db: 54322 }, worktree_port: 40321 } }
+  api: { command: x, x-hydra: { port: 8080 } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sb := st.Services["supabase"]
+	for slot, want := range map[int]map[string]int{
+		0:  {"": 54321, "db": 54322},
+		1:  {"": 40321, "db": 40322, "studio": 40323},
+		20: {"": 44121, "db": 44122, "studio": 44123},
+	} {
+		got := st.SlotPorts(sb, slot)
+		for k, v := range want {
+			if got[k] != v {
+				t.Errorf("slot %d port %q = %d, want %d", slot, k, got[k], v)
+			}
+		}
+	}
+	env := strings.Join(st.SupabaseEnv(sb, 2), " ")
+	for _, want := range []string{"SUPABASE_API_PORT=40521", "SUPABASE_DB_PORT=40522"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("env lacks %s: %s", want, env)
+		}
+	}
+	if got := st.SlotPorts(st.Services["api"], 2)[""]; got != 8480 {
+		t.Errorf("api in slot 2 = %d, want 8480 (no worktree_port)", got)
+	}
+
+	// The moved ports are checked like any others.
+	_, err = Parse([]byte(`
+x-hydra: { slot_stride: 200, max_slots: 20 }
+processes:
+  supabase: { command: x, x-hydra: { kind: supabase, port: 54321, worktree_port: 40321 } }
+  other: { command: x, x-hydra: { port: 41128 } }
+`))
+	if err == nil || !strings.Contains(err.Error(), "collides") {
+		t.Errorf("a collision with a moved port: got %v", err)
+	}
+}
+
 func TestTLSFronts(t *testing.T) {
 	st, err := Parse([]byte(`
 x-hydra: { slot_stride: 100, max_slots: 5 }

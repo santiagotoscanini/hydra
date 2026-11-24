@@ -466,6 +466,7 @@ supabase:
   x-hydra:
     kind: supabase        # a worktree whose schema differs gets its own Supabase
     ports: { db: 54322 }  # reached as {port.db}; the API is on port (54321)
+    worktree_port: 40321  # worktrees' stacks below 49152 (slot N: 40321 + (N-1) × stride)
     paths: ["supabase/migrations/**", "supabase/seed/**", "supabase/config.toml"]
 ```
 
@@ -476,7 +477,11 @@ files, and everything that reads that database runs in the worktree too,
 starting only once the database has every migration (a `hydra-ready-…`
 step ends then; a migration that fails later shows in `hydra status`).
 Every other worktree shares main's, and one that is behind main's migrations
-is told to update, like for any other service. An idle stack takes about
+is told to update, like for any other service. With `command: supabase start
+--runtime native || supabase start` (and `baseline_command: supabase start`
+for main) a worktree's stack runs as plain processes instead of Docker
+containers, free of Docker's VM memory cap; it starts in about 20-40 seconds
+and takes about 500-650 MB. An idle stack takes about
 110 MB. It keeps its data across `hydra down` and `hydra up`, and is
 destroyed when the worktree is removed.
 

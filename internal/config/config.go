@@ -159,6 +159,11 @@ type Service struct {
 	// Ports are further ports of the same service, by name, shifted per slot
 	// like Port. Upstream values reach them as {port.NAME}.
 	Ports map[string]int `yaml:"ports"`
+	// WorktreePort, when set, is Port in slot 1: slot N listens on
+	// WorktreePort + (N-1)*SlotStride instead of Port + N*SlotStride, and its
+	// named ports move with it. It keeps a high base port (Supabase's 54321)
+	// out of the range macOS hands out to outgoing connections (49152+).
+	WorktreePort int `yaml:"worktree_port"`
 	// PortEnv overrides Global.PortEnv for this service.
 	PortEnv string `yaml:"port_env"`
 	// Paths (globs, relative to the repo root) whose changes mean this
@@ -299,13 +304,21 @@ func (st *Stack) Dispatched() []string {
 	return out
 }
 
+// Shift is how far s's ports in slot are from its baseline ports.
+func (st *Stack) Shift(s *Service, slot int) int {
+	if slot > 0 && s.WorktreePort != 0 && s.Port != 0 {
+		return s.WorktreePort - s.Port + (slot-1)*st.Hydra.SlotStride
+	}
+	return slot * st.Hydra.SlotStride
+}
+
 // SlotPorts lists every port s listens on in a slot, keyed by name ("" for
 // Port): its named ports, and in a worktree the rest of a Supabase stack's.
 func (st *Stack) SlotPorts(s *Service, slot int) map[string]int {
 	if s.Port == 0 {
 		return nil
 	}
-	shift := slot * st.Hydra.SlotStride
+	shift := st.Shift(s, slot)
 	out := map[string]int{"": s.Port + shift}
 	for name, p := range s.Ports {
 		out[name] = p + shift
@@ -325,7 +338,7 @@ func (st *Stack) SlotPorts(s *Service, slot int) map[string]int {
 // version stack mode supports (it rejects any other).
 func (st *Stack) SupabaseEnv(s *Service, slot int) []string {
 	env := []string{"SUPABASE_EXPERIMENTAL_STACK=1", "SUPABASE_EDGE_RUNTIME_DENO_VERSION=2"}
-	shift := slot * st.Hydra.SlotStride
+	shift := st.Shift(s, slot)
 	for _, sp := range SupabasePorts {
 		p := s.Port + sp.Offset
 		if sp.Name != "" {

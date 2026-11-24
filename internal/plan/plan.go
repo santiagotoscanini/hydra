@@ -177,7 +177,7 @@ func Port(st *config.Stack, s *config.Service, slot int) int {
 	if s.Port == 0 {
 		return 0
 	}
-	return s.Port + slot*st.Hydra.SlotStride
+	return s.Port + st.Shift(s, slot)
 }
 
 // Value renders what an env var pointing at service s receives in a slot.
@@ -206,7 +206,7 @@ func expandPort(st *config.Stack, s *config.Service, port, slot int, tmpl, value
 		"{value}", value,
 	}
 	for name, p := range s.Ports {
-		pairs = append(pairs, "{port."+name+"}", strconv.Itoa(p+slot*st.Hydra.SlotStride))
+		pairs = append(pairs, "{port."+name+"}", strconv.Itoa(p+st.Shift(s, slot)))
 	}
 	if s.TLS != nil {
 		pairs = append(pairs, "{tls}", strconv.Itoa(s.TLS.Port)) // the baseline's front; config keeps it out of worktree values
