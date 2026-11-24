@@ -24,7 +24,8 @@ import (
 //
 //	hydra prepare supabase --before      before the stack file's start command
 //	hydra prepare supabase --started N   after it; N is its exit status
-//	hydra prepare supabase --stopped     after the stack file's stop command
+//	hydra prepare supabase --stopping    before the stack file's stop command
+//	hydra prepare supabase --stopped     after it
 //
 // and two more come from elsewhere:
 //
@@ -48,20 +49,34 @@ import (
 //   - after a stop, it stops whatever stack of this directory still runs.
 //
 // It refuses to run without stack mode: without it, the CLI would reach the
-// main checkout's database.
+// main checkout's database. And it refuses to run anywhere but in a
+// worktree. A folder that was one and no longer is (it was removed with its
+// stack up, and git couldn't delete all of it) is still the directory these
+// commands run in, and both git and the Supabase CLI then answer for
+// whatever lies above it: for a worktree kept inside the main checkout, the
+// main checkout. `--stopping` is that check on its own: when it fails, the
+// rendered stop leaves out the stack file's command, and the stack is
+// stopped by its id (reap).
 func prepareSupabase(args []string) error {
 	fs := flag.NewFlagSet("prepare supabase", flag.ContinueOnError)
 	before := fs.Bool("before", false, "")
+	stopping := fs.Bool("stopping", false, "")
 	stopped := fs.Bool("stopped", false, "")
 	started := fs.Int("started", 0, "")
 	ready := fs.Bool("ready", false, "")
 	migrate := fs.Bool("migrate", false, "")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
-		return fmt.Errorf("usage: hydra prepare supabase [--before | --started STATUS | --stopped | --ready | --migrate] (run by the processes hydra renders)")
+		return fmt.Errorf("usage: hydra prepare supabase [--before | --started STATUS | --stopping | --stopped | --ready | --migrate] (run by the processes hydra renders)")
 	}
 	co, err := gitx.Find(".")
 	if err != nil {
-		return err
+		return fmt.Errorf("prepare supabase: this directory is not a worktree (was it removed?), so nothing here is touched: %w", err)
+	}
+	if co.IsMain() {
+		return fmt.Errorf("prepare supabase: this directory belongs to the main checkout, not to a worktree (was the worktree removed?); not touching the main checkout's database")
+	}
+	if *stopping {
+		return nil
 	}
 	if *ready {
 		return waitPrepared(co.Root, os.Getenv("HYDRA_SERVICE"), os.Getppid())

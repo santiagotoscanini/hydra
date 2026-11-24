@@ -279,10 +279,16 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 						k, v, _ := strings.Cut(kv, "=")
 						exports = append(exports, k+"="+shellQuote(v))
 					}
-					// After the stack file's stop, hydra stops what is left of
-					// this directory's stacks: the CLI's own stop misses one
-					// that was made before the branch was renamed.
-					c["command"] = "export " + strings.Join(exports, " ") + "\n" + strings.TrimRight(cmd, "\n") + "\n" + shellQuote(exe) + " prepare supabase --stopped"
+					// The stack file's stop finds its stack by the directory it
+					// runs in, so it only runs while that is still a worktree
+					// (--stopping). A removed one can leave a folder behind in
+					// which the CLI would look further up, at the baseline's.
+					// After the stop, hydra stops what is left of this
+					// directory's stacks: the CLI's own stop misses one that
+					// was made before the branch was renamed.
+					hydra := shellQuote(exe) + " prepare supabase"
+					c["command"] = "export " + strings.Join(exports, " ") + "\n" + hydra + " --stopping || exit 0\n" +
+						strings.TrimRight(cmd, "\n") + "\n" + hydra + " --stopped"
 					proc["shutdown"] = c
 				}
 			}

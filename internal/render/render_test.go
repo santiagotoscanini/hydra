@@ -214,10 +214,12 @@ processes:
 		}
 	}
 	// The stop names the stack itself: run without that environment, it
-	// would stop the baseline's Supabase. hydra's step follows it, for a
-	// stack the CLI's own stop no longer finds.
+	// would stop the baseline's Supabase. The stack file's stop goes by the
+	// directory, so it only runs while that is still a worktree; hydra's
+	// step follows it, for a stack the CLI's own stop no longer finds.
 	stop, _ := sb.Shutdown["command"].(string)
-	if !strings.HasPrefix(stop, "export SUPABASE_EXPERIMENTAL_STACK='1' ") || !strings.Contains(stop, "SUPABASE_API_PORT='54521'") || !strings.HasSuffix(stop, "\nsupabase stop\n'/bin/hydra' prepare supabase --stopped") {
+	if !strings.HasPrefix(stop, "export SUPABASE_EXPERIMENTAL_STACK='1' ") || !strings.Contains(stop, "SUPABASE_API_PORT='54521'") ||
+		!strings.HasSuffix(stop, "\n'/bin/hydra' prepare supabase --stopping || exit 0\nsupabase stop\n'/bin/hydra' prepare supabase --stopped") {
 		t.Errorf("shutdown command = %q", stop)
 	}
 	if sb.Shutdown["timeout_seconds"] != 60 {

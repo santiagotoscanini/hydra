@@ -480,7 +480,9 @@ and data. Rendering adds to the worktree's process:
   its own). It refuses to run without stack mode, which would reach main's
   database.
 - The shutdown command exports the same environment itself (a `supabase
-  stop` without it stops the baseline's Supabase), and is followed by
+  stop` without it stops the baseline's Supabase). The stack file's command
+  runs between `hydra prepare supabase --stopping`, which skips it when the
+  directory is no longer a worktree (see Removed worktrees), and
   `hydra prepare supabase --stopped`.
 
 **hydra goes by the directory, not by the CLI's idea of the current
@@ -687,34 +689,99 @@ every slot up to `max_slots` are checked against each other and
 `reserved_ports` when the config loads. They are computed, not probed:
 another program may sit on one, which `hydra status` then names.
 
-A slot stays taken until it is released. An entry whose directory is gone
+A slot stays taken until it is released. An entry whose worktree is gone
 is not dropped on sight, as it once was: whatever that worktree ran may
 still hold the slot's ports.
 
 ## Removed worktrees
 
-Nothing tells hydra that a worktree was removed: git has no hook for it,
-and tools that manage worktrees delete the directory. A worktree removed
-with its stack up used to leave process-compose and its services running
-with no directory under them, on ports the freed slot handed to the next
-worktree, and its Supabase stack's containers and data for good. Now:
+Nothing tells hydra that a worktree was removed: git has no hook for it.
+A worktree removed with its stack up used to leave process-compose and its
+services running, on ports the freed slot handed to the next worktree, and
+its Supabase stack's containers and data for good.
 
-- **The stack stops itself.** `hydra-watch` checks on every tick that its
-  worktree's directory exists. When it doesn't, it destroys the Supabase
-  stacks made for that directory and runs `process-compose down` on its own
-  project, which is the last thing it does. (process-compose's own shutdown
-  commands fail there, having no directory to run in.)
+**The folder usually stays.** `git worktree remove` deletes the files and
+then forgets the worktree, whatever became of the files. A running stack
+writes into the folder meanwhile (logs, build output, caches), and git gives
+up at the first directory that isn't empty after it emptied it:
+`error: failed to delete '…': Directory not empty`. What is left is one of
+two things, depending on where git stopped:
+
+- a folder holding only what was written after git passed, with no `.git`;
+- most of the checkout, with a `.git` file naming a git directory that is
+  gone.
+
+So "the directory is gone" is the wrong test, and was hydra's first one: the
+stack of such a worktree ran on for good. A slot's worktree counts as
+removed when its `.git` is missing, or is a file whose `gitdir:` doesn't
+exist (`slots.Removed`). That is two `stat`s and a read, cheap enough to
+ask four times a second.
+
+**A folder without `.git` inside the main checkout is the dangerous one.**
+git answers for the nearest repository above a directory, so every git
+command run in what is left of `main/.claude/worktrees/x` speaks for the
+main checkout: its root, its branch, and for hydra its plan, which is the
+whole stack on main's ports. Three things keep a stack that still runs
+there from acting on that:
+
+- the watcher checks for the removal before each look and again before it
+  applies anything, and refuses a look in which git names another root than
+  the one it was started in;
+- `hydra prepare supabase` refuses to run in the main checkout, in every
+  mode;
+- the rendered stop of a worktree's database runs the stack file's own stop
+  command (`supabase stop`, which finds its stack by directory) only after
+  `hydra prepare supabase --stopping` has confirmed that the directory is
+  still a worktree. Otherwise the stack is stopped by its id.
+
+**What git says decides what is destroyed.** A `.git` that is missing has
+two causes that look the same from inside the folder: git is removing the
+worktree, or someone deleted the file. Only the first is a removal, and the
+second can be mended (`git worktree repair`). So there are three states:
+
+| State | Test | What happens |
+|---|---|---|
+| present | `.git` is there and leads somewhere | nothing |
+| leaving | not present, and `git worktree list` still has it | the stack is stopped; slot, database and files are kept |
+| removed | not present, and git no longer lists it | below |
+
+`git worktree remove` forgets the worktree last, so a worktree in the
+middle of a removal is `leaving` for as long as git takes to delete it.
+
+Now:
+
+- **The stack stops itself, and the folder goes.** `hydra-watch` checks at
+  the top of each tick, and every 250 ms while it sleeps, whether its
+  worktree is still one. When it isn't, it starts `hydra reap ROOT` from the
+  main checkout, in a session of its own, and exits: the watcher is one of
+  the processes the stop ends, so it can't see the job through itself.
+  `hydra reap` runs `process-compose down`, waits for git to be done (up to
+  five minutes: deleting a large checkout takes a while), then destroys the
+  Supabase stacks made for that directory, deletes the folder, removes the
+  routes file and the socket, and releases the slot. It deletes all of the
+  folder, because its caller saw the worktree removed under a running
+  stack: what is left is what git was told to delete and gave up on.
 - **The next start finishes the job.** `hydra up` (any checkout, before it
   takes a slot), `hydra update` and `hydra down --worktrees` go through the
-  slots whose directory is gone: stop the stack if its socket still answers
-  (the socket's path is derived from the worktree's path, so it can be
-  found without the worktree), destroy its Supabase stacks, remove its
-  routes file and socket, and only then release the slot. A step that
-  fails leaves the slot taken, with a warning, and the next start tries
-  again.
+  slots of removed worktrees and do the same, with two differences. They
+  don't wait for git: a worktree that is `leaving` is looked at again by the
+  next start. And from the folder they delete only what hydra wrote
+  (`.process-compose/`, its block in `.env.local`, the Supabase CLI's empty
+  temporary directory), then the folder if that empties it. A folder found
+  later may have another story (a volume that was away while git pruned the
+  worktree comes back with every file and a dead `.git`), so anything else
+  in it is named, not deleted. A step that fails leaves the slot taken,
+  with a warning, and the next start tries again.
+- **One at a time.** The watcher's reap and a `hydra up` elsewhere, or two
+  of those, may come for the same worktree. An flock next to the worktree's
+  socket (`hydra-<hash>.reap`) makes it one process's job: a start that
+  finds it taken leaves that worktree alone.
+- **The stop comes before the database.** process-compose's own stop of the
+  database does nothing in a folder that is no longer a worktree (above), so
+  the stacks are dealt with afterwards, by id, which needs no directory.
 - **`hydra slots free PATH`** does the same for one worktree, removed or
-  not. For one that is still there, the Supabase stack is stopped, not
-  destroyed.
+  not. For one that is still there, or that git still lists, the Supabase
+  stack is stopped, not destroyed, and no file is touched.
 - **Temporal** needs no cleanup at removal: the namespace is replaced when
   the slot's next worktree prepares it (see Kinds), which also works when
   Temporal was down at the time of the removal.

@@ -4,11 +4,10 @@
 // The registry is one JSON file in the repository's shared .git directory,
 // guarded by an flock, so every worktree of a repo sees the same one.
 //
-// A slot stays taken until it is released. An entry whose directory is gone
-// is a worktree that was removed, and it may have left a stack running on
-// that slot's ports: the caller cleans up after it and then releases the
-// slot (see Gone), so the ports are never handed on while something still
-// holds them.
+// A slot stays taken until it is released. An entry whose folder is no longer
+// a worktree (see Removed) may have left a stack running on that slot's
+// ports: the caller cleans up after it and then releases the slot (see
+// Gone), so the ports are never handed on while something still holds them.
 package slots
 
 import (
@@ -18,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 )
 
@@ -84,8 +84,8 @@ func List(commonDir string) ([]Entry, error) {
 	return out, err
 }
 
-// Gone returns the entries whose directory no longer exists: worktrees that
-// were removed and still hold their slot.
+// Gone returns the entries whose worktree was removed and that still hold
+// their slot.
 func Gone(commonDir string) ([]Entry, error) {
 	all, err := List(commonDir)
 	var out []Entry
@@ -97,9 +97,37 @@ func Gone(commonDir string) ([]Entry, error) {
 	return out, err
 }
 
-// Missing reports whether the entry's worktree directory is gone.
-func (e Entry) Missing() bool {
-	_, err := os.Stat(e.Root)
+// Missing reports whether the entry's worktree was removed.
+func (e Entry) Missing() bool { return Removed(e.Root) }
+
+// Removed reports whether the folder at root has stopped being a git
+// worktree: its `.git` is gone, or names a git directory that is gone.
+//
+// Whether the folder exists doesn't say. git forgets a worktree even when
+// it can't delete all of it, and one removed while its stack runs often
+// can't be deleted: what is left is a folder with a few new files in it, or
+// most of the checkout with a `.git` that leads nowhere.
+func Removed(root string) bool {
+	dotGit := filepath.Join(root, ".git")
+	info, err := os.Stat(dotGit)
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if err != nil || info.IsDir() {
+		return false // can't tell, or a checkout of its own
+	}
+	data, err := os.ReadFile(dotGit)
+	if err != nil {
+		return false
+	}
+	dir, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
+	if !ok {
+		return false
+	}
+	if dir = strings.TrimSpace(dir); !filepath.IsAbs(dir) {
+		dir = filepath.Join(root, dir)
+	}
+	_, err = os.Stat(dir)
 	return errors.Is(err, os.ErrNotExist)
 }
 

@@ -309,14 +309,22 @@ every worktree's stack and leaves main's running: a stack costs memory for
 as long as it is up, and nothing stops an idle one for you.
 
 A worktree can be removed without stopping anything first, with
-`git worktree remove` or by the tool that manages your worktrees:
+`git worktree remove` or by the tool that manages your worktrees. Its
+watcher notices within a second, and a few seconds later:
 
-- Its stack stops by itself: the worktree's watcher notices within seconds
-  that its directory is gone.
-- A Supabase stack of its own is destroyed with it.
-- Its slot is freed by the next `hydra up` in any checkout (or the next
-  `hydra update`), after checking that nothing of the removed worktree still
-  answers. Ports are never handed on while something holds them.
+- Its stack has stopped.
+- A Supabase stack of its own is destroyed.
+- Its folder is gone. With a stack up, git often can't delete all of it:
+  the stack writes there while git deletes, and git gives up with
+  `error: failed to delete '…': Directory not empty`, forgetting the
+  worktree anyway. hydra deletes what git left.
+- Its slot is free, once nothing of the worktree answers any more. Ports
+  are never handed on while something holds them.
+
+When no stack ran there, only the slot is left, and the next `hydra up` in
+any checkout (or `hydra update`) frees it. The same start stops a stack
+whose watcher wasn't running; from the folder it then only deletes hydra's
+own files, and names the folder if anything else is left in it.
 
 If a stack's process-compose is killed, its services live on and keep their
 ports. hydra's own processes (the watcher, the router) notice and exit, and

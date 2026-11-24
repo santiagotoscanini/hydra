@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -55,7 +56,7 @@ the worktree takes from it. hydra up --force starts anyway. Starting a stack
 that is already up changes nothing and is not an error.
 
 A worktree that is removed while its stack runs stops that stack by itself,
-and the next start in any checkout frees its slot.
+deletes what git left of its folder and frees its slot.
 
 Hydra's own commands:
   hydra status [--all] [--wait]  is everything this checkout uses up and in step
@@ -147,6 +148,8 @@ func run(args []string) error {
 			return routerCmd(args[1:])
 		case "prepare":
 			return prepareCmd(args[1:])
+		case "reap":
+			return reapCmd(args[1:])
 		}
 	}
 	return wrap(args)
@@ -434,11 +437,14 @@ func slotsCmd(args []string) error {
 			// Freeing a slot hands its ports on, so first stop what holds
 			// them. A worktree that is still there keeps its database
 			// (stopped); a removed one loses it.
-			did, err := reap(co, e)
+			r, err := reap(co, e, reaping{patience: 10 * time.Second, anyway: true})
 			if err != nil {
 				return fmt.Errorf("slot %d stays taken: %w", e.Slot, err)
 			}
-			fmt.Printf("slot %d is free%s\n", e.Slot, andDid(did))
+			fmt.Printf("slot %d is free%s\n", e.Slot, andDid(r.did))
+			if r.left {
+				fmt.Println(leftNote(e.Root))
+			}
 			return nil
 		}
 		return fmt.Errorf("%s holds no slot (`hydra slots` lists them)", root)

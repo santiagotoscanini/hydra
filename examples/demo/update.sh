@@ -17,10 +17,12 @@
 #  8. Starting a stack that is up is not an error, and `hydra up NAME` adds
 #     a process to it. `hydra status --wait` gives up on a process that never
 #     gets ready, and says so. A worktree removed with its stack up stops by
-#     itself, and its slot goes to the next worktree only after that.
+#     itself, frees its slot and leaves no folder behind, also when it lay
+#     inside the main checkout and git left a folder there.
 #  9. What an edit adds to a stack that is up starts in order: a service
 #     after the step it needs first, and after the service it waits for,
-#     also when that one only just moved into the worktree.
+#     also when that one only just moved into the worktree. Then git gives
+#     up halfway through removing that worktree, and hydra finishes the job.
 # 10. A process-compose that is killed leaves its services holding their
 #     ports; `hydra status` names the one in the way.
 # 11. With main's stack down, a worktree won't start.
@@ -65,6 +67,20 @@ refuse() { # text pattern: the command must have exited non-zero
   expect "$1" "$2"
 }
 run() { set +e; out="$("$@" 2>&1)"; status=$?; set -e; }
+holder() { # the process listening on a port, and the one that started it
+  local pid; pid="$(lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1)"
+  [ -n "$pid" ] && ps -o pid=,ppid=,command= -p "$pid" -p "$(ps -o ppid= -p "$pid" | tr -d ' ')" 2>/dev/null | tr '\n' ';'
+}
+# A removed worktree is cleaned up after when its folder is gone and its slot
+# is free. hydra does that by itself, a moment after the removal.
+cleaned() {
+  local taken; taken="$(cd "$main" && "$H" slots)" # not piped into grep -q: with pipefail, a match would read as a failure
+  [ ! -e "$1" ] && ! grep -qF " $1" <<<"$taken"
+}
+wait_cleaned() {
+  for _ in $(seq 300); do cleaned "$1" && return 0; sleep 0.1; done
+  fail "$1 was removed, and after 30s its folder or its slot is still there:"$'\n'"$(ls -A "$1" 2>&1; cd "$main" && "$H" slots)"
+}
 wait_for() { for _ in $(seq 100); do curl -sf "localhost:$1" >/dev/null 2>&1 && return 0; sleep 0.1; done; fail "nothing answered on :$1"; }
 
 # origin, the main checkout, and a clone that stands in for teammates.
@@ -73,7 +89,7 @@ g clone -q "$repo/origin.git" "$main" 2>/dev/null
 cd "$main"
 git config commit.gpgsign false; git config user.name demo; git config user.email demo@example.com
 sed "s#command: bin/mocksvc#command: $repo/bin/mocksvc#" "$here/update.yaml" >process-compose.yaml
-printf '.process-compose/\n' >.gitignore
+printf '.process-compose/\n.wt/\n' >.gitignore
 put README; put lock.txt v1; put db/migrations/001.sql; put apps/api/users.go; put apps/web/page.tsx
 g add -A; g commit -qm init; g push -q origin main
 g clone -q "$repo/origin.git" "$repo/team" 2>/dev/null
@@ -254,12 +270,26 @@ refuse "$out" 'stuck here is still starting, after waiting 3s'
 slot=$("$H" slots | awk '$1=="*"{print $2}')
 api_port=$((21010 + slot * 100))
 # Removed with its stack up, the way a tool that manages worktrees does it.
-cd "$main"; g worktree remove --force "$repo/api"
-for _ in $(seq 150); do curl -sf "localhost:$api_port" >/dev/null 2>&1 || break; sleep 0.1; done
-curl -sf "localhost:$api_port" >/dev/null 2>&1 && fail "the removed worktree's api still answers on :$api_port"
-echo "the removed worktree's stack stopped by itself; its slot is held until the next start:"
-run "$H" slots; echo "$out" | sed 's/(removed.*/(removed; ...)/' | show
-expect "$out" " $slot +$repo/api +\(removed"
+# git may give up before the folder is empty: the stack still writes there.
+cd "$main"; g worktree remove --force "$repo/api" 2>/dev/null || true
+wait_cleaned "$repo/api"
+curl -sf "localhost:$api_port" >/dev/null 2>&1 && fail "the removed worktree's api still answers on :$api_port: $(holder "$api_port")"
+echo "the removed worktree's stack stopped by itself, and its slot is free again:"
+run "$H" slots; echo "$out" | show
+# The same for a worktree kept inside the main checkout, of which git left a
+# folder without its .git. git takes that folder for a part of main now, and
+# nothing that still runs there may act on that.
+g worktree add -q -b inner "$main/.wt/inner" main
+cd "$main/.wt/inner"; put apps/api/inner.go
+run "$H" up -D -L "$repo/inner.log"; [ "$status" -eq 0 ] || fail "inner should start: $out"
+run "$H" status --wait; [ "$status" -eq 0 ] || fail "inner should be up: $out"
+inner_port=$((21010 + $("$H" slots | awk '$1=="*"{print $2}') * 100))
+cd "$main"; rm -rf "$main/.wt/inner/.git" "$main/.wt/inner/apps/web" "$main/.git/worktrees/inner"
+wait_cleaned "$main/.wt/inner"
+curl -sf "localhost:$inner_port" >/dev/null 2>&1 && fail "the api of the worktree inside main still answers on :$inner_port: $(holder "$inner_port")"
+run "$H" status; [ "$status" -eq 0 ] || fail "main's stack should be as it was: $out"
+grep -q hydra-router "$repo/inner.log" && fail "the removed worktree's stack was handed main's processes: $(grep hydra-router "$repo/inner.log" | head -3)"
+echo "so did the stack of a worktree inside main, of which git had left a folder"
 cd "$repo/web"
 g merge -q main # steps 5 to 7 moved main without the worktrees
 run "$H" up -D -L "$repo/web.log"; echo "$out" | grep '^hydra' | show
@@ -297,7 +327,11 @@ expect "$out" 'api +here +[0-9]+ +ready'
 expect "$out" 'ask-a +here +- +running'
 expect "$out" 'ask-b +here +- +running'
 expect "$out" 'ask-c +here +- +running'
-"$H" down >/dev/null 2>&1
+# With all of that running, git gives up halfway through removing the
+# worktree: it forgets it, and leaves most of the folder, .git file and all.
+rm -rf "$main/.git/worktrees/order" "$repo/order/apps/web"
+wait_cleaned "$repo/order"
+echo "removed halfway by git with seven services up: hydra stopped them and deleted the rest"
 
 echo
 echo "--- 10. process-compose is killed, and its services live on"

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -18,6 +17,7 @@ import (
 	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/plan"
 	"github.com/santiagotoscanini/hydra/internal/render"
+	"github.com/santiagotoscanini/hydra/internal/slots"
 )
 
 // watchCommand is the command line of the hydra-watch process for t. It must
@@ -110,9 +110,9 @@ func watchCmd(args []string) error {
 			logf("the process-compose that started this watcher is gone; stopping")
 			return nil
 		}
-		if _, err := os.Stat(t.checkout.Root); errors.Is(err, os.ErrNotExist) {
+		if slots.Removed(t.checkout.Root) {
 			// The worktree was removed with its stack still up. Nothing here
-			// can work without its directory, and the ports belong to the
+			// can work without its checkout, and the ports belong to the
 			// slot's next worktree.
 			stopGone(t)
 			return nil
@@ -123,9 +123,16 @@ func watchCmd(args []string) error {
 		if *once {
 			return nil
 		}
-		time.Sleep(*interval)
+		// Look for the removal more often than for changes: every file this
+		// stack writes while git deletes the worktree is one git can't delete
+		// the directory for, and the watcher's own are among them.
+		for waited := time.Duration(0); waited < *interval && !slots.Removed(t.checkout.Root); waited += goneCheck {
+			time.Sleep(min(goneCheck, *interval-waited))
+		}
 	}
 }
+
+const goneCheck = 250 * time.Millisecond
 
 // orphaned reports whether the process that started this one is gone.
 // process-compose starts the watcher and the router; when it is killed they
@@ -139,6 +146,13 @@ func step(t *target, o options, cmd, out, sock string) error {
 	if err != nil {
 		return err
 	}
+	// A worktree removed under its running stack can leave its folder behind
+	// without the `.git` that made it one. git then answers for whatever
+	// repository lies above the folder, and for a worktree kept inside the
+	// main checkout that is the main checkout, whose plan is the whole stack.
+	if fresh.checkout.Root != t.checkout.Root {
+		return fmt.Errorf("%s is no longer a worktree: git finds %s there", t.checkout.Root, fresh.checkout.Root)
+	}
 	*t = *fresh
 	p, err := t.build(o)
 	if err != nil {
@@ -148,6 +162,11 @@ func step(t *target, o options, cmd, out, sock string) error {
 	data, err := t.render(p, cmd)
 	if err != nil {
 		return err
+	}
+	if slots.Removed(t.checkout.Root) {
+		// It was removed while this looked: what git said on the way can't
+		// be trusted, and nothing more is written into the folder.
+		return fmt.Errorf("%s was removed", t.checkout.Root)
 	}
 	// Before the update: the router has to release the port of a routed
 	// service that is about to start here.

@@ -162,7 +162,7 @@ $ git ls-files --others --exclude-standard
     <p style="margin-top:18px">Services that point at it are restarted with the new address. Further edits to a service that already runs here are left to its own reload, like <code>next dev</code> or <code>air</code>.</p>
     <p>It asks git instead of watching the file system because only git knows whether a file differs from <code>main</code>. A revert has to stop the service, and <code>node_modules</code> must not start one. It reads git without taking the index lock, so it stays out of the way of an agent's commits.</p>
     <p>Stacked branches work too: each branch is compared with its parent, and each service runs from the worktree of the branch that changed it. <a href="docs/#stacks">How a stack is found</a>.</p>
-    <p>A worktree that is removed takes its stack with it. The watcher notices that its directory is gone and stops everything that ran there, and the ports go to the next worktree only after that. <a href="docs/#cleanup">Stopping and cleaning up</a>.</p>
+    <p>A worktree that is removed takes its stack with it. The watcher notices, stops everything that ran there and deletes what git couldn't, and the ports go to the next worktree only after that. <a href="docs/#cleanup">Stopping and cleaning up</a>.</p>
   </div>
 </section>
 
