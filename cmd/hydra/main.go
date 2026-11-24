@@ -86,7 +86,7 @@ Hydra's own commands:
   hydra throttle NAME N -- CMD   run CMD once fewer than N commands named NAME
                                  run on this machine (for a service's build step,
                                  so many worktrees starting together take turns)
-  hydra version                 which hydra this is, and which process-compose
+  hydra version                  which hydra this is, and which process-compose
 
 Flags for update:
   -n, --dry-run    say what would happen, change nothing
