@@ -57,11 +57,11 @@ sample config it mirrors is the quick start in `site/docs/index.html`.
   with its watcher, and then removed) and `hydra down --worktrees`.
 - CI (`.github/workflows/test.yml`) runs the tests and all five demos on
   every push to `main`.
-- What needs Docker isn't covered by either: a worktree's own Supabase
-  (`cmd/hydra/supabase.go`, `reap.go`). After a change there, run a real
-  stack in a throwaway project under the home directory (Colima only
-  mounts that) on ports below 49152, rename its branch, and remove its
-  worktree; `supabase stack list --output-format json` shows what is left.
+- What needs the Supabase CLI isn't covered by either: a worktree's own
+  Supabase (`cmd/hydra/supabase.go`, `reap.go`). After a change there, run
+  a real stack in a throwaway project under the home directory on ports
+  below 49152, rename its branch, and remove its worktree; `supabase stack
+  list --output-format json` shows what is left.
 - The site: open `site/index.html` in a browser, in light and dark, and at
   phone width; there must be no horizontal scroll.
 - The status page (`cmd/hydra/ui.html`): the same, with data. `update.sh`
