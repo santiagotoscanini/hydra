@@ -304,6 +304,11 @@ func renderFor(co gitx.Checkout, file string, names []string, starting, force bo
 		if err := syncEnvLocal(t, p); err != nil {
 			return "", nil, err
 		}
+		if starting {
+			// The stack is about to start, and its own database with it: what
+			// an earlier run left behind says nothing about this one.
+			forgetPrepared(t, p, nil, nil)
+		}
 	}
 	if p.Slot > 0 {
 		fmt.Fprintf(os.Stderr, "hydra: slot %d, running here: %s\n", p.Slot, strings.Join(orNone(p.Local()), ", "))

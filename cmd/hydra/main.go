@@ -60,7 +60,9 @@ and the next start in any checkout frees its slot.
 Hydra's own commands:
   hydra status [--all] [--wait]  is everything this checkout uses up and in step
                                  with main? (exit 1 if not; --all: every worktree;
-                                 --wait: first wait for what is still starting)
+                                 --wait: first wait for what is still starting,
+                                 for at most --timeout D, 10m by default; what is
+                                 still starting then is an error)
   hydra update [flags]           pull main, restart what the new commits touched
                                  in its stack, merge main into the worktrees
   hydra ui [--port N] [--no-open]  a local web page of all of it: main, every

@@ -15,11 +15,15 @@
 #     with the rest when a pull touches its files.
 #  7. A change to the stack file itself reaches the running stack.
 #  8. Starting a stack that is up is not an error, and `hydra up NAME` adds
-#     a process to it. A worktree removed with its stack up stops by itself,
-#     and its slot goes to the next worktree only after that.
-#  9. A process-compose that is killed leaves its services holding their
+#     a process to it. `hydra status --wait` gives up on a process that never
+#     gets ready, and says so. A worktree removed with its stack up stops by
+#     itself, and its slot goes to the next worktree only after that.
+#  9. What an edit adds to a stack that is up starts in order: a service
+#     after the step it needs first, and after the service it waits for,
+#     also when that one only just moved into the worktree.
+# 10. A process-compose that is killed leaves its services holding their
 #     ports; `hydra status` names the one in the way.
-# 10. With main's stack down, a worktree won't start.
+# 11. With main's stack down, a worktree won't start.
 #
 # Along the way it reads the status page (`hydra ui`) for the same facts.
 #
@@ -41,7 +45,7 @@ main="$repo/main"
 H="$repo/bin/hydra"
 cleanup() {
   [ -n "${ui_pid:-}" ] && kill "$ui_pid" 2>/dev/null
-  for wt in api web conflict dirty fresh; do
+  for wt in api web conflict dirty fresh order; do
     (cd "$repo/$wt" 2>/dev/null && "$H" down >/dev/null 2>&1) || true
   done
   (cd "$main" 2>/dev/null && "$H" down -p "$pc_port" >/dev/null 2>&1) || true
@@ -243,6 +247,10 @@ run "$H" up seed; echo "$out" | grep '^hydra' | show # off by default, and not c
 [ "$status" -eq 0 ] || fail "hydra up seed: $out"
 expect "$out" 'hydra: seed runs here'
 run "$H" status --wait; expect "$out" 'seed +here +- +running'
+# A process that never gets ready: the wait ends, and not with "ok".
+run "$H" up stuck; expect "$out" 'hydra: (started stuck here|stuck runs here)'
+run "$H" status --wait --timeout 3s; echo "$out" | grep -E '^(✗|!)' | show
+refuse "$out" 'stuck here is still starting, after waiting 3s'
 slot=$("$H" slots | awk '$1=="*"{print $2}')
 api_port=$((21010 + slot * 100))
 # Removed with its stack up, the way a tool that manages worktrees does it.
@@ -262,7 +270,38 @@ grep -q removed <<<"$out" && fail "the removed worktree still holds a slot: $out
 run "$H" status --wait; [ "$status" -eq 0 ] || fail "web should be up: $out"
 
 echo
-echo "--- 9. process-compose is killed, and its services live on"
+echo "--- 9. what an edit adds to a running stack starts in order"
+# process-compose starts what an update adds or changes in no order of its
+# own, and a process whose dependency isn't in the project yet doesn't wait
+# for it. hydra hands the new file over in dependency order instead.
+cd "$main"; g worktree add -q -b order "$repo/order" main
+cd "$repo/order"
+put apps/ask/client.go
+run "$H" up -D -L "$repo/order.log"; echo "$out" | grep '^hydra' | show
+[ "$status" -eq 0 ] || fail "order should start: $out"
+run "$H" status --wait; [ "$status" -eq 0 ] || fail "ask-* should be up on main's api: $out"
+# One edit adds three services and the step each needs first: six processes,
+# and none of the services starts before its step ended.
+put apps/jobs/queue.go
+run "$H" status --wait; echo "$out" | grep -E '^(jobs|✗)' | show
+[ "$status" -eq 0 ] || fail "the services with a prepare step should be up: $out"
+expect "$out" 'jobs-a +here +- +running'
+expect "$out" 'jobs-b +here +- +running'
+expect "$out" 'jobs-c +here +- +running'
+# One more brings the api here. What waits for it is restarted on the new
+# api's address, and only once that api is up.
+put apps/api/local.go
+run "$H" status --wait; echo "$out" | grep -E '^(api|ask|✗|ok)' | show
+[ "$status" -eq 0 ] || fail "ask-* should have waited for the api that moved here: $out"
+expect "$out" 'api +here +[0-9]+ +ready'
+expect "$out" 'ask-a +here +- +running'
+expect "$out" 'ask-b +here +- +running'
+expect "$out" 'ask-c +here +- +running'
+"$H" down >/dev/null 2>&1
+
+echo
+echo "--- 10. process-compose is killed, and its services live on"
+cd "$repo/web"
 kill -9 "$(pgrep -f "process-compose up -f $repo/web/" | head -1)"
 sleep 1
 run "$H" up -D -L "$repo/web.log"; [ "$status" -eq 0 ] || fail "web should start again: $out"
@@ -275,7 +314,7 @@ run "$H" status --wait; echo "$out" | tail -1 | show
 [ "$status" -eq 0 ] || fail "web should be up after the fix: $out"
 
 echo
-echo "--- 10. main's stack goes down"
+echo "--- 11. main's stack goes down"
 (cd "$main" && "$H" down -p "$pc_port" >/dev/null 2>&1)
 cd "$repo/dirty"
 run "$H" up -D -L "$repo/dirty.log"; echo "$out" | show

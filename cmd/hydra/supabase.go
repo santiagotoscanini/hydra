@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/gitx"
@@ -24,6 +25,14 @@ import (
 //	hydra prepare supabase --before      before the stack file's start command
 //	hydra prepare supabase --started N   after it; N is its exit status
 //	hydra prepare supabase --stopped     after the stack file's stop command
+//
+// and two more come from elsewhere:
+//
+//	hydra prepare supabase --ready       the step that what reads the database
+//	                                     waits for: it ends once the database
+//	                                     is started and migrated
+//	hydra prepare supabase --migrate     the watcher's, when migration files
+//	                                     change while the stack runs
 //
 // The Supabase CLI names a stack after the directory and the branch checked
 // out in it. A worktree whose branch is renamed or switched therefore has a
@@ -45,19 +54,29 @@ func prepareSupabase(args []string) error {
 	before := fs.Bool("before", false, "")
 	stopped := fs.Bool("stopped", false, "")
 	started := fs.Int("started", 0, "")
+	ready := fs.Bool("ready", false, "")
+	migrate := fs.Bool("migrate", false, "")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
-		return fmt.Errorf("usage: hydra prepare supabase [--before | --started STATUS | --stopped] (run by the rendered supabase process)")
-	}
-	if os.Getenv("SUPABASE_EXPERIMENTAL_STACK") != "1" {
-		return fmt.Errorf("prepare supabase: SUPABASE_EXPERIMENTAL_STACK isn't 1, so the Supabase CLI would reach the main checkout's database; not touching it")
+		return fmt.Errorf("usage: hydra prepare supabase [--before | --started STATUS | --stopped | --ready | --migrate] (run by the processes hydra renders)")
 	}
 	co, err := gitx.Find(".")
 	if err != nil {
 		return err
 	}
+	if *ready {
+		return waitPrepared(co.Root, os.Getenv("HYDRA_SERVICE"), os.Getppid())
+	}
+	if os.Getenv("SUPABASE_EXPERIMENTAL_STACK") != "1" {
+		return fmt.Errorf("prepare supabase: SUPABASE_EXPERIMENTAL_STACK isn't 1, so the Supabase CLI would reach the main checkout's database; not touching it")
+	}
 	branch := branchContext(co.Root)
 	switch {
 	case *before:
+		// Whatever this start ends in, the database isn't ready until it does.
+		// And it applies every migration itself: what the watcher couldn't
+		// apply to the stack that ran before is this start's to say.
+		os.Remove(supabaseMarker(co.Root))
+		os.Remove(migrationsFailed(co.Root))
 		n, err := retireSupabase(co.Root, branch, false)
 		if n > 0 {
 			fmt.Printf("hydra: stopped the Supabase stack this worktree had for another branch; the one for %s starts now (the other keeps its data until the worktree is removed)\n", strings.TrimPrefix(branch, "refs/heads/"))
@@ -65,6 +84,7 @@ func prepareSupabase(args []string) error {
 		return err
 	case *stopped:
 		os.Remove(supabaseMarker(co.Root))
+		os.Remove(migrationsFailed(co.Root))
 		_, err := retireSupabase(co.Root, "", false)
 		return err
 	}
@@ -91,8 +111,47 @@ func prepareSupabase(args []string) error {
 	if err != nil {
 		return fmt.Errorf("supabase migration up: %w", err)
 	}
+	if *migrate {
+		// The stack was started for the branch it was started for: a rename
+		// since then is still worth saying (see supabaseBranchNote).
+		return nil
+	}
 	return writeFile(supabaseMarker(co.Root), []byte(branch+"\n"))
 }
+
+// waitPrepared returns once the worktree's own database is started and
+// migrated: the rendered Supabase process removes the marker before each
+// start and writes it after a start that worked and applied every migration.
+// It waits for as long as that takes. When the start fails, `hydra status`
+// names the database as the problem; once that is fixed and it is started
+// again, what waits here goes on without another command.
+//
+// parent is the process-compose that started this step: when it is gone,
+// nothing is left to wait for.
+func waitPrepared(root, name string, parent int) error {
+	if name == "" {
+		name = "supabase"
+	}
+	marker := supabaseMarker(root)
+	began := time.Now()
+	for said := false; ; time.Sleep(preparedPoll) {
+		if _, err := os.Stat(marker); err == nil {
+			if said {
+				fmt.Printf("hydra: this worktree's database is ready (%s)\n", time.Since(began).Round(time.Second))
+			}
+			return nil
+		}
+		if orphaned(parent) {
+			return fmt.Errorf("the process-compose that started this step is gone")
+		}
+		if !said {
+			said = true
+			fmt.Printf("hydra: waiting for %s to start this worktree's database and apply its migrations; what reads the database starts after that\n", name)
+		}
+	}
+}
+
+var preparedPoll = 300 * time.Millisecond
 
 // supabaseDBURL is the address of this worktree's own database: the slot's
 // port, with the Supabase CLI's local credentials.
@@ -114,11 +173,33 @@ func branchContext(root string) string {
 	return ref
 }
 
-// supabaseMarker records the branch a worktree's running Supabase stack was
+// supabaseMarker is there while a worktree's own Supabase stack is started
+// and migrated: written after a start that worked, removed before the next
+// one, after a stop, and when the worktree's stack starts. What reads the
+// database waits for it (waitPrepared). It holds the branch the stack was
 // started for, so `hydra status` can tell when the branch has since been
 // renamed or switched.
 func supabaseMarker(root string) string {
 	return filepath.Join(root, ".process-compose", "supabase-branch")
+}
+
+// migrationsProblem is the problem to report when migrations didn't apply to
+// a worktree's running database: the services here then run against a
+// database that lacks what the branch's files describe.
+func migrationsProblem(root, name string) *problem {
+	data, err := os.ReadFile(migrationsFailed(root))
+	if err != nil {
+		return nil
+	}
+	text := name + " here: the migrations in supabase/migrations didn't all apply to this worktree's database. The Supabase CLI said:"
+	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if r := []rune(l); len(r) > 160 {
+			l = string(r[:159]) + "…"
+		}
+		text += "\n    | " + l
+	}
+	return &problem{Blocks: true, Text: text,
+		Fix: "correct the migration file: hydra applies it when the file changes   (to rebuild this worktree's database from the files, losing its data: supabase db reset, typed at this worktree's root)"}
 }
 
 // supabaseBranchNote is the problem to report when a worktree's Supabase

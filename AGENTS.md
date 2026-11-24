@@ -52,8 +52,8 @@ sample config it mirrors is the quick start in `site/docs/index.html`.
   after itself. `tls.sh` uses a CA of its own (`HYDRA_TLS_DIR`), never the
   user's. `update.sh` checks what every step printed and exits non-zero
   when one is off: it is the end-to-end test of `hydra status`, the checks
-  before `hydra up`, `hydra update`, a second start, a removed worktree and
-  a killed process-compose.
+  before `hydra up`, `hydra update`, a second start, the order in which an
+  update starts things, a removed worktree and a killed process-compose.
 - CI (`.github/workflows/test.yml`) runs the tests and all five demos on
   every push to `main`.
 - What needs Docker isn't covered by either: a worktree's own Supabase

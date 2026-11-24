@@ -445,3 +445,130 @@ func TestAWorktreeAlwaysHasAWatchWhenTheStackUsesOne(t *testing.T) {
 		t.Error("a stack without a watch should not get one")
 	}
 }
+
+// A worktree's own database answers before its migrations are in. What reads
+// it waits for hydra's step, which ends when they are, instead of for the
+// database's own readiness.
+func TestWhatReadsAWorktreesOwnDatabaseWaitsForItToBeMigrated(t *testing.T) {
+	st, err := config.Parse([]byte(`
+x-hydra: { slot_stride: 200 }
+processes:
+  supabase:
+    command: supabase start
+    is_daemon: true
+    readiness_probe: { http_get: { host: 127.0.0.1, port: 54321, path: /rest/v1/ } }
+    x-hydra: { kind: supabase, port: 54321, ports: { db: 54322 }, paths: ["supabase/**"] }
+  temporal:
+    command: temporal server start-dev
+    readiness_probe: { http_get: { host: 127.0.0.1, port: 8233, path: / } }
+    x-hydra: { shared: true }
+  api:
+    command: ./api
+    depends_on:
+      supabase: { condition: process_healthy }
+      temporal: { condition: process_healthy }
+    x-hydra:
+      port: 8080
+      paths: ["api/**"]
+      upstreams:
+        DB_URL: { service: supabase, value: "postgresql://{host}:{port.db}/postgres" }
+  worker:
+    command: ./worker
+    depends_on:
+      supabase: { condition: process_healthy }
+      temporal: { condition: process_healthy }
+    x-hydra:
+      kind: temporal
+      paths: ["api/**"]
+      upstreams:
+        DB_URL: { service: supabase, value: "postgresql://{host}:{port.db}/postgres" }
+  reader:
+    command: ./reader
+    x-hydra:
+      paths: ["reader/**"]
+      upstreams:
+        DB_URL: { service: supabase, value: "postgresql://{host}:{port.db}/postgres" }
+  docs:
+    command: ./docs
+    x-hydra: { port: 4000, paths: ["docs/**"] }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Hydra.Exe = "/bin/hydra"
+	type procs map[string]struct {
+		Command    string                    `yaml:"command"`
+		WorkingDir string                    `yaml:"working_dir"`
+		Namespace  string                    `yaml:"namespace"`
+		DependsOn  map[string]map[string]any `yaml:"depends_on"`
+	}
+	render := func(p *plan.Plan) procs {
+		t.Helper()
+		out, err := Render(st, p, Options{Dir: "/wt"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Processes procs `yaml:"processes"`
+		}
+		if err := yaml.Unmarshal(out, &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc.Processes
+	}
+
+	p, err := plan.Build(st, plan.Request{Slot: 1, Changed: []string{"supabase/migrations/1.sql", "docs/a.md"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := render(p)
+	step := got["hydra-ready-supabase"]
+	if step.Command != "exec '/bin/hydra' prepare supabase --ready" || step.WorkingDir != "/wt" || step.Namespace != "hydra" || len(step.DependsOn) != 0 {
+		t.Fatalf("the step = %+v", step)
+	}
+	// api and worker waited for supabase; reader only reads it. All three
+	// wait for the step now, and none for supabase itself.
+	for _, name := range []string{"api", "worker", "reader"} {
+		deps := got[name].DependsOn
+		if deps["hydra-ready-supabase"]["condition"] != "process_completed_successfully" {
+			t.Errorf("%s doesn't wait for the step: %v", name, deps)
+		}
+		if _, still := deps["supabase"]; still {
+			t.Errorf("%s still waits for supabase's own readiness: %v", name, deps)
+		}
+	}
+	// What else they wait for is as it was.
+	if got["api"].DependsOn["temporal"]["condition"] != "process_healthy" {
+		t.Errorf("api lost temporal: %v", got["api"].DependsOn)
+	}
+	// The step that makes the worker's Temporal namespace needs Temporal,
+	// not the database.
+	if deps := got["hydra-prepare-worker"].DependsOn; len(deps) != 1 || deps["temporal"] == nil {
+		t.Errorf("hydra-prepare-worker waits for %v", deps)
+	}
+	// A service that doesn't read the database waits for nothing new.
+	if len(got["docs"].DependsOn) != 0 {
+		t.Errorf("docs waits for %v", got["docs"].DependsOn)
+	}
+	if deps := got["supabase"].DependsOn; len(deps) != 0 {
+		t.Errorf("supabase waits for %v", deps)
+	}
+
+	// With main's database there is no step: its readiness is the stand-in's.
+	p, err = plan.Build(st, plan.Request{Slot: 1, Changed: []string{"api/main.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = render(p)
+	if _, has := got["hydra-ready-supabase"]; has {
+		t.Error("a step for a database that isn't this worktree's")
+	}
+	if got["api"].DependsOn["supabase"]["condition"] != "process_healthy" || got["supabase"].Namespace != "main" {
+		t.Errorf("api = %v, supabase = %+v", got["api"].DependsOn, got["supabase"])
+	}
+
+	// Nor in main.
+	if base := render(plan.BaselinePlan(st)); base["api"].DependsOn["supabase"] == nil || len(base["hydra-ready-supabase"].Command) != 0 {
+		t.Errorf("main's file changed: %v", base["api"].DependsOn)
+	}
+}

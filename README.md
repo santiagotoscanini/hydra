@@ -163,7 +163,8 @@ web      main, routed  3400  ready
 
 It exits 1 when something is marked ✗, so a script or an agent can gate on
 it. A line marked ! is a note. `hydra status --wait` first waits for
-whatever is still starting. `--all` (and plain `hydra status` in the main
+whatever is still starting, and counts what still is after `--timeout`
+(10m) as an error. `--all` (and plain `hydra status` in the main
 checkout) lists every worktree: what it runs, whether its stack is up, and
 where it stands against main.
 
@@ -206,7 +207,10 @@ The generated file has one extra process, `hydra-watch`, so the watcher starts
 with the services and stops with them. Every 2 seconds it lists the changed
 files again. When the set of services to run differs, it rewrites the file and
 calls `process-compose project update`, which touches only the processes that
-differ. That gives two transitions:
+differ. It hands the file over in dependency order, since process-compose
+starts what one update adds in no order of its own: a service starts after
+the step or the service it waits for, as it does on `hydra up`. That gives
+two transitions:
 
 | Transition | What happens |
 |---|---|
@@ -432,7 +436,9 @@ supabase:
 The main checkout runs its Supabase as written. A worktree that changed its
 schema files (a migration, a seed, the config) gets a Supabase CLI stack of
 its own (stack mode) on its slot's ports, migrated and seeded from its
-files, and everything that reads that database runs in the worktree too.
+files, and everything that reads that database runs in the worktree too,
+starting only once the database has every migration (a `hydra-ready-…`
+step ends then; a migration that fails later shows in `hydra status`).
 Every other worktree shares main's, and one that is behind main's migrations
 is told to update, like for any other service. An idle stack takes about
 110 MB. It keeps its data across `hydra down` and `hydra up`, and is
@@ -505,8 +511,9 @@ the watcher starting and stopping services as files change in them.
 `./examples/demo/routed.sh` shows one frontend serving every worktree, and
 `./examples/demo/tls.sh` a TLS front. `./examples/demo/update.sh` is the
 end-to-end test: `hydra status`, the checks before `hydra up`,
-`hydra update`, a second start, a removed worktree and a killed
-process-compose, checking what every step printed. Each demo builds hydra
+`hydra update`, a second start, the order in which an edit's services
+start, a removed worktree and a killed process-compose, checking what every
+step printed. Each demo builds hydra
 into its own throwaway directory, so none of them changes the `hydra` on
 your PATH.
 

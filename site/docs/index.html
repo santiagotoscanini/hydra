@@ -453,8 +453,8 @@ web      main, routed  3400  ready
     </ul>
     <div class="table"><table>
       <tr><th>Flag</th><th>Meaning</th></tr>
-      <tr><td><code>--wait</code></td><td>First wait for what is still starting, then report. After <code>hydra up -D</code>, this is "tell me when it is ready, or what broke".</td></tr>
-      <tr><td><code>--timeout D</code></td><td>How long <code>--wait</code> waits. The default is 10m.</td></tr>
+      <tr><td><code>--wait</code></td><td>First wait for what is still starting, then report. After <code>hydra up -D</code>, this is "tell me when it is ready, or what broke". It ends as soon as everything is up, or a few seconds after something failed.</td></tr>
+      <tr><td><code>--timeout D</code></td><td>How long <code>--wait</code> waits. The default is 10m. What is still starting after that is reported as an error, and the command exits 1.</td></tr>
       <tr><td><code>--all</code></td><td>Main's stack and one line per worktree. In the main checkout this is the default.</td></tr>
     </table></div>
     <div class="code">
@@ -512,7 +512,9 @@ ok: main's stack is up and runs what main has checked out.
       <div><p class="said">✗ web: main's copy can't serve this worktree on :3400: …</p><p>The <a href="#routed">routed</a> copy in main can't be used: the router isn't listening on the port, or the copy doesn't pass the worktree's mark on. <code>hydra up web</code> runs a copy here instead.</p></div>
       <div><p class="said">✗ hydra-watch isn't running here, so a change won't start its service.</p><p><code>hydra process restart hydra-watch</code>.</p></div>
       <div><p class="said">! supabase here was started for branch cart, and the branch is now feat/cart. …</p><p>The branch was renamed or switched while this worktree's own database ran. The services keep using it; <code>supabase</code> commands typed here won't find it until <code>hydra process restart supabase</code>. See <a href="#supabase">a database per worktree</a>.</p></div>
-      <div><p class="said">! web here is still starting.</p><p>Nothing to do. <code>hydra status --wait</code> waits for these.</p></div>
+      <div><p class="said">! web here is still starting.</p><p>Nothing to do. <code>hydra status --wait</code> waits for these. A service that reads this worktree's <a href="#supabase">own database</a> shows as <code>pending</code> while that database starts and applies its migrations.</p></div>
+      <div><p class="said">✗ worker here is still starting, after waiting 10m0s.</p><p><code>hydra status --wait</code> gave up: the process runs but never said it was ready. Its log says what it is stuck on (<code>hydra process logs worker</code>); <code>hydra process restart worker</code> once that is fixed.</p></div>
+      <div><p class="said">✗ supabase here: the migrations in supabase/migrations didn't all apply to this worktree's database. The Supabase CLI said: …</p><p>A migration added or edited while the worktree's own database ran failed, so the services here run against a database without it. The lines under the message are the CLI's error. Correct the file: hydra applies it again when it changes, and the message goes away.</p></div>
       <div><p class="said">! changed, but in no service's paths, so nothing runs here for them: packages/billing/src/tax.ts</p><p>The branch changed a file that no service lists, so you keep getting main's copy of the code you changed. If a service uses the file, add it to that service's <code>paths</code> (<code>hydra up SERVICE</code> runs it here meanwhile). If none does, add it to <code>x-hydra.ignore</code>.</p></div>
       <div><p class="said">! db is shared, but its paths changed: db/migrations/0042_orders.sql; main's copy is used</p><p>The branch changed files of a service that only ever runs in main. Nothing runs here for them.</p></div>
     </div>
@@ -737,7 +739,7 @@ $ hydra down             # when the work is done
       <li>Starts process-compose on that file, on a unix socket that belongs to this worktree.</li>
     </ol>
     <p>Because of the socket, <code>hydra down</code>, <code>hydra attach</code> and <code>hydra process …</code> in a worktree reach that worktree's stack and never main's. If the stack is already up, <code>hydra up</code> starts nothing new and says so.</p>
-    <p>hydra has no daemon. What it adds to your projects are ordinary processes you can see in process-compose: <code>hydra-watch</code> in each worktree, <code>hydra-router</code> in main when a service is routed or has a TLS front, and a <code>hydra-prepare-…</code> step before a service that needs one.</p>
+    <p>hydra has no daemon. What it adds to your projects are ordinary processes you can see in process-compose: <code>hydra-watch</code> in each worktree, <code>hydra-router</code> in main when a service is routed or has a TLS front, a <code>hydra-prepare-…</code> step before a service that needs one, and a <code>hydra-ready-…</code> step that what reads a worktree's own database waits for.</p>
   </section>
 
   <section id="changes">
@@ -764,6 +766,7 @@ note: changed, but in no service's paths, so nothing runs here for them: package
   <section id="watching">
     <h2>Watching</h2>
     <p>A worktree's generated file has one extra process, <code>hydra-watch</code>. It starts with the services and stops with them. Every 2 seconds it lists the changed files again. When the set of services to run differs, it rewrites the file and calls <code>process-compose project update</code>, which touches only the processes that differ.</p>
+    <p>It hands the new file over in dependency order: first what waits for nothing else that changed, then what waits for that, and so on. process-compose applies one update in no order of its own, and a process whose dependency isn't in the project yet starts without waiting for it. In steps, each service finds what it waits for already there, so <code>depends_on</code> holds for what an edit starts the same way it does for <code>hydra up</code>: a worker starts after the step that makes its namespace, and a service after the API it waits for, also when that API only just moved into the worktree. <code>hydra update</code> reloads main's file the same way.</p>
     <div class="table"><table>
       <tr><th>Transition</th><th>What happens</th></tr>
       <tr><td>Unchanged → changed</td><td>The service starts in the worktree. Services here that point at it restart with its address.</td></tr>
@@ -890,7 +893,8 @@ api:
       <li><b>When.</b> The branch changed a migration, a seed or the config. A branch that is only behind main's migrations keeps using main's database, and is told it is <a href="#instep">behind main</a>.</li>
       <li><b>What it is.</b> A Supabase CLI stack (stack mode, CLI 2.119 or later; 2.121 or later to move ports), on the slot's ports: the API on <code>port + slot × stride</code>, the database on <code>{port.db}</code>'s. The first start applies every migration and seed in the worktree (about 20 seconds on a large schema); later starts resume it in a couple of seconds and apply new migrations. An idle stack takes about 110 MB: services other than Postgres start on their first request.</li>
       <li><b>Who follows it.</b> Anything that reaches it through a value a proxy can't route, such as a database URL, runs in the worktree too.</li>
-      <li><b>Migrations added while it runs</b> are applied within a couple of seconds.</li>
+      <li><b>Who waits for it.</b> A database answers before it is usable: a new one is still applying migrations and seeds, a resumed one the migrations the branch gained since. So every service here that reads it starts only after hydra has started it and applied every migration. They wait for a step named <code>hydra-ready-supabase</code>, which ends at that moment, instead of for the database's own readiness probe; until then they show as <code>pending</code>. This holds for <code>hydra up</code> and for a migration added to a worktree whose services already run. If the database fails to start, <code>hydra status</code> names it; fix it, <code>hydra process restart supabase</code>, and what was waiting starts by itself.</li>
+      <li><b>Migrations added while it runs</b> are applied within a couple of seconds. One that fails is an error in <code>hydra status</code>, with what the Supabase CLI said, until the file is corrected.</li>
       <li><b>Data.</b> A worktree's database starts from the seed files, not from main's data. It keeps its data across <code>hydra down</code> and <code>hydra up</code>, and is deleted when the worktree is <a href="#cleanup">removed</a>.</li>
       <li><b>Typing <code>supabase</code> commands.</b> hydra writes the stack's settings to a block in the worktree's root <code>.env.local</code>, which the CLI reads from the directory it runs in. <code>supabase db reset</code> at the worktree's root then resets the worktree's database, not main's. Run from a subdirectory, the CLI doesn't read it. hydra never writes through a symlinked <code>.env.local</code>, and refuses to write into one that git tracks.</li>
       <li><b>Files the CLI writes.</b> It adds lines to <code>supabase/.gitignore</code> and writes <code>supabase/supabase.lock</code> on every start. hydra undoes the first when it is all that changed and ignores the rest through <code>.git/info/exclude</code>, so the worktree shows no changes it didn't make.</li>
@@ -990,6 +994,7 @@ web:
       <li>Readiness and liveness probes on main's port move to the slot's port. Otherwise a worktree's probe would hit main's copy and pass at once.</li>
       <li>A stand-in replaces every process of main that one here depends on, in a namespace called <code>main</code>. It copies only the readiness probe or ready log line, so <code>process_healthy</code> waits for main's database instead of starting a second one. Stopping the worktree never runs main's shutdown commands.</li>
       <li>A <code>hydra-prepare-&lt;service&gt;</code> step runs before each service that has <code>prepare</code>.</li>
+      <li>With a <a href="#supabase">Supabase of its own</a>: hydra's steps go around the database's start and stop commands, a <code>hydra-ready-&lt;service&gt;</code> step ends once the database is started and migrated, and each service here that reads the database depends on that step in place of the database itself.</li>
       <li>In a worktree: <code>hydra-watch</code> is added. When any process of your file has a <code>watch</code>, <code>hydra-watch</code> carries one too, on an empty directory (<code>.process-compose/watch-anchor</code>), which never fires. process-compose only sets its file watching up when a process has a <code>watch</code> as the project starts, and a worktree usually starts with nothing of its own to run: without this, a service the watcher adds later would never restart on an edit.</li>
       <li>In the main checkout: <code>watch</code> blocks are dropped and <code>baseline_command</code> replaces <code>command</code>. When a service is <code>routed</code> or has <code>tls</code>, a <code>hydra-router</code> process is added, and a routed service's HTTP upstreams point at it.</li>
     </ul>
@@ -1198,7 +1203,8 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>info/exclude</code><span class="type">shared .git</span></td><td>With <code>kind: supabase</code>, a few lines that keep the Supabase CLI's lock and link files out of <code>git status</code>.</td></tr>
       <tr><td><code>$TMPDIR/hydra-&lt;hash&gt;.sock</code></td><td>A worktree's process-compose socket. The name comes from the worktree's path.</td></tr>
       <tr><td><code>.env.local</code>, one block<span class="type">in a worktree</span></td><td>With a Supabase of its own: the stack's settings, between two marker lines, so <code>supabase</code> commands typed there reach it. Removed when the worktree goes back to main's database.</td></tr>
-      <tr><td><code>.process-compose/supabase-branch</code><span class="type">in a worktree</span></td><td>With a Supabase of its own: the branch its running stack was started for.</td></tr>
+      <tr><td><code>.process-compose/supabase-branch</code><span class="type">in a worktree</span></td><td>With a Supabase of its own: there while the database is started and migrated, which is what the services that read it wait for. It holds the branch the stack was started for.</td></tr>
+      <tr><td><code>.process-compose/supabase-migrations-failed</code><span class="type">in a worktree</span></td><td>With a Supabase of its own: what the Supabase CLI said when a migration didn't apply to the running database. Gone once it applies.</td></tr>
       <tr><td><code>supabase/.temp/tmp/</code><span class="type">in a worktree</span></td><td>With a Supabase of its own: temporary files the Supabase CLI shares with its containers.</td></tr>
       <tr><td><code>~/Library/Application Support/hydra/</code></td><td>With TLS fronts: hydra's local CA and certificate (<code>ca.pem</code>, <code>ca-key.pem</code>, <code>cert.pem</code>, <code>key.pem</code>). On Linux, <code>~/.config/hydra/</code>.</td></tr>
     </table></div>

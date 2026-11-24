@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -164,13 +165,16 @@ func step(t *target, o options, cmd, out, sock string) error {
 	if err := os.MkdirAll(filepath.Join(t.checkout.Root, render.WatchAnchor), 0o755); err != nil {
 		return err
 	}
-	if err := writeFile(out, data); err != nil {
-		return err
-	}
-	update := exec.Command("process-compose", "project", "update", "-v", "-U", "-u", sock, "-f", out)
-	update.Stdout, update.Stderr = os.Stdout, os.Stderr
-	if err := update.Run(); err != nil {
-		os.WriteFile(out, current, 0o644) // retry the same change next tick
+	forgetPrepared(t, p, processesOf(current), processesOf(data))
+	// In steps, so nothing starts before what it waits for (see applyProject).
+	// A step that fails leaves the file at the last one that went through,
+	// and the next tick carries on from there.
+	err = applyProject(out, current, data, func(file string) error {
+		update := exec.Command("process-compose", "project", "update", "-v", "-U", "-u", sock, "-f", file)
+		update.Stdout, update.Stderr = os.Stdout, os.Stderr
+		return update.Run()
+	})
+	if err != nil {
 		return fmt.Errorf("project update: %w", err)
 	}
 
@@ -192,6 +196,26 @@ func step(t *target, o options, cmd, out, sock string) error {
 	}
 	migrateSupabase(t, p)
 	return nil
+}
+
+// forgetPrepared removes the mark of a worktree's own database being ready
+// (supabaseMarker) when an update is about to start that database: was and
+// will are the processes before and after it. The database's own start
+// removes the mark too, but only once it runs, and the step that waits for
+// the mark may start first.
+func forgetPrepared(t *target, p *plan.Plan, was, will map[string]any) {
+	changed := changedProcesses(was, will)
+	for _, row := range p.Services {
+		src := t.stack.Services[row.Source]
+		if !row.Local || src == nil || src.Kind != config.KindSupabase || (was != nil && !changed[row.Name]) {
+			continue
+		}
+		root := t.checkout.Root
+		if row.Root != "" {
+			root = row.Root
+		}
+		os.Remove(supabaseMarker(root))
+	}
 }
 
 // said is the last thing the watcher logged about each subject, so it says a
@@ -234,6 +258,12 @@ var migrationsSeen = map[string]string{}
 // migrateSupabase applies new migrations to a worktree's own Supabase stack
 // that is already running, when files in supabase/migrations appear or
 // change: a stack applies migrations only when it starts.
+//
+// While the stack is starting (no mark of it being ready yet) there is
+// nothing to do: its start applies every migration there is, and the
+// database doesn't answer before that. The first look after it is ready
+// applies them once more, in case a file landed while the start was ending;
+// that says nothing unless it fails.
 func migrateSupabase(t *target, p *plan.Plan) {
 	for _, row := range p.Services {
 		src := t.stack.Services[row.Source]
@@ -244,22 +274,65 @@ func migrateSupabase(t *target, p *plan.Plan) {
 		if row.Root != "" {
 			root = row.Root
 		}
+		if _, err := os.Stat(supabaseMarker(root)); err != nil {
+			delete(migrationsSeen, row.Name)
+			continue
+		}
 		now := dirFingerprint(filepath.Join(root, "supabase", "migrations"))
 		prev, seen := migrationsSeen[row.Name]
 		migrationsSeen[row.Name] = now
-		if !seen || prev == now {
-			continue // the first look: the service's own start applies them
+		if seen && prev == now {
+			continue
 		}
-		logf("supabase/migrations changed; applying them to this worktree's stack")
-		cmd := exec.Command(t.stack.Hydra.Exe, "prepare", "supabase")
+		cmd := exec.Command(t.stack.Hydra.Exe, "prepare", "supabase", "--migrate")
 		cmd.Dir = root
 		cmd.Env = append(os.Environ(), t.stack.SupabaseEnv(src, p.Slot)...)
 		cmd.Env = append(cmd.Env, "TMPDIR="+filepath.Join(root, "supabase", ".temp", "tmp"))
-		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		var said bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &said, &said
+		if seen {
+			logf("supabase/migrations changed; applying them to this worktree's stack")
+			cmd.Stdout, cmd.Stderr = io.MultiWriter(os.Stdout, &said), io.MultiWriter(os.Stderr, &said)
+		}
+		failed := migrationsFailed(root)
 		if err := cmd.Run(); err != nil {
+			if !seen {
+				os.Stdout.Write(said.Bytes())
+			}
 			logf("applying migrations: %v (retried on the next change)", err)
+			// For `hydra status`: nothing else would say that the database
+			// here lacks what the files describe.
+			writeFile(failed, lastLines(said.Bytes(), 8))
+			continue
+		}
+		os.Remove(failed)
+	}
+}
+
+// migrationsFailed is where the watcher leaves the end of what the Supabase
+// CLI said when migrations didn't apply to a worktree's running database.
+// It is gone once they apply, and when the database starts again.
+func migrationsFailed(root string) string {
+	return filepath.Join(root, ".process-compose", "supabase-migrations-failed")
+}
+
+// lastLines keeps the last n lines of out that say something about what
+// went wrong.
+func lastLines(out []byte, n int) []byte {
+	var lines []string
+	for _, l := range strings.Split(string(out), "\n") {
+		chatter := false
+		for _, p := range []string{"Try rerunning the command", "A new version of Supabase CLI", "We recommend updating", "hydra: "} {
+			chatter = chatter || strings.HasPrefix(l, p)
+		}
+		if strings.TrimSpace(l) != "" && !chatter {
+			lines = append(lines, strings.TrimRight(l, " \t\r"))
 		}
 	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
 }
 
 // dirFingerprint names every file in dir with its size and modification

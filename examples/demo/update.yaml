@@ -25,6 +25,42 @@ processes:
       api: { condition: process_healthy }
     x-hydra: { paths: ["apps/agent/**"] }
 
+  # Never says it is ready. Off until someone starts it, which the demo does:
+  # `hydra status --wait` has to give up on it, and say so.
+  stuck:
+    command: "echo warming up; exec sleep 1000"
+    ready_log_line: this line never comes
+    disabled: true
+    x-hydra: { paths: ["apps/stuck/**"] }
+
+  # Three of a kind, each with a step of its own before it starts in a
+  # worktree (`prepare`), the way a Temporal worker has its namespace made
+  # first. None starts before its step has ended, also when one edit adds all
+  # six processes to a running stack at once: hydra hands them to
+  # process-compose in order.
+  jobs-a: &jobs
+    command: "test -e .process-compose/$$HYDRA_SERVICE-prepared || { echo started before its prepare step ended; exit 1; }; echo up; exec sleep 1000"
+    x-hydra:
+      paths: ["apps/jobs/**"]
+      baseline_command: "exec sleep 1000"
+      prepare: "sleep 1; touch .process-compose/$$HYDRA_SERVICE-prepared"
+  jobs-b: *jobs
+  jobs-c: *jobs
+
+  # Three more: each asks the api it waits for as it starts, and gives up when
+  # nothing answers. A worktree runs them on main's api until an edit brings
+  # the api there too. They are then restarted on that api's address, and
+  # have to wait until it is up.
+  ask-a: &ask
+    command: "curl -sf -o /dev/null $$API_URL || { echo started before the api it waits for was up; exit 1; }; echo up; exec sleep 1000"
+    depends_on:
+      api: { condition: process_healthy }
+    x-hydra:
+      paths: ["apps/ask/**"]
+      upstreams: { API_URL: api }
+  ask-b: *ask
+  ask-c: *ask
+
   # Jobs carry paths too: `hydra update` runs them again when a pull changes
   # those files, before it restarts the services that wait for them.
   deps:

@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/pc"
@@ -228,5 +229,29 @@ func TestAStackDoesNotInheritAnAgentsMarks(t *testing.T) {
 	got := withoutAgentMarks([]string{"PATH=/bin", "AI_AGENT=claude", "CLAUDECODE=1", "CLAUDE_CODE_ENTRYPOINT=sdk", "CLAUDE_CONFIG_DIR=/x", "CURSOR_AGENT=1", "HOME=/h"})
 	if want := []string{"PATH=/bin", "CLAUDE_CONFIG_DIR=/x", "HOME=/h"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("env = %q, want %q", got, want)
+	}
+}
+
+// `hydra status --wait` that runs out of time isn't "ok": what is still
+// starting becomes the problem it ends on.
+func TestWhatIsStillStartingWhenTheWaitEndsIsAProblem(t *testing.T) {
+	problems := []problem{
+		{Passing: true, Text: "worker here is still starting."},
+		{Text: "a note"},
+		{Passing: true, Text: "main's api is still starting (web here calls it).\n  detail"},
+	}
+	got := stillStarting(append([]problem{}, problems...), 0)
+	if len(blocking(got)) != 0 {
+		t.Errorf("without a wait nothing blocks: %+v", got)
+	}
+	got = stillStarting(append([]problem{}, problems...), 10*time.Minute)
+	if len(blocking(got)) != 2 || got[1].Blocks {
+		t.Fatalf("got %+v", got)
+	}
+	if got[0].Text != "worker here is still starting, after waiting 10m0s." {
+		t.Errorf("text = %q", got[0].Text)
+	}
+	if got[2].Text != "main's api is still starting (web here calls it), after waiting 10m0s.\n  detail" {
+		t.Errorf("text = %q", got[2].Text)
 	}
 }

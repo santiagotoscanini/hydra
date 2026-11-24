@@ -41,9 +41,14 @@ func statusCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	waited := time.Duration(0) // how long --wait waited before it gave up
 	if *wait {
-		if err := waitSettled(co, co.IsMain() || *all, *timeout); err != nil {
+		gaveUp, err := waitSettled(co, co.IsMain() || *all, *timeout)
+		if err != nil {
 			return err
+		}
+		if gaveUp {
+			waited = *timeout
 		}
 	}
 	ms, err := loadMain(co)
@@ -51,7 +56,7 @@ func statusCmd(args []string) error {
 		return err
 	}
 	if co.IsMain() || *all {
-		return statusAll(co, ms)
+		return statusAll(co, ms, waited)
 	}
 	ws, err := loadWorktree(co)
 	if err != nil {
@@ -62,7 +67,7 @@ func statusCmd(args []string) error {
 	fmt.Println()
 	printWorktreeTable(ms, ws)
 
-	problems := worktreeProblems(ms, ws, true)
+	problems := stillStarting(worktreeProblems(ms, ws, true), waited)
 	fmt.Println()
 	if len(problems) == 0 {
 		fmt.Println("ok: everything this worktree uses is up and in step with main.")
@@ -76,11 +81,35 @@ func statusCmd(args []string) error {
 	return nil
 }
 
+// stillStarting turns what is still starting into a problem once --wait has
+// given up on it: a start that takes longer than the wait isn't "ok".
+func stillStarting(problems []problem, waited time.Duration) []problem {
+	if waited == 0 {
+		return problems
+	}
+	for i, p := range problems {
+		if p.Passing {
+			first, rest, more := strings.Cut(p.Text, "\n")
+			first = strings.TrimSuffix(first, ".") + fmt.Sprintf(", after waiting %s.", waited)
+			if more {
+				first += "\n" + rest
+			}
+			problems[i].Text, problems[i].Blocks = first, true
+		}
+	}
+	return problems
+}
+
+// looksEvery is how often a wait reads everything again: git and the plan,
+// which cost a second of CPU in a large repository. In between it only asks
+// the two process-compose servers what runs.
+var looksEvery = 10 * time.Second
+
 // waitSettled returns once nothing is still starting: everything is up, or
 // something failed and stayed failed for a few seconds (a process that is
 // between restarts looks failed for a moment). The caller then prints the
-// state as usual.
-func waitSettled(co gitx.Checkout, mainOnly bool, timeout time.Duration) error {
+// state as usual. gaveUp says that the time ran out first.
+func waitSettled(co gitx.Checkout, mainOnly bool, timeout time.Duration) (gaveUp bool, err error) {
 	deadline := time.Now().Add(timeout)
 	live := false
 	if info, err := os.Stderr.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
@@ -91,11 +120,33 @@ func waitSettled(co gitx.Checkout, mainOnly bool, timeout time.Duration) error {
 			fmt.Fprint(os.Stderr, "\r\033[K")
 		}
 	}()
+	var (
+		ms     *mainState
+		ws     *wtState
+		looked time.Time
+	)
 	failedFor := 0
 	for {
-		ms, err := loadMain(co)
-		if err != nil {
-			return err
+		fresh := ms == nil || time.Since(looked) >= looksEvery
+		if fresh {
+			if ms, err = loadMain(co); err != nil {
+				return false, err
+			}
+			if !mainOnly {
+				if ws, err = loadWorktree(co); err != nil {
+					return false, err
+				}
+			}
+			looked = time.Now()
+		} else {
+			if err := ms.refresh(); err != nil {
+				return false, err
+			}
+			if ws != nil {
+				if err := ws.refresh(); err != nil {
+					return false, err
+				}
+			}
 		}
 		var problems []problem
 		if mainOnly {
@@ -104,10 +155,6 @@ func waitSettled(co gitx.Checkout, mainOnly bool, timeout time.Duration) error {
 				problems = append(problems, failing(ms, nil)...)
 			}
 		} else {
-			ws, err := loadWorktree(co)
-			if err != nil {
-				return err
-			}
 			problems = worktreeProblems(ms, ws, true)
 		}
 		var passing []string
@@ -122,8 +169,17 @@ func waitSettled(co gitx.Checkout, mainOnly bool, timeout time.Duration) error {
 		} else {
 			failedFor = 0
 		}
-		if failedFor >= 4 || (failedFor == 0 && len(passing) == 0) || time.Now().After(deadline) {
-			return nil
+		if failedFor >= 4 || (failedFor == 0 && len(passing) == 0) {
+			if !fresh {
+				// Settled, going by a plan that is a few seconds old: an edit
+				// since then may have added a service. Look again first.
+				ms = nil
+				continue
+			}
+			return false, nil
+		}
+		if time.Now().After(deadline) {
+			return len(passing) > 0, nil
 		}
 		if live && len(passing) > 0 {
 			fmt.Fprintf(os.Stderr, "\r\033[Kwaiting: %s", passing[0])
@@ -217,7 +273,7 @@ func mainProcState(ms *mainState, name string) string {
 }
 
 // statusAll prints the main checkout's stack and one line per worktree.
-func statusAll(co gitx.Checkout, ms *mainState) error {
+func statusAll(co gitx.Checkout, ms *mainState, waited time.Duration) error {
 	printMainLine(ms)
 	bad := false
 	if ms.Up {
@@ -327,7 +383,7 @@ func statusAll(co gitx.Checkout, ms *mainState) error {
 	if ms.Up {
 		problems = append(problems, failing(ms, nil)...)
 	}
-	problems = append(problems, goneProblems(co)...)
+	problems = stillStarting(append(problems, goneProblems(co)...), waited)
 	fmt.Println()
 	if len(problems) > 0 {
 		printProblems(os.Stdout, problems)

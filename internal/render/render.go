@@ -41,6 +41,40 @@ const idle = "while :; do sleep 3600; done"
 // rendered file creates it.
 const WatchAnchor = ".process-compose/watch-anchor"
 
+// ReadyName is the process that ends once a worktree's own database, the
+// service named, is started and migrated. What reads that database waits for
+// it instead of for the service.
+func ReadyName(service string) string { return "hydra-ready-" + service }
+
+// ownDatabases lists the services of the plan that are a worktree's own
+// Supabase stack: the ones hydra wraps, and so can tell when they are ready.
+func ownDatabases(st *config.Stack, p *plan.Plan) map[string]plan.Service {
+	out := map[string]plan.Service{}
+	if p.Slot == 0 {
+		return out
+	}
+	procs, _ := st.Raw["processes"].(map[string]any)
+	for _, row := range p.Services {
+		svc := st.Services[row.Source]
+		proc, _ := procs[row.Source].(map[string]any)
+		_, runs := proc["command"].(string)
+		if row.Local && !row.Disabled && svc != nil && svc.Kind == config.KindSupabase && runs {
+			out[row.Name] = row
+		}
+	}
+	return out
+}
+
+// reads reports whether a local service is given the address of db here.
+func reads(row plan.Service, db string) bool {
+	for _, u := range row.Upstreams {
+		if u.Service == db && u.Target == plan.Local {
+			return true
+		}
+	}
+	return false
+}
+
 // anyWatch reports whether a process of the stack restarts on file changes.
 func anyWatch(st *config.Stack) bool {
 	procs, _ := st.Raw["processes"].(map[string]any)
@@ -82,6 +116,29 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 
 	procs := map[string]any{}
 	stubs := map[string]map[string]any{}
+	exe := st.Hydra.Exe
+	if exe == "" {
+		exe = "hydra"
+	}
+	// A worktree's own database answers before it is usable: a new stack is
+	// still applying migrations and seeds, a resumed one the migrations the
+	// branch gained. A service started then finds tables missing. So what
+	// reads the database waits for a step that ends when hydra has started
+	// and migrated it, not for the database's own readiness.
+	dbs := ownDatabases(st, p)
+	for name, row := range dbs {
+		root := dir
+		if row.Root != "" {
+			root = row.Root
+		}
+		procs[ReadyName(name)] = map[string]any{
+			"namespace":   "hydra",
+			"description": "Ends once this worktree's " + name + " is started and migrated",
+			"command":     "exec " + shellQuote(exe) + " prepare supabase --ready",
+			"working_dir": root,
+			"environment": []string{"HYDRA_SERVICE=" + name, "HYDRA_SLOT=" + strconv.Itoa(p.Slot)},
+		}
+	}
 	for _, row := range p.Services {
 		if !row.Local {
 			continue
@@ -149,6 +206,12 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 				deps[k] = v
 			}
 		}
+		for db := range dbs {
+			if _, waits := deps[db]; db != row.Name && (waits || reads(row, db)) {
+				delete(deps, db)
+				deps[ReadyName(db)] = map[string]any{"condition": "process_completed_successfully"}
+			}
+		}
 		for d, cond := range deps {
 			if !local[d] && stubs[d] == nil {
 				stubs[d] = stub(d, rawProcs[d], cond)
@@ -194,10 +257,6 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 			env = append(env, st.SupabaseEnv(svc, p.Slot)...)
 			env = append(env, "TMPDIR="+tmp)
 			if cmd, ok := proc["command"].(string); ok {
-				exe := st.Hydra.Exe
-				if exe == "" {
-					exe = "hydra"
-				}
 				// Around the stack file's command: hydra first stops the stack
 				// this directory has for another branch (it would hold the
 				// ports), and afterwards applies new migrations and puts the
@@ -223,10 +282,6 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 					// After the stack file's stop, hydra stops what is left of
 					// this directory's stacks: the CLI's own stop misses one
 					// that was made before the branch was renamed.
-					exe := st.Hydra.Exe
-					if exe == "" {
-						exe = "hydra"
-					}
 					c["command"] = "export " + strings.Join(exports, " ") + "\n" + strings.TrimRight(cmd, "\n") + "\n" + shellQuote(exe) + " prepare supabase --stopped"
 					proc["shutdown"] = c
 				}

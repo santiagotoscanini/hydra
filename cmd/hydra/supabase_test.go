@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/gitx"
@@ -126,5 +127,107 @@ func TestSyncEnvLocalNeverWritesThroughALink(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(other); string(b) != "MAIN=1\n" {
 		t.Errorf("wrote through the link: %q", b)
+	}
+}
+
+// What reads a worktree's own database waits for the mark its start leaves.
+func TestWaitPreparedReturnsWhenTheDatabaseIsMarkedReady(t *testing.T) {
+	old := preparedPoll
+	preparedPoll = 5 * time.Millisecond
+	defer func() { preparedPoll = old }()
+
+	root := t.TempDir()
+	done := make(chan error, 1)
+	go func() { done <- waitPrepared(root, "supabase", os.Getppid()) }()
+	select {
+	case err := <-done:
+		t.Fatalf("returned before the database was ready: %v", err)
+	case <-time.After(60 * time.Millisecond):
+	}
+	if err := writeFile(supabaseMarker(root), []byte("refs/heads/x\n")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("still waiting after the mark was written")
+	}
+
+	// The process-compose that started it is gone: so is the reason to wait.
+	if err := waitPrepared(t.TempDir(), "supabase", -1); err == nil {
+		t.Error("kept waiting for a stack that is gone")
+	}
+}
+
+// An update that starts the worktree's own database forgets that an earlier
+// run had it ready; one that leaves the database alone doesn't.
+func TestTheReadyMarkIsForgottenWhenTheDatabaseIsAboutToStart(t *testing.T) {
+	co := gitRepo(t)
+	st, err := config.Parse([]byte("x-hydra: { slot_stride: 200 }\nprocesses:\n  supabase: { command: x, x-hydra: { kind: supabase, paths: [\"s/**\"] } }\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg := &target{checkout: co, stack: st}
+	p, err := plan.Build(st, plan.Request{Slot: 1, Changed: []string{"s/x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := supabaseMarker(co.Root)
+	mark := func() { t.Helper(); writeFile(marker, []byte("refs/heads/x\n")) }
+	there := func() bool { _, err := os.Stat(marker); return err == nil }
+	standIn := map[string]any{"supabase": map[string]any{"command": "idle", "namespace": "main"}}
+	real := map[string]any{"supabase": map[string]any{"command": "supabase start"}}
+
+	mark()
+	forgetPrepared(tg, p, real, real) // an update of something else
+	if !there() {
+		t.Error("forgotten though the database keeps running")
+	}
+	forgetPrepared(tg, p, standIn, real) // main's database until now
+	if there() {
+		t.Error("kept, though the database is about to start")
+	}
+	mark()
+	forgetPrepared(tg, p, nil, nil) // the stack itself starts
+	if there() {
+		t.Error("kept across a start of the stack")
+	}
+	// A worktree on main's database has no mark to forget, and none is made.
+	off, _ := plan.Build(st, plan.Request{Slot: 1})
+	mark()
+	forgetPrepared(tg, off, nil, nil)
+	if !there() {
+		t.Error("removed for a worktree that doesn't run the database")
+	}
+}
+
+// A migration that fails on a running database is only in the watcher's
+// log, unless it is left where `hydra status` reads it.
+func TestMigrationsThatDidNotApplyAreAProblem(t *testing.T) {
+	root := t.TempDir()
+	if pr := migrationsProblem(root, "supabase"); pr != nil {
+		t.Fatalf("a problem with nothing recorded: %+v", pr)
+	}
+	said := "Connecting to local database...\n\n  \nApplying migration 20260101000000_x.sql...\nERROR: syntax error at or near \"tabel\" (SQLSTATE 42601)\nAt statement: 0\ncreate tabel x()\n"
+	if err := writeFile(migrationsFailed(root), lastLines([]byte(said), 3)); err != nil {
+		t.Fatal(err)
+	}
+	pr := migrationsProblem(root, "supabase")
+	if pr == nil || !pr.Blocks {
+		t.Fatalf("pr = %+v", pr)
+	}
+	for _, want := range []string{"supabase here: the migrations in supabase/migrations didn't all apply", "    | ERROR: syntax error at or near \"tabel\" (SQLSTATE 42601)", "    | create tabel x()"} {
+		if !strings.Contains(pr.Text, want) {
+			t.Errorf("text lacks %q:\n%s", want, pr.Text)
+		}
+	}
+	if strings.Contains(pr.Text, "Connecting to local database") {
+		t.Errorf("more than the last lines:\n%s", pr.Text)
+	}
+	if !strings.Contains(pr.Fix, "correct the migration file") {
+		t.Errorf("fix = %q", pr.Fix)
 	}
 }

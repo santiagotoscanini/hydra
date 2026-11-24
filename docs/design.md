@@ -83,6 +83,29 @@ transitions:
 Edits to a service that is already running here are left to its own reload
 (process-compose `watch`, `next dev`, `tsx watch`, ...).
 
+**The update goes to process-compose in dependency order.** One `project
+update` is applied in no order: process-compose adds the new processes and
+replaces the changed ones as it iterates over a map, and a process whose
+dependency isn't in the project at that moment logs an error and starts
+without waiting; one whose dependency is still the old process (a stand-in
+that is "ready", say) is satisfied by that. In the monorepo, a migration
+added to a worktree whose API and worker already ran restarted them against
+the stand-in's readiness, half a second before the worktree's own database
+started: the worker found no tables and hung. In the update demo, a service
+waiting for an API that had just moved into the worktree was skipped ("the
+process it waits for was terminated") on some runs and started too early on
+others. So `applyProject` splits the change (`updateSteps`): the first file
+is what runs now plus every changed process that waits for nothing else that
+changed (stand-ins, hydra's steps); the next adds what waits for those; the
+last is the new file itself, which also removes what is gone. Each call
+returns once its processes are registered, so the next step's processes find
+their dependencies in the project and wait for them the way the stack file
+says. `hydra-watch` only changes with the last file: a new watcher coming up
+halfway would start on the same steps. The file on disk is each step in
+turn; when one fails it is put back to the last that went through, so the
+next tick compares against what really runs. `hydra update` reloads main's
+file through the same function.
+
 process-compose's `watch` needs help to work here. It builds its file watcher
 once, as the project starts, and only if some process has a `watch` then; a
 process added later through `project update` is registered with that watcher
@@ -113,6 +136,15 @@ problem is an error (✗: exit 1, and `hydra up` refuses) or a note (!).
 | Branch against main | main changed a service the worktree takes from it since the branch left main, or main is older than the branch's starting point (see below) |
 | This worktree's stack | a process that should run here failed, was skipped (the step it waited for is shown) or isn't running; `hydra-watch` is down. A process whose output says its port was taken comes with the program listening there (`lsof`): one started from inside this checkout is a leftover of an earlier run, and the fix kills it; anyone else's is only named |
 | Routed services | the router doesn't answer on the worktree's port, or main's copy doesn't pass the worktree's tag on (`/__hydra/status` on that port) |
+
+Also an error: a migration that didn't apply to a worktree's own running
+database (what the watcher kept of the CLI's output is shown), and, after
+`--wait` ran out of time (`--timeout`, 10 minutes by default), whatever is
+still starting: a wait that gives up is not "ok". `--wait` reads git and
+plans once every 10 seconds and only asks the two process-compose servers
+in between (a full look costs about a second of CPU in the monorepo, which
+made a ten-minute wait cost six minutes of it); before it reports "settled"
+it looks at everything once more, so an edit made a moment ago isn't missed.
 
 Notes: a process that is still starting (`--wait` waits for these), main's
 stack file or hydra being newer than the running stack, the main checkout
@@ -473,7 +505,33 @@ find, still holding the slot's ports. So:
 - when the worktree is removed, every stack of that directory is destroyed
   (below).
 
-The watcher applies migrations that appear while the stack runs, and keeps a
+**Ready means started and migrated.** The stack's readiness probe (the REST
+API answering) says the containers are up, not that the schema is there: a
+resumed stack answers at once and gets the branch's new migrations a moment
+later, from `--started`. A worker that starts in between finds tables
+missing. So `--started` writes `.process-compose/supabase-branch` only after
+the start worked and `migration up` went through; `--before`, `--stopped`,
+a start of the worktree's stack and an update that is about to start the
+database all remove it. A step, `hydra-ready-<service>` (`hydra prepare
+supabase --ready`), ends when the file is there, and every local service
+that waits for the database or is given its address depends on that step
+with `process_completed_successfully`, in place of its `depends_on` on the
+database. They stay pending meanwhile, so no readiness probe of theirs runs
+out during a first start. A wait inside each service's own command was the
+alternative; process-compose stops a process whose readiness probe fails too
+often, and a first start of a large schema takes longer than a default
+probe allows. The step never gives up: when the start fails, `hydra status`
+shows the database as failed, and after `hydra process restart supabase`
+what was waiting starts by itself. It exits when the process-compose that
+started it is gone.
+
+The watcher applies migrations that appear while the stack runs (`hydra
+prepare supabase --migrate`, which leaves the branch record alone), once the
+stack is ready: before that the start applies them all, and the first look
+after it applies them once more, quietly, in case a file landed while the
+start was ending. When that fails, the end of what the CLI said is kept in
+`.process-compose/supabase-migrations-failed`, which `hydra status` reports
+as an error until a later run applies them. The watcher also keeps a
 block of the same settings in the worktree's root `.env.local` (never through
 a symlink), so CLI commands typed at the worktree's root reach its stack. The
 CLI reads `.env.local` only from its working directory, so from a

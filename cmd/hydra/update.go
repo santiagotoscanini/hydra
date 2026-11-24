@@ -371,17 +371,23 @@ func reloadConfig(ms *mainState) (startedAgain []string, err error) {
 		return nil, err
 	}
 	out := renderedPath(t.checkout.Root)
-	if err := writeFile(out, data); err != nil {
-		return nil, err
-	}
+	current, _ := os.ReadFile(out)
 	host, port := pcAddress(nil)
 	if ms.Record != nil && ms.Record.Port != 0 {
 		host, port = ms.Record.Address, ms.Record.Port
 	}
-	cmd := exec.Command("process-compose", "project", "update", "-f", out, "--address", host, "--port", fmt.Sprint(port))
-	cmd.Dir = t.checkout.Root
-	if msg, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("process-compose project update: %v\n%s", err, bytes.TrimSpace(msg))
+	// In steps, so a process the new file adds starts after what it waits
+	// for (see applyProject).
+	err = applyProject(out, current, data, func(file string) error {
+		cmd := exec.Command("process-compose", "project", "update", "-f", file, "--address", host, "--port", fmt.Sprint(port))
+		cmd.Dir = t.checkout.Root
+		if msg, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("process-compose project update: %v\n%s", err, bytes.TrimSpace(msg))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	time.Sleep(500 * time.Millisecond)
 	after, err := ms.Client.Processes()

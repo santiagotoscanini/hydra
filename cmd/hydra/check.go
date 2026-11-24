@@ -154,17 +154,8 @@ func loadMain(co gitx.Checkout) (*mainState, error) {
 		ms.Behind, _ = strconv.Atoi(n)
 	}
 
-	ms.Up = ms.Client.Alive()
-	if !ms.Up {
-		return ms, nil
-	}
-	procs, err := ms.Client.Processes()
-	if err != nil {
-		return nil, fmt.Errorf("asking main's process-compose (%s): %w", ms.Client.Where, err)
-	}
-	ms.Procs = map[string]pc.Process{}
-	for _, p := range procs {
-		ms.Procs[p.Name] = settle(t.stack, p.Name, p)
+	if err := ms.refresh(); err != nil || !ms.Up {
+		return ms, err
 	}
 	switch {
 	case ms.Record == nil:
@@ -182,6 +173,24 @@ func loadMain(co gitx.Checkout) (*mainState, error) {
 		ms.ConfigStale = !bytes.Equal(want, have)
 	}
 	return ms, nil
+}
+
+// refresh asks main's process-compose again what runs: the part of the state
+// that changes by the second. What git says stays as it was loaded.
+func (ms *mainState) refresh() error {
+	ms.Procs = nil
+	if ms.Up = ms.Client.Alive(); !ms.Up {
+		return nil
+	}
+	procs, err := ms.Client.Processes()
+	if err != nil {
+		return fmt.Errorf("asking main's process-compose (%s): %w", ms.Client.Where, err)
+	}
+	ms.Procs = map[string]pc.Process{}
+	for _, p := range procs {
+		ms.Procs[p.Name] = settle(ms.target.stack, p.Name, p)
+	}
+	return nil
 }
 
 func renderedPath(root string) string {
@@ -295,21 +304,29 @@ func loadWorktree(co gitx.Checkout) (*wtState, error) {
 	if ws.Plan, err = t.build(o); err != nil {
 		return nil, err
 	}
-	if ws.Up = ws.Client.Alive(); ws.Up {
-		procs, err := ws.Client.Processes()
-		if err != nil {
-			return nil, err
-		}
-		sources := map[string]string{}
-		for _, row := range ws.Plan.Services {
-			sources[row.Name] = row.Source
-		}
-		ws.Procs = map[string]pc.Process{}
-		for _, p := range procs {
-			ws.Procs[p.Name] = settle(t.stack, sources[p.Name], p)
-		}
+	return ws, ws.refresh()
+}
+
+// refresh asks the worktree's process-compose again what runs, and keeps the
+// plan as it was loaded.
+func (ws *wtState) refresh() error {
+	ws.Procs = nil
+	if ws.Up = ws.Client.Alive(); !ws.Up {
+		return nil
 	}
-	return ws, nil
+	procs, err := ws.Client.Processes()
+	if err != nil {
+		return err
+	}
+	sources := map[string]string{}
+	for _, row := range ws.Plan.Services {
+		sources[row.Name] = row.Source
+	}
+	ws.Procs = map[string]pc.Process{}
+	for _, p := range procs {
+		ws.Procs[p.Name] = settle(ws.target.stack, sources[p.Name], p)
+	}
+	return nil
 }
 
 // settle corrects one thing in what process-compose reports: a process that
@@ -630,6 +647,9 @@ func localProblems(ms *mainState, ws *wtState) []problem {
 					root = row.Root
 				}
 				if pr := supabaseBranchNote(root, row.Name); pr != nil {
+					out = append(out, *pr)
+				}
+				if pr := migrationsProblem(root, row.Name); pr != nil {
 					out = append(out, *pr)
 				}
 			}
