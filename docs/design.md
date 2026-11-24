@@ -152,7 +152,12 @@ problem is an error (✗: exit 1, and `hydra up` refuses) or a note (!).
 Also an error: a migration that didn't apply to a worktree's own running
 database (what the watcher kept of the CLI's output is shown), and, after
 `--wait` ran out of time (`--timeout`, 10 minutes by default), whatever is
-still starting: a wait that gives up is not "ok". `--wait` reads git and
+still starting: a wait that gives up is not "ok". A process that was ready
+since it last started and whose probe fails now isn't starting: it is an
+error, "stopped answering" (process-compose keeps `process_ready_time`). A
+native Supabase stack whose own processes were killed looks like that: its
+start command exited long ago, so process-compose still says "Launched",
+and it had been reported as starting forever. `--wait` reads git and
 plans once every 10 seconds and only asks the two process-compose servers
 in between (a full look costs about a second of CPU in the monorepo, which
 made a ten-minute wait cost six minutes of it); before it reports "settled"

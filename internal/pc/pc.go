@@ -49,6 +49,7 @@ type Process struct {
 	Pid           int    `json:"pid"`
 	IsRunning     bool   `json:"is_running"`
 	StartTime     string `json:"process_start_time"`
+	ReadyTime     string `json:"process_ready_time"` // when it last became ready
 }
 
 // Health sums a process's state up for a person.
@@ -76,6 +77,9 @@ func (p Process) Health() Health {
 		return Failed
 	case "Running", "Launched":
 		if p.IsReady == "Not Ready" {
+			if p.StoppedAnswering() {
+				return Failed
+			}
 			return Starting
 		}
 		return Up
@@ -83,6 +87,22 @@ func (p Process) Health() Health {
 		return Off
 	}
 	return Starting // Pending, Launching, Restarting
+}
+
+// StoppedAnswering reports whether the process was ready since it last
+// started and its readiness check fails now: it isn't starting, something
+// went away (a database whose supervisor was killed keeps process-compose's
+// "Launched" and fails the check from then on).
+func (p Process) StoppedAnswering() bool {
+	if p.IsReady != "Not Ready" {
+		return false
+	}
+	ready, err := time.Parse(time.RFC3339Nano, p.ReadyTime)
+	if err != nil || ready.IsZero() {
+		return false
+	}
+	start, err := time.Parse(time.RFC3339Nano, p.StartTime)
+	return err == nil && !ready.Before(start)
 }
 
 // Describe is the state in a few words: "ready", "exited 1 (3 restarts)".
@@ -105,6 +125,9 @@ func (p Process) Describe() string {
 		}
 		return strings.ToLower(p.Status)
 	case Failed:
+		if p.StoppedAnswering() {
+			return "stopped answering" + restarts
+		}
 		return fmt.Sprintf("exited with code %d%s", p.ExitCode, restarts)
 	}
 	if p.Status == "Running" || p.Status == "Launched" {
