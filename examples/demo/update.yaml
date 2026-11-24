@@ -15,6 +15,16 @@ processes:
     disabled: true
     x-hydra: { paths: ["db/seed/**"] }
 
+  # Off until someone starts it too, which the demo does. It takes a moment
+  # to stop, as an agent that finishes its calls first does: an update that
+  # restarts it has to wait for the new run.
+  agent:
+    command: "trap 'sleep 1.5; exit 0' TERM; echo agent up; while :; do sleep 0.2; done"
+    disabled: true
+    depends_on:
+      api: { condition: process_healthy }
+    x-hydra: { paths: ["apps/agent/**"] }
+
   # Jobs carry paths too: `hydra update` runs them again when a pull changes
   # those files, before it restarts the services that wait for them.
   deps:

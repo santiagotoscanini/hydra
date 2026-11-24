@@ -184,6 +184,16 @@ no cron. Fetching is fine (it moves `origin/main` only).
    - Not restarted: daemons (`is_daemon`, they hold data; a note says when
      their files changed and nothing else took them), and processes that are
      `disabled: true` unless they are running.
+   - Waiting for a restarted process goes by what process-compose does: it
+     stops the old run, waits the process's backoff, and builds a new state
+     for the new run, which reads "Pending" while the run waits for what it
+     depends on, or "Disabled" when the process is `disabled: true` (a voice
+     agent someone started by hand, say). Both mean "not yet". Only
+     "Skipped" means process-compose gave up on it, because something it
+     waits for failed. Taking "Disabled" for a failure once made every
+     update of a stack with such a process fail, with nothing wrong.
+   - Each line is printed when its step ends, not at the end: an update
+     takes minutes.
    - A process that had failed is run again even if its files didn't change.
    - The first failure stops the sequence and leaves the record where it
      was, so `hydra status` keeps saying what is stale and the next update

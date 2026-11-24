@@ -13,8 +13,8 @@ import (
 	"sort"
 	"strings"
 	"syscall"
-	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/gitx"
@@ -447,44 +447,52 @@ func restartInOrder(out io.Writer, st *config.Stack, c *pc.Client, before map[st
 			live = true
 		}
 	}
-	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	defer w.Flush()
-	for i, name := range order {
+	// The columns are measured first, so that each line can be printed the
+	// moment its step ends: an update takes minutes, and a table that only
+	// appears at the end looks like one that hangs.
+	type step struct {
+		verb, would, why string
+		job, again       bool
+	}
+	steps := map[string]step{}
+	wide := func(a int, s string) int { return max(a, utf8.RuneCountInString(s)) }
+	wName, wVerb, wWould, wWhy := 0, len("FAILED"), 0, 0
+	for _, name := range order {
 		b := before[name]
-		job := isJob(st, sources[name], b)
-		verb, would := "restarted", "would be restarted"
-		if job {
-			verb, would = "ran again", "would run again"
+		s := step{verb: "restarted", would: "would be restarted", why: oneFile(in[name].Files), job: isJob(st, sources[name], b)}
+		if s.job {
+			s.verb, s.would = "ran again", "would run again"
 		}
 		if _, was := before[name]; !was {
-			verb, would = "started", "would be started" // new in the stack file
-		}
-		why := oneFile(in[name].Files)
-		if dry {
-			fmt.Fprintf(w, "  %s\t%s\t%s\n", name, would, why)
-			continue
-		}
-		if live {
-			w.Flush()
-			fmt.Fprintf(out, "  %s: %s…", name, map[bool]string{true: "running again", false: "restarting"}[job])
+			s.verb, s.would = "started", "would be started" // new in the stack file
 		}
 		// The reload may have restarted it already, before a job it waits
 		// for ran again here: then it has to start once more, after the job.
-		again := false
 		for _, d := range st.Services[sources[name]].DependsOn {
 			if _, listed := in[d]; listed {
-				again = true
+				s.again = true
 			}
 		}
+		steps[name] = s
+		wName, wVerb, wWould, wWhy = wide(wName, name), wide(wVerb, s.verb), wide(wWould, s.would), wide(wWhy, s.why)
+	}
+	for i, name := range order {
+		s := steps[name]
+		if dry {
+			fmt.Fprintf(out, "  %-*s  %-*s  %s\n", wName, name, wWould, s.would, s.why)
+			continue
+		}
+		if live {
+			fmt.Fprintf(out, "  %s: %s…", name, map[bool]string{true: "running again", false: "restarting"}[s.job])
+		}
 		start := time.Now()
-		p, err := restartAndWait(st, sources[name], c, name, b, job, again, timeout)
+		p, err := restartAndWait(st, sources[name], c, name, before[name], s.job, s.again, timeout)
 		took := time.Since(start).Round(time.Second)
 		if live {
 			fmt.Fprint(out, "\r\033[K")
 		}
 		if err != nil {
-			fmt.Fprintf(w, "  %s\tFAILED\t%v, after %s\n", name, err, took)
-			w.Flush()
+			fmt.Fprintf(out, "  %-*s  %-*s  %v, after %s\n", wName, name, wVerb, "FAILED", err, took)
 			if tail, _ := logTail(c, name); tail != "" {
 				fmt.Fprint(out, "   "+tail+"\n")
 			}
@@ -493,7 +501,7 @@ func restartInOrder(out io.Writer, st *config.Stack, c *pc.Client, before map[st
 			}
 			return false
 		}
-		fmt.Fprintf(w, "  %s\t%s\t%s\t%s in %s\n", name, verb, why, p.Describe(), took)
+		fmt.Fprintf(out, "  %-*s  %-*s  %-*s  %s in %s\n", wName, name, wVerb, s.verb, wWhy, s.why, p.Describe(), took)
 	}
 	return true
 }
@@ -558,14 +566,23 @@ func restartAndWait(st *config.Stack, source string, c *pc.Client, name string, 
 					return p, nil
 				}
 			case pc.Off:
-				// process-compose won't start it while something it waits
-				// for has failed.
-				return p, fmt.Errorf("not started (%s): a process it depends on isn't healthy", strings.ToLower(p.Status))
+				upSince = time.Time{}
+				if p.Status == "Skipped" {
+					// process-compose gave up on it: something it waits for
+					// failed or was stopped.
+					return p, errors.New("not started: a process it depends on failed or was stopped")
+				}
+				// A process that is off by default reads "Disabled", not
+				// "Pending", until its new run begins: process-compose is
+				// waiting for what it depends on. Wait with it.
 			default:
 				upSince = time.Time{}
 			}
 		}
 		if time.Now().After(deadline) {
+			if err == nil && p.Health() == pc.Off {
+				return p, fmt.Errorf("not started after %s: process-compose is still waiting for a process it depends on", timeout)
+			}
 			return p, fmt.Errorf("still %s after %s", strings.ToLower(p.Status), timeout)
 		}
 		time.Sleep(400 * time.Millisecond)
@@ -607,7 +624,19 @@ func updateWorktrees(co gitx.Checkout, ms *mainState, mainCommit string, dry boo
 	sort.SliceStable(ups, func(i, j int) bool { return ups[i].depth < ups[j].depth })
 
 	fmt.Println("\nworktrees")
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	// One line per worktree, as each is done: a merge that restarts a
+	// worktree's stack takes a while.
+	branch := func(u *wtUpdate) string {
+		if u.name == "" {
+			return "(detached)"
+		}
+		return shortBranch(u.name)
+	}
+	wRoot, wBranch := 0, 0
+	for _, u := range ups {
+		wRoot = max(wRoot, utf8.RuneCountInString(filepath.Base(u.root)))
+		wBranch = max(wBranch, utf8.RuneCountInString(branch(u)))
+	}
 	hand := 0
 	for _, u := range ups {
 		// A parent merged a moment ago may have changed what this needs.
@@ -622,13 +651,8 @@ func updateWorktrees(co gitx.Checkout, ms *mainState, mainCommit string, dry boo
 		if u.hand {
 			hand++
 		}
-		branch := shortBranch(u.name)
-		if u.name == "" {
-			branch = "(detached)"
-		}
-		fmt.Fprintf(w, "  %s\t%s\t%s\n", filepath.Base(u.root), branch, u.note)
+		fmt.Printf("  %-*s  %-*s  %s\n", wRoot, filepath.Base(u.root), wBranch, branch(u), u.note)
 	}
-	w.Flush()
 	for _, u := range ups {
 		if len(u.detail) > 0 {
 			fmt.Printf("\n  %s\n", u.root)

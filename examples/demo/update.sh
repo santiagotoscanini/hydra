@@ -11,13 +11,15 @@
 #  4. A worktree cut from origin's newer main refuses to start on main's
 #     older stack, and says what to run.
 #  5. A migration that fails stops the update before the API restarts.
-#  6. A change to the stack file itself reaches the running stack.
-#  7. Starting a stack that is up is not an error, and `hydra up NAME` adds
+#  6. A process that is off by default and was started by hand restarts
+#     with the rest when a pull touches its files.
+#  7. A change to the stack file itself reaches the running stack.
+#  8. Starting a stack that is up is not an error, and `hydra up NAME` adds
 #     a process to it. A worktree removed with its stack up stops by itself,
 #     and its slot goes to the next worktree only after that.
-#  8. A process-compose that is killed leaves its services holding their
+#  9. A process-compose that is killed leaves its services holding their
 #     ports; `hydra status` names the one in the way.
-#  9. With main's stack down, a worktree won't start.
+# 10. With main's stack down, a worktree won't start.
 #
 # Along the way it reads the status page (`hydra ui`) for the same facts.
 #
@@ -192,7 +194,17 @@ run "$H" update --main-only; echo "$out" | tail -4 | show
 expect "$out" 'api +restarted'
 
 echo
-echo "--- 6. the stack file changes"
+echo "--- 6. a process that is off by default, started by hand"
+"$H" process start agent -p "$pc_port" >/dev/null
+for _ in $(seq 50); do "$H" process get agent -p "$pc_port" -o json | grep -qE '"status": *"Running"' && break; sleep 0.1; done
+team put apps/agent/main.py >/dev/null
+run "$H" update --main-only; echo "$out" | show
+[ "$status" -eq 0 ] || fail "update should restart the agent and wait for its new run"
+expect "$out" 'agent +restarted +apps/agent/main.py +running'
+expect "$("$H" process get agent -p "$pc_port" -o json)" '"status": *"Running"'
+
+echo
+echo "--- 7. the stack file changes"
 add_cache() { printf '\n  cache:\n    command: sleep 1000\n' >>process-compose.yaml; }
 team add_cache >/dev/null
 cd "$main"; g pull -q --ff-only
@@ -222,7 +234,7 @@ run "$H" status --wait; [ "$status" -eq 0 ] || fail "main should be clean again:
 expect "$out" "ok: main's stack is up and runs what main has checked out"
 
 echo
-echo "--- 7. a second start, one more process, and a worktree that is removed"
+echo "--- 8. a second start, one more process, and a worktree that is removed"
 cd "$repo/api"
 run "$H" up -D -L "$repo/api.log"; echo "$out" | show
 [ "$status" -eq 0 ] || fail "starting a stack that is up is not an error"
@@ -241,7 +253,7 @@ echo "the removed worktree's stack stopped by itself; its slot is held until the
 run "$H" slots; echo "$out" | sed 's/(removed.*/(removed; ...)/' | show
 expect "$out" " $slot +$repo/api +\(removed"
 cd "$repo/web"
-g merge -q main # steps 5 and 6 moved main without the worktrees
+g merge -q main # steps 5 to 7 moved main without the worktrees
 run "$H" up -D -L "$repo/web.log"; echo "$out" | grep '^hydra' | show
 [ "$status" -eq 0 ] || fail "web should start: $out"
 expect "$out" "hydra: slot $slot, running here"
@@ -250,7 +262,7 @@ grep -q removed <<<"$out" && fail "the removed worktree still holds a slot: $out
 run "$H" status --wait; [ "$status" -eq 0 ] || fail "web should be up: $out"
 
 echo
-echo "--- 8. process-compose is killed, and its services live on"
+echo "--- 9. process-compose is killed, and its services live on"
 kill -9 "$(pgrep -f "process-compose up -f $repo/web/" | head -1)"
 sleep 1
 run "$H" up -D -L "$repo/web.log"; [ "$status" -eq 0 ] || fail "web should start again: $out"
@@ -263,7 +275,7 @@ run "$H" status --wait; echo "$out" | tail -1 | show
 [ "$status" -eq 0 ] || fail "web should be up after the fix: $out"
 
 echo
-echo "--- 9. main's stack goes down"
+echo "--- 10. main's stack goes down"
 (cd "$main" && "$H" down -p "$pc_port" >/dev/null 2>&1)
 cd "$repo/dirty"
 run "$H" up -D -L "$repo/dirty.log"; echo "$out" | show
