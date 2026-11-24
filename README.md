@@ -558,7 +558,21 @@ its process-compose and watcher. Two things run out before memory:
   `hydra throttle go-build 2 -- go build -o bin/api ./cmd/api && exec ./bin/api`.
 - **Main's database connections.** Each worktree's copy of a service with a
   connection pool opens it on main's Postgres (100 connections by default).
-  `hydra status` warns from 75% and prints the command that raises the limit.
+  `hydra status` warns from 75% and prints the command that raises the limit,
+  which is enough for about twenty worktrees that run their own API. For
+  more, one line on the database's service puts PgBouncer in front of it,
+  once, in main, and every worktree connects through it:
+
+  ```yaml
+  supabase:
+    x-hydra:
+      kind: supabase
+      pool: 6432 # brew install pgbouncer first
+  ```
+
+  Main connects directly, and so does a worktree with a database of its own.
+  What holds a connection between transactions (`LISTEN`, session advisory
+  locks, a `SET` without `LOCAL`) doesn't work through it.
 
 ## The demos
 

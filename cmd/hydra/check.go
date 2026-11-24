@@ -432,6 +432,9 @@ func mainProblems(ms *mainState) []problem {
 			Fix:  "hydra update"})
 	}
 	out = append(out, tlsProblems(ms)...)
+	if p := poolProblem(ms); p != nil {
+		out = append(out, *p)
+	}
 	if p := dbConnsProblem(ms.target.stack); p != nil {
 		out = append(out, *p)
 	}
@@ -446,6 +449,30 @@ func mainProblems(ms *mainState) []problem {
 		out = append(out, problem{Text: "the main checkout has uncommitted changes, which its stack runs: " + someFiles(ms.Dirty)})
 	}
 	return out
+}
+
+// poolProblem says when main's PgBouncer (x-hydra.pool) doesn't accept
+// connections: every worktree that takes the database from main connects
+// through it.
+func poolProblem(ms *mainState) *problem {
+	st := ms.target.stack
+	s := st.Pooled()
+	if s == nil {
+		return nil
+	}
+	c, err := net.DialTimeout("tcp", net.JoinHostPort(st.Hydra.Host, strconv.Itoa(s.Pool.Port)), time.Second)
+	if err == nil {
+		c.Close()
+		return nil
+	}
+	main := ms.target.checkout.Root
+	fix := "cd " + shQuote(main) + " && hydra process restart hydra-pgbouncer"
+	if _, err := exec.LookPath("pgbouncer"); err != nil {
+		fix = "brew install pgbouncer && " + fix
+	}
+	return &problem{Blocks: true,
+		Text: fmt.Sprintf("main's PgBouncer for %s isn't listening on :%d, and worktrees reach main's database through it (x-hydra.pool).", s.Name, s.Pool.Port),
+		Fix:  fix}
 }
 
 // tlsProblems checks the TLS fronts of main's stack: each has to accept
@@ -564,6 +591,9 @@ func worktreeProblems(ms *mainState, ws *wtState, started bool) []problem {
 						mp.Blocks = true
 					}
 				}
+			}
+			if pooled := st.Pooled(); pooled != nil && strings.HasPrefix(mp.Text, "main's PgBouncer") {
+				_, mp.Blocks = used[pooled.Name]
 			}
 			out = append(out, mp)
 		}

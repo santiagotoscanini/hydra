@@ -284,3 +284,47 @@ processes:
 		}
 	}
 }
+
+func TestPool(t *testing.T) {
+	st, err := Parse([]byte(`
+x-hydra: { slot_stride: 200 }
+processes:
+  supabase:
+    command: x
+    x-hydra: { kind: supabase, pool: 6432 }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := st.Pooled()
+	if s == nil || s.Name != "supabase" {
+		t.Fatalf("Pooled = %v", s)
+	}
+	p := s.Pool
+	if p.Port != 6432 || p.Of != "db" || p.Size != 20 {
+		t.Errorf("defaults: %+v", *p)
+	}
+	if got := st.PoolTarget(s); got != 54322 {
+		t.Errorf("PoolTarget = %d, want 54322", got)
+	}
+
+	for in, want := range map[string]string{
+		`processes:
+  db: { command: x, x-hydra: { port: 5432, pool: { size: 5 } } }`: "needs a port of its own",
+		`processes:
+  db: { command: x, x-hydra: { pool: 6432 } }`: "needs x-hydra.port",
+		`processes:
+  db: { command: x, x-hydra: { port: 5432, pool: { port: 6432, of: admin } } }`: `no port named "admin"`,
+		`processes:
+  a: { command: x, x-hydra: { port: 5432, pool: 6432 } }
+  b: { command: x, x-hydra: { port: 5433, pool: 6433 } }`: "only one service",
+		`x-hydra: { slot_stride: 100 }
+processes:
+  db: { command: x, x-hydra: { port: 5432, pool: 5532 } }`: "collides",
+	} {
+		_, err := Parse([]byte(in))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s\ngot %v, want %q", in, err, want)
+		}
+	}
+}

@@ -114,6 +114,47 @@ type TLSFront struct {
 	ALPN string `yaml:"alpn"`
 }
 
+// Pool is a service's PgBouncer for worktrees (Service.Pool).
+type Pool struct {
+	// Port is where PgBouncer listens.
+	Port int `yaml:"port"`
+	// Of names the port it stands in front of: "db" when the service has a
+	// named port of that name (a Supabase stack's Postgres), else its port.
+	Of string `yaml:"of"`
+	// Size is how many connections PgBouncer keeps to Postgres, for every
+	// worktree together (default 20).
+	Size int `yaml:"size"`
+}
+
+// UnmarshalYAML accepts `pool: 6432` or `pool: { port: 6432, size: 40 }`.
+func (p *Pool) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode {
+		return n.Decode(&p.Port)
+	}
+	type plain Pool
+	return n.Decode((*plain)(p))
+}
+
+// Pooled returns the service whose Postgres worktrees reach through a pool,
+// nil when none has one.
+func (st *Stack) Pooled() *Service {
+	for _, name := range st.Names() {
+		if s := st.Services[name]; s.Pool != nil {
+			return s
+		}
+	}
+	return nil
+}
+
+// PoolTarget is the port of s, in the baseline, that its pool stands in
+// front of.
+func (st *Stack) PoolTarget(s *Service) int {
+	if s.Pool.Of != "" {
+		return s.Ports[s.Pool.Of]
+	}
+	return s.Port
+}
+
 // UnmarshalYAML accepts `tls: 8443` or `tls: { port: 8443, alpn: h2 }`.
 func (f *TLSFront) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.ScalarNode {
@@ -206,6 +247,12 @@ type Service struct {
 	BaselineCommand string `yaml:"baseline_command"`
 	// TLS puts a TLS front before the baseline's copy (see TLSFront).
 	TLS *TLSFront `yaml:"tls"`
+	// Pool puts one PgBouncer in front of the baseline's Postgres, through
+	// which every worktree that uses the baseline's copy connects, so they
+	// share a few connections instead of each opening its own pools. The
+	// baseline itself, and a worktree that runs its own copy, connect
+	// directly.
+	Pool *Pool `yaml:"pool"`
 
 	// DependsOn lists the process names this process waits for, from the
 	// regular process-compose `depends_on`.
@@ -517,6 +564,14 @@ func Parse(data []byte) (*Stack, error) {
 		if s.TLS != nil && s.TLS.ALPN == "" {
 			s.TLS.ALPN = "http/1.1"
 		}
+		if s.Pool != nil {
+			if s.Pool.Of == "" && s.Ports["db"] != 0 {
+				s.Pool.Of = "db"
+			}
+			if s.Pool.Size == 0 {
+				s.Pool.Size = 20
+			}
+		}
 		if s.URL == "" {
 			s.URL = "http://{host}:{port}"
 		}
@@ -574,6 +629,18 @@ func (st *Stack) validate() error {
 				return fmt.Errorf("%s: routed can't be combined with shared or follow", name)
 			case s.Port == 0:
 				return fmt.Errorf("%s: routed needs x-hydra.port, the port worktrees reach it through", name)
+			}
+		}
+		if s.Pool != nil {
+			switch {
+			case s.Pool.Port == 0:
+				return fmt.Errorf("%s: pool needs a port of its own for PgBouncer: `pool: 6432` or `pool: { port: 6432 }`", name)
+			case s.Pool.Of != "" && s.Ports[s.Pool.Of] == 0:
+				return fmt.Errorf("%s: pool.of: %s has no port named %q", name, name, s.Pool.Of)
+			case s.Pool.Of == "" && s.Port == 0:
+				return fmt.Errorf("%s: pool needs x-hydra.port, the Postgres port it stands in front of", name)
+			case st.Pooled() != s:
+				return fmt.Errorf("%s: pool: only one service can have one, and %s has it already", name, st.Pooled().Name)
 			}
 		}
 		if s.TLS != nil {
@@ -666,6 +733,13 @@ func (st *Stack) checkPorts() error {
 			return fmt.Errorf("port %d: %s collides with %s; change it, slot_stride, max_slots or the base ports", s.TLS.Port, who, prev)
 		}
 		owner[s.TLS.Port] = who
+	}
+	if s := st.Pooled(); s != nil {
+		who := s.Name + "'s pool (PgBouncer)"
+		if prev, taken := owner[s.Pool.Port]; taken {
+			return fmt.Errorf("port %d: %s collides with %s; change it, slot_stride, max_slots or the base ports", s.Pool.Port, who, prev)
+		}
+		owner[s.Pool.Port] = who
 	}
 	for _, name := range st.Dispatched() {
 		p := st.DispatchPort(st.Services[name])

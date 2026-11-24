@@ -214,6 +214,20 @@ func expandPort(st *config.Stack, s *config.Service, port, slot int, tmpl, value
 	return strings.NewReplacer(pairs...).Replace(tmpl)
 }
 
+// PooledValue is what a worktree's env var pointing at the baseline's copy
+// of t receives when t has a pool: the port the pool stands in front of is
+// the pool's. A value that doesn't name that port is left as it is.
+func PooledValue(st *config.Stack, t *config.Service, tmpl string) string {
+	if tmpl == "" {
+		tmpl = t.URL
+	}
+	pool := strconv.Itoa(t.Pool.Port)
+	if t.Pool.Of != "" {
+		return Value(st, t, 0, strings.ReplaceAll(tmpl, "{port."+t.Pool.Of+"}", pool))
+	}
+	return expandPort(st, t, t.Pool.Port, 0, tmpl, "")
+}
+
 // dispatchValue is what a routed service's env var receives in the baseline:
 // the target's address with the router's port for it.
 func dispatchValue(st *config.Stack, t *config.Service, tmpl string) string {
@@ -533,8 +547,14 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 				// Through this worktree's port for it, so the request is tagged.
 				target, slot, how = Routed, req.Slot, "default: main's "+t.Name+" through this worktree's port"
 			}
+			value := Value(st, t, slot, u.Value)
+			if target == Baseline && t.Pool != nil {
+				if pooled := PooledValue(st, t, u.Value); pooled != value {
+					value, how = pooled, how+", through main's pool"
+				}
+			}
 			row.Upstreams = append(row.Upstreams, Upstream{
-				Env: env, Service: t.Name, Target: target, Value: Value(st, t, slot, u.Value), Why: how,
+				Env: env, Service: t.Name, Target: target, Value: value, Why: how,
 			})
 		}
 		p.Services = append(p.Services, row)

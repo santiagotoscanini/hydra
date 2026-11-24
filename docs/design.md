@@ -817,6 +817,33 @@ worktrees started together:
   together with Supabase auth (auth keeps its dead pool across a database
   restart and fails every login until it is restarted), natively the whole
   stack through `hydra process restart supabase`.
+- **A pool for many worktrees.** Raising the limit holds about twenty
+  worktrees that run a Go API and worker (about 20 connections each, measured).
+  Smaller pools per worktree would hold more, but apps often hardcode their pool
+  sizes, and changing an app to suit a laptop is the wrong trade. So the
+  option is infrastructure: `pool: PORT` on the database's service adds one
+  `hydra-pgbouncer` process to main, and every worktree upstream that reaches
+  main's copy through the port it stands in front of (`{port.db}` for a
+  Supabase kind, `{port}` otherwise) gets the pool's port instead. The rules:
+  - **One PgBouncer, in main.** Worktrees come and go; the pool is main's,
+    like the database, and the number of real connections stays at `size`
+    (20) however many worktrees there are.
+  - **Only worktrees go through it.** Main's own services and a worktree
+    with a database of its own connect directly, so turning the pool on
+    changes nothing in main but the process it adds, and a stack that needs
+    a session (a `LISTEN`) still has a way to run.
+  - **Transaction pooling.** That is what makes the connections shared.
+    PgBouncer 1.21+ keeps pgx's prepared statements working
+    (`max_prepared_statements`); `LISTEN`, session advisory locks and plain
+    `SET` don't survive it, and the docs say so.
+  - **No credentials to configure.** PgBouncer trusts its clients, as a
+    local Postgres does, and logs in to Postgres with the passwords found in
+    the stack's own URLs to that service (plus `postgres`/`postgres`). Its
+    files are written from the started-from snapshot each time it starts.
+  - **Checked like the router.** `hydra status` dials its port; when it is
+    down, a worktree that goes through it is blocked, with the restart (and
+    the install when `pgbouncer` is missing) as the fix. Its readiness check
+    runs every two seconds and stays out of the journal.
 
 ## Removed worktrees
 

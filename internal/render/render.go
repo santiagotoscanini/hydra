@@ -25,6 +25,10 @@ type Options struct {
 	// Router, when set, is the command of a `hydra-router` process added to
 	// the baseline, through which routed services reach each worktree.
 	Router string
+	// Pool, when set, is the command of a `hydra-pgbouncer` process added to
+	// the baseline: the PgBouncer worktrees reach its database through. Ready
+	// is the command that exits 0 once it accepts connections.
+	Pool, PoolReady string
 	// NodeHook is the path of hydra's Node preload, loaded into services
 	// marked `routed: node`.
 	NodeHook string
@@ -49,7 +53,7 @@ func ReadyName(service string) string { return "hydra-ready-" + service }
 // Own reports whether name is a process hydra adds to a stack, as opposed to
 // one of the stack file's (which may be called `hydra-ui`).
 func Own(name string) bool {
-	return name == "hydra-watch" || name == "hydra-router" ||
+	return name == "hydra-watch" || name == "hydra-router" || name == "hydra-pgbouncer" ||
 		strings.HasPrefix(name, "hydra-ready-") || strings.HasPrefix(name, "hydra-prepare-")
 }
 
@@ -364,6 +368,20 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 			"command":      opt.Router,
 			"working_dir":  dir,
 			"availability": map[string]any{"restart": "always", "backoff_seconds": 2},
+		}
+	}
+	if opt.Pool != "" && p.Slot == 0 {
+		procs["hydra-pgbouncer"] = map[string]any{
+			"namespace":    "hydra",
+			"description":  "PgBouncer: worktrees reach main's database through it",
+			"command":      opt.Pool,
+			"working_dir":  dir,
+			"availability": map[string]any{"restart": "always", "backoff_seconds": 2},
+			"readiness_probe": map[string]any{
+				"exec":              map[string]any{"command": opt.PoolReady},
+				"period_seconds":    2,
+				"failure_threshold": 3,
+			},
 		}
 	}
 	for name, s := range stubs {

@@ -130,7 +130,7 @@ Docs: https://hydra.toscanini.me/docs/
 
 func main() {
 	began := time.Now()
-	if len(os.Args) < 2 || !quiet[os.Args[1]] {
+	if !isQuiet(os.Args[1:]) {
 		openJournal(".")
 	}
 	err := run(os.Args[1:])
@@ -180,6 +180,8 @@ func run(args []string) error {
 			return watchCmd(args[1:])
 		case "router":
 			return routerCmd(args[1:])
+		case "pgbouncer":
+			return pgbouncerCmd(args[1:])
 		case "prepare":
 			return prepareCmd(args[1:])
 		case "throttle":
@@ -455,6 +457,12 @@ func (t *target) render(p *plan.Plan, watch string) ([]byte, error) {
 	if p.Slot == 0 && (t.stack.HasRouted() || t.stack.HasTLS()) {
 		var err error
 		if opt.Router, err = routerCommand(t); err != nil {
+			return nil, err
+		}
+	}
+	if p.Slot == 0 && t.stack.Pooled() != nil {
+		var err error
+		if opt.Pool, opt.PoolReady, err = poolCommands(t); err != nil {
 			return nil, err
 		}
 	}

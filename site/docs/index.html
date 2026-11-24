@@ -105,7 +105,7 @@ process-compose v1.124.0
   /opt/homebrew/bin/process-compose
 </pre>
     </div>
-    <p>hydra is built and used on macOS, with process-compose v1.124. Two optional features need a tool of their own: <a href="#supabase">a database per worktree</a> needs the Supabase CLI (2.121 or later), and <a href="#temporal">Temporal workers</a> need the <code>temporal</code> CLI.</p>
+    <p>hydra is built and used on macOS, with process-compose v1.124. Three optional features need a tool of their own: <a href="#supabase">a database per worktree</a> needs the Supabase CLI (2.121 or later), <a href="#temporal">Temporal workers</a> need the <code>temporal</code> CLI, and <a href="#pool">a pool in front of main's database</a> needs PgBouncer (<code>brew install pgbouncer</code>, 1.21 or later).</p>
   </section>
 
   <section id="quickstart">
@@ -289,7 +289,7 @@ ok: main's stack is up and runs what main has checked out.
     <ul>
       <li><b><code>-D</code> runs it in the background.</b> Plain <code>hydra</code> (or <code>hydra up</code>) keeps the stack in your terminal with process-compose's UI, and quitting that UI stops the stack. <code>hydra attach</code> opens the same UI on a stack that runs in the background; leaving it leaves the stack running.</li>
       <li><b>The states.</b> <code>ready</code>: running, and its readiness probe passes. <code>running</code>: running, with no probe to ask. <code>done</code>: a job that finished with exit code 0. <code>starting</code>, <code>exited with code N</code> and <code>off</code> mean what they say. <code>stopped answering</code>: it was ready, and its readiness probe fails now. It isn't starting: something it runs went away. A native Supabase whose supervisor was killed shows this, because its start command had already exited. Processes with <code>disabled: true</code> are counted in a last line, <code>(2 more are off)</code>.</li>
-      <li><b><code>hydra-router</code></b> is a process hydra adds when a service is <a href="#routed"><code>routed</code></a> or has a <a href="#tls">TLS front</a>. It is what lets main's copy of a service answer on a worktree's port.</li>
+      <li><b><code>hydra-router</code></b> is a process hydra adds when a service is <a href="#routed"><code>routed</code></a> or has a <a href="#tls">TLS front</a>. It is what lets main's copy of a service answer on a worktree's port. <b><code>hydra-pgbouncer</code></b> is there when the database has a <a href="#pool"><code>pool</code></a>.</li>
       <li><b>In the main checkout, <code>hydra status</code> also lists every worktree</b> once there are any: what each runs, whether its stack is up, and where it stands against main. See <a href="#status">checking</a>.</li>
     </ul>
     <h3>What differs from plain process-compose</h3>
@@ -496,8 +496,9 @@ ok: main's stack is up and runs what main has checked out.
       <div><p class="said">! hydra has no record of the commit main's stack runs …</p><p>It was started by an older hydra, or by process-compose directly. <code>hydra update</code> restarts every process that lists <code>paths</code> once, and records the commit.</p></div>
       <div><p class="said">✗ main's stack has no api (…): it was started from an older process-compose.yaml.</p><p>The service was added to the stack file after main's stack started. <code>hydra update</code> adds it.</p></div>
       <div><p class="said">✗ main's TLS front for supabase isn't listening on :54421 (hydra-router opens it).</p><p><code>hydra process restart hydra-router</code> in the main checkout. See <a href="#tls">HTTPS in front of a service</a>.</p></div>
+      <div><p class="said">✗ main's PgBouncer for supabase isn't listening on :6432, and worktrees reach main's database through it (x-hydra.pool).</p><p>The <a href="#pool">pool</a> in front of main's database is down, so a worktree that takes the database from main can't reach it. The fix line restarts it: <code>hydra process restart hydra-pgbouncer</code> in the main checkout, after <code>brew install pgbouncer</code> when it isn't installed. If main's stack was started before <code>pool</code> was added, <code>hydra update</code> there adds it. Its own output is in <code>hydra process logs hydra-pgbouncer</code>.</p></div>
       <div><p class="said">! this machine doesn't trust the certificate of main's TLS fronts, so a browser refuses their https addresses.</p><p><code>hydra trust</code>, once per machine.</p></div>
-      <div><p class="said">! main's database has 81 of its 100 connections in use. Each worktree that runs its own api or worker on it takes more, and the next one will fail to connect ("remaining connection slots are reserved").</p><p>Shown from three quarters full, and as "main's database is out of connections" once it refuses hydra's. A local Postgres allows 100 connections, Supabase's own services hold about a third, and each copy of a service with a connection pool holds its pool. The fix line raises the limit to 300, or by 200 when it is 300 or more already: it changes the setting as <code>supabase_admin</code> (Supabase's <code>postgres</code> role isn't allowed to) and restarts the database. In Docker it restarts the database container and Supabase auth with it, which otherwise keeps answering logins with "Database error querying schema"; a native stack (see <a href="#supabase-main">main's database natively</a>) restarts as a whole with <code>hydra process restart supabase</code>. The data stays. Everything connected to the database reconnects within seconds; a request in flight meanwhile fails.</p></div>
+      <div><p class="said">! main's database has 81 of its 100 connections in use. Each worktree that runs its own api or worker on it takes more, and the next one will fail to connect ("remaining connection slots are reserved"). Raising the limit is enough for a few more; for many, x-hydra.pool puts PgBouncer in front of it, so worktrees share a few connections.</p><p>Shown from three quarters full, and as "main's database is out of connections" once it refuses hydra's. A local Postgres allows 100 connections, Supabase's own services hold about a third, and each copy of a service with a connection pool holds its pool. The fix line raises the limit to 300, or by 200 when it is 300 or more already: it changes the setting as <code>supabase_admin</code> (Supabase's <code>postgres</code> role isn't allowed to) and restarts the database. In Docker it restarts the database container and Supabase auth with it, which otherwise keeps answering logins with "Database error querying schema"; a native stack (see <a href="#supabase-main">main's database natively</a>) restarts as a whole with <code>hydra process restart supabase</code>. The data stays. Everything connected to the database reconnects within seconds; a request in flight meanwhile fails. The sentence about <a href="#pool">the pool</a> is left out once there is one.</p></div>
       <div><p class="said">! the main checkout is on branch hotfix, not main: worktrees are compared with what it has checked out.</p><p>Worktrees take what main runs, whatever branch that is. Check out the default branch there again when you are done.</p></div>
       <div><p class="said">! the main checkout has uncommitted changes, which its stack runs: …</p><p>Someone edited files in the main checkout. Worktrees that take those services from main get the edits too.</p></div>
       <div><p class="said">! ~/code/shop-old was removed, but its stack is still running (slot 3). …</p><p>Shown in the main checkout. A removed worktree's stack normally stops by itself; this one didn't. The next <code>hydra up</code> in any checkout stops it, or now: <code>hydra slots free ~/code/shop-old</code>.</p></div>
@@ -791,7 +792,7 @@ $ hydra down             # when the work is done
       <tr><td>Hot reload doesn't work in the browser</td><td>Open the page as <code>localhost</code>, not <code>127.0.0.1</code>. A dev server treats a page opened by IP address as another origin; Next.js refuses it the hot-reload socket.</td></tr>
       <tr><td><code>all 20 slots are taken by stacks that run</code></td><td>Twenty worktrees have a stack up. A start takes the slot of a stopped one by itself, so these all run. Stop one you aren't using (<code>hydra down</code> there, or <code>hydra down --worktrees</code> for all), or raise <code>max_slots</code>. From <code>hydra plan</code> it says <code>all 20 slots are taken</code>: plan never takes a slot, and <code>hydra up -D</code> would.</td></tr>
       <tr><td>The machine stops answering when many worktrees start at once</td><td>Each starts its own build. Wrap the build step in <a href="#many"><code>hydra throttle</code></a> so builds take turns.</td></tr>
-      <tr><td>A worktree's api or worker fails with <code>remaining connection slots are reserved</code> (SQLSTATE 53300)</td><td>Main's database is out of connections: every worktree that runs its own copy of a service on it opens that service's pool. <code>hydra status</code> warns before it happens, with the fix. See <a href="#many">many worktrees at once</a>.</td></tr>
+      <tr><td>A worktree's api or worker fails with <code>remaining connection slots are reserved</code> (SQLSTATE 53300)</td><td>Main's database is out of connections: every worktree that runs its own copy of a service on it opens that service's pool. <code>hydra status</code> warns before it happens, with the fix. See <a href="#many">many worktrees at once</a>, and <a href="#pool">the pool</a> for more than twenty or so.</td></tr>
       <tr><td><code>another process-compose project is running on localhost:8099</code></td><td>Two repositories want the same port for main's process-compose. Give this one another: <code>hydra up -D -p 8098</code>.</td></tr>
       <tr><td><code>hydra up</code> does nothing new after you upgraded hydra</td><td>A running stack keeps the hydra it started with. <code>hydra status</code> notes when main's stack is older than the hydra on your <code>PATH</code>, and <code>hydra update</code> reloads it. A worktree picks the new one up at its next <code>hydra down</code> and <code>hydra up -D</code>.</td></tr>
       <tr><td><code>supabase</code> commands in a worktree say no stack was found</td><td>The worktree's branch was renamed or switched while its database ran. <code>hydra process restart supabase</code>. See <a href="#supabase">a database per worktree</a>.</td></tr>
@@ -811,10 +812,14 @@ $ hydra down             # when the work is done
       <tr><td><code>slot</code></td><td>A worktree takes its slot on <code>hydra up</code>, or the slot of a stopped one.</td></tr>
       <tr><td><code>start</code>, <code>log</code></td><td>The watcher, the router or the status page starts; every line the watcher and the router print.</td></tr>
     </table></div>
-<pre><span class="p">$</span> hydra log --since 2h --errors
+    <div class="code">
+<pre data-lang="sh">
+$ hydra log --since 2h --errors
 10:25:59  fresh [3]                    problem  ✗ main's stack isn't running (nothing answers on localhost:8198). This worktree takes from it: db, migrate, web.
-        fix: cd ~/shop && hydra up -D
-10:25:59  fresh [3]                    command  hydra status   exit 1, 274ms</pre>
+        fix: cd ~/shop &amp;&amp; hydra up -D
+10:25:59  fresh [3]                    command  hydra status   exit 1, 274ms
+</pre>
+    </div>
     <p><code>hydra log</code> prints the last hour of every checkout. <code>--since 24h</code> goes further back, <code>--here</code> keeps this checkout's, <code>--errors</code> keeps what went wrong (failed commands, ✗ problems, failed processes), <code>-f</code> follows, <code>--json</code> prints the lines as written. Kinds narrow it: <code>hydra log process usage</code>.</p>
     <p><code>hydra report</code> writes one Markdown file and prints its path: hydra's, process-compose's and macOS's versions, <code>hydra status --all</code> and <code>hydra slots</code> as they are now, how long each stack ran and its average and peak memory and CPU, the heaviest processes, each command's runs, failures and timings, what went wrong grouped with counts, and the journal itself. It covers the last 24 hours (<code>--since</code>); <code>-o FILE</code> writes it elsewhere. It is the thing to send when asking for help with hydra: it holds paths and command lines of this machine, and no secrets hydra knows of.</p>
     <p>Memory is resident memory as <code>ps</code> counts it, which includes files a process maps: <code>next dev</code> reads several hundred MB higher than macOS's own figure. Compare a stack with itself over time. Main's stack is only sampled when it has a <code>hydra-router</code>, that is when a service is routed or has a TLS front. <code>HYDRA_JOURNAL=off</code> stops a process from writing.</p>
@@ -833,7 +838,7 @@ $ hydra down             # when the work is done
       <li>Starts process-compose on that file, on a unix socket that belongs to this worktree.</li>
     </ol>
     <p>Because of the socket, <code>hydra down</code>, <code>hydra attach</code> and <code>hydra process …</code> in a worktree reach that worktree's stack and never main's. If the stack is already up, <code>hydra up</code> starts nothing new and says so.</p>
-    <p>hydra has no daemon. What it adds to your projects are ordinary processes you can see in process-compose: <code>hydra-watch</code> in each worktree, <code>hydra-router</code> in main when a service is routed or has a TLS front, a <code>hydra-prepare-…</code> step before a service that needs one, and a <code>hydra-ready-…</code> step that what reads a worktree's own database waits for.</p>
+    <p>hydra has no daemon. What it adds to your projects are ordinary processes you can see in process-compose: <code>hydra-watch</code> in each worktree, <code>hydra-router</code> in main when a service is routed or has a TLS front, <code>hydra-pgbouncer</code> in main when the database has a <a href="#pool">pool</a>, a <code>hydra-prepare-…</code> step before a service that needs one, and a <code>hydra-ready-…</code> step that what reads a worktree's own database waits for.</p>
   </section>
 
   <section id="changes">
@@ -1133,7 +1138,7 @@ web:
       <li>A <code>hydra-prepare-&lt;service&gt;</code> step runs before each service that has <code>prepare</code>.</li>
       <li>With a <a href="#supabase">Supabase of its own</a>: hydra's steps go around the database's start and stop commands, a <code>hydra-ready-&lt;service&gt;</code> step ends once the database is started and migrated, and each service here that reads the database depends on that step in place of the database itself. Your stop command only runs while the folder is still a worktree: in what git leaves of a <a href="#cleanup">removed</a> one, the Supabase CLI could take the folder for part of the main checkout, so there hydra stops the stack by its id instead.</li>
       <li>In a worktree: <code>hydra-watch</code> is added. When any process of your file has a <code>watch</code>, <code>hydra-watch</code> carries one too, on an empty directory (<code>.process-compose/watch-anchor</code>), which never fires. process-compose only sets its file watching up when a process has a <code>watch</code> as the project starts, and a worktree usually starts with nothing of its own to run: without this, a service the watcher adds later would never restart on an edit.</li>
-      <li>In the main checkout: <code>watch</code> blocks are dropped and <code>baseline_command</code> replaces <code>command</code>. When a service is <code>routed</code> or has <code>tls</code>, a <code>hydra-router</code> process is added, and a routed service's HTTP upstreams point at it.</li>
+      <li>In the main checkout: <code>watch</code> blocks are dropped and <code>baseline_command</code> replaces <code>command</code>. When a service is <code>routed</code> or has <code>tls</code>, a <code>hydra-router</code> process is added, and a routed service's HTTP upstreams point at it. When one has a <code>pool</code>, so is <code>hydra-pgbouncer</code>.</li>
     </ul>
     <p>hydra relies on the process environment winning over <code>.env</code> files. That holds for Next.js and for godotenv; check it for other loaders.</p>
   </section>
@@ -1183,20 +1188,24 @@ api:
     <h3>Connections to main's database</h3>
     <p>Every worktree that runs its own copy of a service on main's database opens that service's connection pool there. A local Postgres allows 100 connections and Supabase's own services hold about a third, so with pools of ten and more, two or three worktrees fill it, and the next one fails with <code>remaining connection slots are reserved</code>. <code>hydra status</code> <a href="#messages">warns</a> from three quarters full and gives the command that raises the limit (to 300, then by 200 at a time), once per machine (it stays across restarts of the stack).</p>
     <p>Raising the limit is the fix to reach for first: a worktree's connections are idle almost all the time, and an idle Postgres connection costs a few MB. Measured with a Go API and worker of seven pools: about 20 connections per worktree that runs them, so a limit of 500 (two raises from <code>hydra status</code>) holds about 22 such worktrees at once. Worktrees that take the API from main open none.</p>
-    <p>If your app already reads its pool size from the connection string, you can also hand worktrees a smaller one and keep main's as it was with <code>baseline_value</code>. With pgx that works only when the code doesn't set <code>MaxConns</code> after parsing the string:</p>
+    <p id="pool">Past that, put <a href="https://www.pgbouncer.org">PgBouncer</a> between the worktrees and main's database. It is one process in main, shared by every worktree: each worktree's services connect to it as if it were the database, and it hands their queries to a few real connections, one transaction at a time. You turn it on with one line on the database's service, and nothing in the app changes:</p>
     <div class="code">
 <pre data-lang="yaml">
-api:
+supabase:
   x-hydra:
-    upstreams:
-      DATABASE_URL:
-        service: supabase
-        # pgx's own keys; other drivers have theirs (connection_limit, pool_size, …)
-        value: "postgresql://postgres:postgres@{host}:{port.db}/postgres?pool_max_conns=4&amp;pool_min_conns=0"
-        baseline_value: "postgresql://postgres:postgres@{host}:{port.db}/postgres"
+    kind: supabase
+    pool: 6432   # PgBouncer listens here; worktrees connect through it
 </pre>
     </div>
-    <p>Don't change an app for this; a limit of a few hundred costs less.</p>
+    <ul>
+      <li>Install it first: <code>brew install pgbouncer</code> (1.21 or later, for the prepared statements Go's pgx sends).</li>
+      <li>Then run <code>hydra update</code> in main. It adds a process, <code>hydra-pgbouncer</code>, and changes nothing else there: main's own services keep connecting to the database directly.</li>
+      <li>Each running worktree's watcher applies the edit within seconds. Every upstream that names the database's port (<code>{port.db}</code> on a Supabase service, <code>{port}</code> otherwise) now gets the pool's port instead, and the services that read one restart on it. <code>hydra plan</code> marks those lines <code>through main's pool</code>.</li>
+      <li>A worktree that runs its own database connects to that one directly, as before.</li>
+    </ul>
+    <p>The pool keeps at most 20 connections to Postgres for all the worktrees together; <code>pool: { port: 6432, size: 40 }</code> changes that. PgBouncer lets any client in, as a local Postgres does, and logs in to Postgres for it with the password from the stack's own URLs (<code>postgres</code>/<code>postgres</code> when none says otherwise). A user whose password appears in none of them can't get a connection through it.</p>
+    <p>One thing doesn't work through a pool that shares connections between transactions: anything that holds on to its connection between them. <code>LISTEN</code>, advisory locks taken outside a transaction, and <code>SET</code> without <code>LOCAL</code> reach whichever connection happens to run the next statement. A worktree that needs one of those for what it tests can run its own database (<code>hydra up supabase</code>), which it connects to directly.</p>
+    <p>When <code>hydra-pgbouncer</code> isn't listening, a worktree that goes through it can't reach the database at all, so <code>hydra status</code> <a href="#messages">says so</a> with the fix. It is listed with main's processes, and its configuration is in <code>.process-compose/pgbouncer/</code> in the main checkout.</p>
   </section>
 
   <section id="config">
@@ -1235,6 +1244,7 @@ api:
       <tr><td><code>follow</code><span class="type">boolean</span></td><td class="def">false</td><td>Run in a worktree whenever a service there depends on it.</td></tr>
       <tr><td><code>prepare</code><span class="type">string</span></td><td class="def">none</td><td>A shell command run once before the service starts in a worktree, for example to create the queue or namespace named by <code>url</code>.</td></tr>
       <tr><td><code>tls</code><span class="type">integer or map</span></td><td class="def">none</td><td>A port where the router accepts TLS for the main checkout's copy and passes it on to <code>port</code>: <code>tls: 8443</code>, or <code>tls: { port: 8443, alpn: h2 }</code> for a service that speaks HTTP/2 in the clear. See <a href="#tls">HTTPS in front of a service</a>.</td></tr>
+      <tr><td><code>pool</code><span class="type">integer or map</span></td><td class="def">none</td><td>On a database's service: a port where one <a href="#pool">PgBouncer</a> in main stands in front of main's copy, and every worktree that takes the database from main connects through it. <code>pool: 6432</code>, or <code>pool: { port: 6432, size: 40, of: db }</code>: <code>size</code> is how many connections it keeps to Postgres for all worktrees together (20), <code>of</code> the named port it stands in front of (<code>db</code> when the service has one, else <code>port</code>). One service per stack. Needs <code>pgbouncer</code> installed.</td></tr>
       <tr><td><code>baseline_command</code><span class="type">string</span></td><td class="def">none</td><td>Replaces the process's <code>command</code> in the main checkout, where the code only changes on <code>hydra update</code>: a production build, say, where worktrees run a dev server.</td></tr>
     </table></div>
     <p>Three process-compose keys of your own matter to hydra as well:</p>
@@ -1377,6 +1387,7 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><th>File</th><th>What it is</th></tr>
       <tr><td><code>.process-compose/hydra.yaml</code><span class="type">in each checkout</span></td><td>The generated process-compose file. Written by <code>hydra up</code> and, in a worktree, by the watcher. Don't edit it; ignore it in git.</td></tr>
       <tr><td><code>.process-compose/hydra-source.yaml</code><span class="type">in the main checkout</span></td><td>A copy of the <code>process-compose.yaml</code> main's running stack was started from, written by <code>hydra up</code> and <code>hydra update</code>. hydra-router reads it, so its ports stay the ones main's services were given until <code>hydra update</code> applies a changed file. Don't edit it; ignore it in git.</td></tr>
+      <tr><td><code>.process-compose/pgbouncer/</code><span class="type">in the main checkout</span></td><td>With a <a href="#pool">pool</a>: <code>pgbouncer.ini</code> and <code>userlist.txt</code>, written by <code>hydra-pgbouncer</code> each time it starts, from the stack main was started from. Don't edit them; ignore them in git.</td></tr>
       <tr><td><code>.process-compose/watch-anchor/</code><span class="type">in a worktree</span></td><td>An empty directory. <code>hydra-watch</code>'s own <code>watch</code> points at it, so that process-compose restarts your services on edits (see <a href="#generated">the generated file</a>). Nothing is ever written there.</td></tr>
       <tr><td><code>.hydra.local.yaml</code><span class="type">in a worktree</span></td><td>Yours, and optional: <a href="#local">per-worktree settings</a>. hydra only reads it.</td></tr>
       <tr><td><code>hydra-slots.json</code><span class="type">shared .git</span></td><td>Which worktree holds which slot.</td></tr>

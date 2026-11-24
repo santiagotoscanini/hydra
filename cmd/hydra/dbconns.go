@@ -79,6 +79,9 @@ func dbConnsProblem(st *config.Stack) *problem {
 		text = "main's database is out of connections: it refused hydra's."
 	}
 	text += " Each worktree that runs its own api or worker on it takes more, and the next one will fail to connect (\"remaining connection slots are reserved\")."
+	if st.Pooled() == nil {
+		text += " Raising the limit is enough for a few more; for many, x-hydra.pool puts PgBouncer in front of it, so worktrees share a few connections."
+	}
 	// Only supabase_admin may change the setting (Supabase's postgres role is
 	// not a superuser), and it takes a restart of the database. 300 first;
 	// past that, 200 more each time.

@@ -574,3 +574,40 @@ processes:
 		t.Errorf("main's file changed: %v", base["api"].DependsOn)
 	}
 }
+
+func TestThePoolRunsInTheBaselineOnly(t *testing.T) {
+	st, err := config.Parse([]byte(`
+processes:
+  db:
+    command: db
+    x-hydra: { port: 5432, pool: 6543 }
+  api:
+    command: api
+    x-hydra: { port: 8080, paths: ["api/**"], upstreams: { DB: { service: db, value: "postgres://{host}:{port}/x" } } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opt := Options{Dir: "/repo", Pool: "exec hydra pgbouncer", PoolReady: "hydra pgbouncer --ready"}
+	data, err := Render(st, plan.BaselinePlan(st), opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "hydra-pgbouncer:") || !strings.Contains(string(data), "hydra pgbouncer --ready") {
+		t.Errorf("baseline has no hydra-pgbouncer:\n%s", data)
+	}
+	p, err := plan.Build(st, plan.Request{Slot: 1, Changed: []string{"api/x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err = Render(st, p, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "hydra-pgbouncer") {
+		t.Errorf("a worktree runs PgBouncer:\n%s", data)
+	}
+	if !strings.Contains(string(data), "DB=postgres://127.0.0.1:6543/x") {
+		t.Errorf("the worktree's api doesn't go through the pool:\n%s", data)
+	}
+}

@@ -300,3 +300,38 @@ processes:
 		t.Errorf("main's database: out of step = %q", got)
 	}
 }
+
+// With a pool, a worktree reaches main's database through PgBouncer; main
+// itself, and a worktree with a database of its own, connect directly.
+func TestAPoolStandsBetweenWorktreesAndMainsDatabase(t *testing.T) {
+	st, err := config.Parse([]byte(strings.Replace(supabaseStack, "kind: supabase\n", "kind: supabase\n      pool: 6432\n", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Build(st, Request{Slot: 2, Changed: []string{"core/handler.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := upstream(t, p, "api", "SUPABASE_URL")
+	if u.Value != "postgresql://postgres@127.0.0.1:6432/postgres" || !strings.Contains(u.Why, "through main's pool") {
+		t.Errorf("api SUPABASE_URL = %q (%s)", u.Value, u.Why)
+	}
+	// Supabase's HTTP API isn't Postgres.
+	if u := upstream(t, p, "api", "SUPABASE_API_URL"); u.Value != "http://127.0.0.1:54321" {
+		t.Errorf("api SUPABASE_API_URL = %q", u.Value)
+	}
+	for _, row := range BaselinePlan(st).Services {
+		for _, u := range row.Upstreams {
+			if strings.Contains(u.Value, ":6432") {
+				t.Errorf("baseline %s %s = %q", row.Name, u.Env, u.Value)
+			}
+		}
+	}
+	p, err = Build(st, Request{Slot: 2, Changed: []string{"supabase/migrations/1_x.sql", "core/handler.go"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u := upstream(t, p, "api", "SUPABASE_URL"); u.Value != "postgresql://postgres@127.0.0.1:54722/postgres" {
+		t.Errorf("api on its own database: SUPABASE_URL = %q", u.Value)
+	}
+}

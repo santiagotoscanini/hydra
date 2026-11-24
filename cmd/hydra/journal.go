@@ -62,9 +62,25 @@ func shortVersion() string {
 // quiet commands leave no trace: reading the journal isn't news.
 var quiet = map[string]bool{"help": true, "-h": true, "--help": true, "version": true, "--version": true, "log": true, "report": true}
 
+// isQuiet says whether a command leaves no trace: a quiet one, or the
+// readiness check process-compose runs on main's PgBouncer every 2 seconds.
+func isQuiet(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	if args[0] == "pgbouncer" {
+		for _, a := range args {
+			if a == "--ready" {
+				return true
+			}
+		}
+	}
+	return quiet[args[0]]
+}
+
 // logCommand records a command once it has ended.
 func logCommand(args []string, began time.Time, err error) {
-	if len(args) > 0 && quiet[args[0]] {
+	if isQuiet(args) {
 		return
 	}
 	cwd, _ := os.Getwd()
