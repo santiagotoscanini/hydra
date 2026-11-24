@@ -9,7 +9,7 @@ main checkout's copies of the rest. See `README.md` for what it does and
 
 | Path | What |
 |---|---|
-| `cmd/hydra/` | The CLI: the process-compose wrapper (`wrap.go`), `plan`/`render`/`slots`, the checks behind `hydra status` and `hydra up` (`check.go`, `status.go`, and `ports.go`, which names the program holding a port), the status page (`ui.go`, and `ui.html`, which is embedded in the binary), `hydra update` (`update.go`), cleaning up after removed worktrees (`reap.go`), the certificate behind TLS fronts and `hydra trust` (`tls.go`), `hydra version` (`version.go`), and the processes hydra adds (`watch.go`, `router.go`, `prepare.go`, `supabase.go`) |
+| `cmd/hydra/` | The CLI: the process-compose wrapper (`wrap.go`), `plan`/`render`/`slots`, the checks behind `hydra status` and `hydra up` (`check.go`, `status.go`, and `ports.go`, which names the program holding a port), the status page (`ui.go`, and `ui.html`, which is embedded in the binary), `hydra update` (`update.go`), cleaning up after removed worktrees (`reap.go`) and after a killed process-compose (`leftover.go`), the certificate behind TLS fronts and `hydra trust` (`tls.go`), `hydra version` (`version.go`), and the processes hydra adds (`watch.go`, `router.go`, `prepare.go`, `supabase.go`) |
 | `internal/` | `config` (the `x-hydra` keys), `plan` (what runs where, and what is out of step with main), `render` (the generated file), `stack` (stacked worktrees), `router` + `routes` + `hook` (routed services), `pc` (process-compose's HTTP API), `slots`, `gitx`, `glob`, `changes` |
 | `examples/demo/` | Mock stacks and scripts that run hydra end to end (`run.sh`, `stack.sh`, `routed.sh`, `update.sh`, `tls.sh`) |
 | `site/` | The site at <https://hydra.toscanini.me>: static HTML, no build step, deployed by `.github/workflows/pages.yml` on push to `main` |
@@ -53,7 +53,8 @@ sample config it mirrors is the quick start in `site/docs/index.html`.
   user's. `update.sh` checks what every step printed and exits non-zero
   when one is off: it is the end-to-end test of `hydra status`, the checks
   before `hydra up`, `hydra update`, a second start, the order in which an
-  update starts things, a removed worktree and a killed process-compose.
+  update starts things, a removed worktree, a killed process-compose (alone,
+  with its watcher, and then removed) and `hydra down --worktrees`.
 - CI (`.github/workflows/test.yml`) runs the tests and all five demos on
   every push to `main`.
 - What needs Docker isn't covered by either: a worktree's own Supabase

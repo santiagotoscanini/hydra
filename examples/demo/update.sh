@@ -23,9 +23,16 @@
 #     after the step it needs first, and after the service it waits for,
 #     also when that one only just moved into the worktree. Then git gives
 #     up halfway through removing that worktree, and hydra finishes the job.
-# 10. A process-compose that is killed leaves its services holding their
-#     ports; `hydra status` names the one in the way.
+# 10. A process-compose that is killed doesn't take its processes with it.
+#     The stack's watcher stops them and goes. Killed along with it, they
+#     live on: `hydra down` there stops them, and so does the next
+#     `hydra up`, before it starts anything. When process-compose is started
+#     without hydra, `hydra status` names the one that holds a port, and the
+#     restart it suggests clears it. And a worktree removed in that state is
+#     cleaned up after like any other.
 # 11. With main's stack down, a worktree won't start.
+# 12. `hydra down --worktrees` stops every worktree's stack, also what a
+#     killed process-compose left of one.
 #
 # Along the way it reads the status page (`hydra ui`) for the same facts.
 #
@@ -46,11 +53,15 @@ main="$repo/main"
 (cd "$root" && go build -o "$repo/bin/" ./cmd/...)
 H="$repo/bin/hydra"
 cleanup() {
+  cd / # not from inside what is about to be cleared
   [ -n "${ui_pid:-}" ] && kill "$ui_pid" 2>/dev/null
   for wt in api web conflict dirty fresh order; do
     (cd "$repo/$wt" 2>/dev/null && "$H" down >/dev/null 2>&1) || true
   done
   (cd "$main" 2>/dev/null && "$H" down -p "$pc_port" >/dev/null 2>&1) || true
+  # Step 10 kills process-compose on purpose; whatever that left running
+  # from this directory goes with it.
+  lsof -a -d cwd -Fpn 2>/dev/null | awk -v repo="$repo" '/^p/{pid=substr($0,2)} /^n/{if (index(substr($0,2), repo) == 1) print pid}' | xargs kill 2>/dev/null || true
   rm -rf "$repo"
 }
 trap cleanup EXIT
@@ -334,18 +345,91 @@ wait_cleaned "$repo/order"
 echo "removed halfway by git with seven services up: hydra stopped them and deleted the rest"
 
 echo
-echo "--- 10. process-compose is killed, and its services live on"
+echo "--- 10. process-compose is killed"
 cd "$repo/web"
-kill -9 "$(pgrep -f "process-compose up -f $repo/web/" | head -1)"
-sleep 1
+web_port=$((21000 + $("$H" slots | awk '$1=="*"{print $2}') * 100))
+pc_of() { pgrep -f "process-compose up -f $repo/$1/" | head -1; }
+web_pc() { pc_of web; }
+alive() { local n=0 p; for p in $1; do kill -0 "$p" 2>/dev/null && n=$((n + 1)); done; echo "$n"; }
+gone() { # every process named is gone, within ten seconds
+  for _ in $(seq 100); do [ "$(alive "$1")" = 0 ] && return 0; sleep 0.1; done
+  fail "still running: $(ps -o pid=,ppid=,command= -p "$(tr ' ' ',' <<<"${1% }")")"
+}
+kill_both() { # a worktree's process-compose and its watcher at once, as `pkill -f process-compose` does
+  local watcher; watcher="$(pgrep -f "hydra watch --root $repo/$1 " | head -1)"
+  kill -STOP "$watcher"; kill -9 "$(pc_of "$1")" "$watcher" # stopped first, so it can't act in between
+  sleep 1
+}
+kill_web() {
+  kill_both web
+  curl -sf "localhost:$web_port" >/dev/null 2>&1 || fail "web didn't outlive its process-compose, so there is nothing to show"
+}
+pids() { sed 's/pid [0-9]*/pid <pid>/g'; }
+pc_cmd="$(ps -o command= -p "$(web_pc)")" # how hydra started it, for later
+sleep 3 # the watcher writes down what process-compose runs every two seconds
+
+# Killed alone: the watcher notices, stops what it left, and goes.
+kids="$(pgrep -P "$(web_pc)" | tr '\n' ' ')"
+kill -9 "$(web_pc)"
+gone "$kids"
+curl -sf "localhost:$web_port" >/dev/null 2>&1 && fail "web still answers on :$web_port: $(holder "$web_port")"
+echo "killed alone: the watcher stopped the $(wc -w <<<"$kids" | tr -d ' ') processes it had started, itself among them"
+run "$H" status; echo "$out" | grep -A1 '^✗' | show
+refuse "$out" "this worktree's stack isn't running"
 run "$H" up -D -L "$repo/web.log"; [ "$status" -eq 0 ] || fail "web should start again: $out"
-run "$H" status --wait; echo "$out" | sed -n '/^✗/,$p' | sed -e 's/pid [0-9]*/pid <pid>/' -e 's/kill [0-9]*/kill <pid>/' -e 's#^\(      | \)[0-9/]* [0-9:]* #\1#' | show
+grep -q '^hydra: stopped' <<<"$out" && fail "nothing should have been left to stop: $out"
+run "$H" status --wait; echo "$out" | tail -1 | show
+[ "$status" -eq 0 ] || fail "web should be up again: $out"
+
+# Killed with its watcher: what it had started lives on. `hydra down` there
+# stops it, by what the watcher wrote down.
+sleep 3
+kids="$(pgrep -P "$(web_pc)" | tr '\n' ' ')"
+kill_web
+run "$H" down; echo "$out" | pids | show
+expect "$out" 'hydra: stopped what an earlier run of this stack left running: .*web \(pid [0-9]+\)'
+gone "$kids"
+run "$H" down; echo "$out" | show
+expect "$out" "this checkout's stack isn't running; nothing to stop"
+
+# And so does the next start, before it starts anything.
+run "$H" up -D -L "$repo/web.log"; [ "$status" -eq 0 ] || fail "web should start: $out"
+run "$H" status --wait; [ "$status" -eq 0 ] || fail "web should be up: $out"
+sleep 3
+kids="$(pgrep -P "$(web_pc)" | tr '\n' ' ')"
+kill_web
+run "$H" up -D -L "$repo/web.log"; echo "$out" | grep '^hydra: stopped' | pids | show
+[ "$status" -eq 0 ] || fail "web should start again: $out"
+expect "$out" 'hydra: stopped what an earlier run of this stack left running: .*web \(pid [0-9]+\)'
+gone "$kids"
+run "$H" status --wait; echo "$out" | tail -1 | show
+[ "$status" -eq 0 ] || fail "web should be up again without anything else: $out"
+
+# Started without hydra, process-compose runs into the leftover. `hydra
+# status` says what holds the port, and the restart it names clears it.
+kill_web
+$pc_cmd >/dev/null 2>&1 &
+disown # it is killed further down, and the shell would report that
+for _ in $(seq 50); do "$H" process list >/dev/null 2>&1 && break; sleep 0.1; done
+run "$H" status --wait; echo "$out" | sed -n '/^✗/,$p' | sed -e 's#^\(      | \)[0-9/]* [0-9:]* #\1#' | pids | show
 refuse "$out" 'Port [0-9]+ is held by mocksvc \(pid [0-9]+\), left over from an earlier run of this stack'
 fix="$(sed -n 's/^  fix: //p' <<<"$out" | head -1)"
-expect "$fix" '^kill [0-9]+ && hydra process restart web$'
-kill "$(grep -oE '^kill [0-9]+' <<<"$fix" | cut -d' ' -f2)"; "$H" process restart web >/dev/null
+expect "$fix" '^hydra process restart web   \(stops the leftover first\)$'
+run "$H" process restart web; echo "$out" | grep '^hydra: stopped' | pids | show
+expect "$out" 'hydra: stopped what an earlier run of this stack left running: web \(pid [0-9]+\)'
 run "$H" status --wait; echo "$out" | tail -1 | show
 [ "$status" -eq 0 ] || fail "web should be up after the fix: $out"
+
+# Killed with its watcher and then removed: nobody is left to notice. The
+# next start anywhere finishes the job, here one of a stack that is up.
+sleep 3
+kids="$(pgrep -P "$(web_pc)" | tr '\n' ' ')"
+kill_web
+cd "$main"; g worktree remove --force "$repo/web" 2>/dev/null || true
+run "$H" up -D -p "$pc_port" -L "$repo/main.log"; echo "$out" | grep 'was removed' | show
+expect "$out" 'hydra: web was removed: stopped what its stack had left running \(.*web.*\).*slot [0-9]+ is free again'
+gone "$kids"
+cleaned "$repo/web" || fail "the removed worktree's folder or slot is still there: $(ls -A "$repo/web" 2>&1; "$H" slots)"
 
 echo
 echo "--- 11. main's stack goes down"
@@ -358,5 +442,21 @@ run "$H" status; echo "$out" | grep -E '^(✗|  fix)' | show
 refuse "$out" "main's stack isn't running"
 sleep 3
 expect "$(cat "$repo/fresh/.process-compose/logs"/* 2>/dev/null; "$H" process logs hydra-watch 2>/dev/null | tail -5)" "main's stack isn't answering"
+
+echo
+echo "--- 12. the end of the day"
+# One worktree's stack is still up, and it loses its process-compose and its
+# watcher. `hydra down --worktrees` stops what they left like any stack.
+kids="$(pgrep -P "$(pc_of fresh)" | tr '\n' ' ')"
+kill_both fresh
+cd "$main"
+run "$H" down --worktrees; echo "$out" | pids | show
+[ "$status" -eq 0 ] || fail "down --worktrees: $out"
+expect "$out" "fresh: its process-compose was gone, part of its stack wasn't"
+expect "$out" '  hydra: stopped what an earlier run of this stack left running: .*api \(pid [0-9]+\)'
+expect "$out" 'stopped 1 worktree stack'
+gone "$kids"
+run "$H" down --worktrees; echo "$out" | show
+expect "$out" "no worktree's stack is running"
 echo
 echo "all checks passed"

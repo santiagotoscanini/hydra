@@ -46,6 +46,13 @@ const WatchAnchor = ".process-compose/watch-anchor"
 // it instead of for the service.
 func ReadyName(service string) string { return "hydra-ready-" + service }
 
+// Own reports whether name is a process hydra adds to a stack, as opposed to
+// one of the stack file's (which may be called `hydra-ui`).
+func Own(name string) bool {
+	return name == "hydra-watch" || name == "hydra-router" ||
+		strings.HasPrefix(name, "hydra-ready-") || strings.HasPrefix(name, "hydra-prepare-")
+}
+
 // ownDatabases lists the services of the plan that are a worktree's own
 // Supabase stack: the ones hydra wraps, and so can tell when they are ready.
 func ownDatabases(st *config.Stack, p *plan.Plan) map[string]plan.Service {

@@ -504,8 +504,9 @@ func failing(ms *mainState, only map[string]string) []problem {
 				Text: fmt.Sprintf("main's %s %s%s.%s", name, p.Describe(), suffix, tail),
 				Fix:  "cd " + shQuote(main) + " && hydra process restart " + name}
 			if h := portTaken(ms.target.stack, name, 0, lines); h != nil {
-				pr.Text += takenText(h, main)
-				pr.Fix = "cd " + shQuote(main) + " && " + takenFix(h, main, "hydra process restart "+name)
+				text, fix := takenBy(h, ms.target.stack, 0, name, main, "hydra process restart "+name)
+				pr.Text += text
+				pr.Fix = "cd " + shQuote(main) + " && " + fix
 			}
 			out = append(out, pr)
 		case pc.Starting:
@@ -626,9 +627,9 @@ func localProblems(ms *mainState, ws *wtState) []problem {
 				Text: fmt.Sprintf("%s here %s.%s", name, p.Describe(), tail),
 				Fix:  "hydra process restart " + name}
 			if h := portTaken(st, sources[name], ws.Plan.Slot, lines); h != nil {
-				root := ws.target.checkout.Root
-				pr.Text += takenText(h, root)
-				pr.Fix = takenFix(h, root, "hydra process restart "+name)
+				text, fix := takenBy(h, st, ws.Plan.Slot, name, ws.target.checkout.Root, "hydra process restart "+name)
+				pr.Text += text
+				pr.Fix = fix
 			}
 			out = append(out, pr)
 		}

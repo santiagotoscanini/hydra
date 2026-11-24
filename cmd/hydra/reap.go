@@ -170,6 +170,19 @@ func reap(co gitx.Checkout, e slots.Entry, how reaping) (reaped, error) {
 		r.did = append(r.did, "stopped its stack")
 	}
 
+	// A process-compose that was killed there stopped nothing.
+	var names []string
+	st := mainStackOf(co)
+	if st != nil {
+		names = serviceNames(st)
+	}
+	if found := leftBehind(st, e.Root, e.Slot, names, []string{e.Root}); len(found) > 0 {
+		if len(stopLeftovers(found)) < len(found) {
+			return r, fmt.Errorf("stopping what its stack left running (%s): not all of it stopped", leftoverNames(found, true))
+		}
+		r.did = append(r.did, "stopped what its stack had left running ("+leftoverNames(found, false)+")")
+	}
+
 	state := presenceOf(co.Main, e.Root)
 	for until := time.Now().Add(how.patience); state == leaving && time.Now().Before(until); state = presenceOf(co.Main, e.Root) {
 		time.Sleep(500 * time.Millisecond)
@@ -199,6 +212,7 @@ func reap(co gitx.Checkout, e slots.Entry, how reaping) (reaped, error) {
 	}
 	routes.Remove(co.CommonDir, e.Slot)
 	os.Remove(sock)
+	os.Remove(runningFile(e.Root))
 	if err := slots.Release(co.CommonDir, e.Root); err != nil {
 		return r, err
 	}
@@ -427,6 +441,9 @@ func supabaseStacks(run func(...string) ([]byte, error), root string) ([]supabas
 	}
 	if err := json.Unmarshal(out, &doc); err != nil {
 		return nil, fmt.Errorf("reading `supabase stack list`: %w", err)
+	}
+	if root == "" {
+		return doc.Stacks, nil // every directory's
 	}
 	real := root
 	if r, err := filepath.EvalSymlinks(root); err == nil {

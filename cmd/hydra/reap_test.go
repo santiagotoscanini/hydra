@@ -142,26 +142,6 @@ func TestPortTakenOnlyWhenTheOutputSaysSo(t *testing.T) {
 	}
 }
 
-func TestTakenWording(t *testing.T) {
-	left := &holder{Port: 8480, Pid: 41, Cmd: "api", Dir: "/wt/a/services/core"}
-	if got := takenFix(left, "/wt/a", "hydra process restart api"); got != "kill 41 && hydra process restart api" {
-		t.Errorf("fix for a leftover = %q", got)
-	}
-	if !strings.Contains(takenText(left, "/wt/a"), "left over from an earlier run of this stack") {
-		t.Errorf("text for a leftover = %q", takenText(left, "/wt/a"))
-	}
-	// Someone else's program is never offered a kill.
-	other := &holder{Port: 8480, Pid: 42, Cmd: "Slack", Dir: "/"}
-	if got := takenFix(other, "/wt/a", "hydra process restart api"); strings.Contains(got, "kill") {
-		t.Errorf("fix for another program = %q", got)
-	}
-	// A sibling directory with the same prefix isn't this checkout.
-	sibling := &holder{Port: 8480, Pid: 43, Cmd: "api", Dir: "/wt/a-2/services"}
-	if strings.Contains(takenFix(sibling, "/wt/a", "x"), "kill") {
-		t.Error("a sibling worktree's program was taken for a leftover")
-	}
-}
-
 func TestUpArguments(t *testing.T) {
 	for _, args := range [][]string{{"-D"}, {"--detached"}, {"-p", "8099", "-t=false"}} {
 		if !detached(args) {

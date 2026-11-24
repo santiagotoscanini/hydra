@@ -7,14 +7,17 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/santiagotoscanini/hydra/internal/config"
+	"github.com/santiagotoscanini/hydra/internal/pc"
 	"github.com/santiagotoscanini/hydra/internal/plan"
 	"github.com/santiagotoscanini/hydra/internal/render"
 	"github.com/santiagotoscanini/hydra/internal/slots"
@@ -103,11 +106,14 @@ func watchCmd(args []string) error {
 	out := filepath.Join(t.checkout.Root, ".process-compose", "hydra.yaml")
 	sock := socketPath(t.checkout)
 
+	outliveOutput()
 	logf("watching %s every %s", describeStack(t), *interval)
 	parent := os.Getppid()
+	var started roster // what process-compose runs here, as it last said
 	for {
 		if orphaned(parent) {
-			logf("the process-compose that started this watcher is gone; stopping")
+			logf("the process-compose that started this watcher is gone; stopping, with what it left running")
+			buryOrphans(started, slotOf(t.checkout))
 			return nil
 		}
 		if slots.Removed(t.checkout.Root) {
@@ -123,10 +129,12 @@ func watchCmd(args []string) error {
 		if *once {
 			return nil
 		}
+		started = track(t.checkout.Root, pc.Unix(sock), started)
 		// Look for the removal more often than for changes: every file this
 		// stack writes while git deletes the worktree is one git can't delete
-		// the directory for, and the watcher's own are among them.
-		for waited := time.Duration(0); waited < *interval && !slots.Removed(t.checkout.Root); waited += goneCheck {
+		// the directory for, and the watcher's own are among them. The same
+		// for a process-compose that is gone: what it left holds its ports.
+		for waited := time.Duration(0); waited < *interval && !slots.Removed(t.checkout.Root) && !orphaned(parent); waited += goneCheck {
 			time.Sleep(min(goneCheck, *interval-waited))
 		}
 	}
@@ -139,6 +147,16 @@ const goneCheck = 250 * time.Millisecond
 // live on under another parent, and would fight the ones its successor
 // starts: two watchers updating one project, two routers after one port.
 func orphaned(parent int) bool { return os.Getppid() != parent }
+
+// outliveOutput keeps this process alive when nobody reads what it prints
+// any more. The watcher and the router print into a pipe that process-compose
+// reads; once process-compose is killed, the next line either of them prints
+// would end it (SIGPIPE) before it has stopped what process-compose left
+// running. Asking for the signal is what turns the failed write into an
+// error; nobody needs to read it.
+func outliveOutput() {
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+}
 
 func step(t *target, o options, cmd, out, sock string) error {
 	// Re-read the stack file: an edit to x-hydra applies without a restart.

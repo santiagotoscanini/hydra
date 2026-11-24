@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"hash/fnv"
 	"net"
@@ -133,8 +134,18 @@ func wrap(args []string) error {
 		return downWorktrees(co)
 	}
 	if a.sub == "down" && !ownServer(co, a.rest).Alive() {
-		fmt.Fprintln(os.Stderr, "hydra: this checkout's stack isn't running; nothing to stop.")
-		return nil
+		return downStopped(co, a.file)
+	}
+	if a.sub == "process" && len(a.rest) > 1 && (a.rest[0] == "restart" || a.rest[0] == "start") {
+		// An earlier copy of the service that still holds its port would
+		// fail this start.
+		var names []string
+		for _, arg := range a.rest[1:] {
+			if !strings.HasPrefix(arg, "-") {
+				names = append(names, arg)
+			}
+		}
+		clearLeftoversNamed(co, a.file, names, os.Stderr)
 	}
 
 	var final []string
@@ -310,6 +321,11 @@ func renderFor(co gitx.Checkout, file string, names []string, starting, force bo
 			forgetPrepared(t, p, nil, nil)
 		}
 	}
+	if starting {
+		// A process-compose that was killed left its services running, and
+		// what still holds a port would fail its service's start.
+		clearLeftoversOf(t, p, os.Stderr)
+	}
 	if p.Slot > 0 {
 		fmt.Fprintf(os.Stderr, "hydra: slot %d, running here: %s\n", p.Slot, strings.Join(orNone(p.Local()), ", "))
 		routedNote(t, p)
@@ -465,6 +481,19 @@ func downWorktrees(co gitx.Checkout) error {
 	if err != nil {
 		return err
 	}
+	// Which worktrees still have a database up is asked once, and only when
+	// a stack that isn't running comes along: the Supabase CLI takes its time.
+	var up map[string]bool
+	database := func(root string) bool {
+		if up == nil {
+			up = map[string]bool{}
+			if st := mainStackOf(co); st != nil && hasKind(st, config.KindSupabase) {
+				up = supabaseUp()
+			}
+		}
+		real, _ := filepath.EvalSymlinks(root)
+		return up[root] || up[real]
+	}
 	stopped, failed := 0, 0
 	for _, wt := range wts {
 		wco, err := gitx.Find(wt.Root)
@@ -473,6 +502,12 @@ func downWorktrees(co gitx.Checkout) error {
 		}
 		sock := socketPath(wco)
 		if !pc.Unix(sock).Alive() {
+			// Not running, or killed: then part of it still is.
+			var said bytes.Buffer
+			if slotOf(wco) >= 0 && stopRemains(wco, "", database(wco.Root), &said) {
+				fmt.Printf("%s: its process-compose was gone, part of its stack wasn't\n%s", filepath.Base(wco.Root), indent(said.String(), "  "))
+				stopped++
+			}
 			continue
 		}
 		fmt.Printf("stopping %s ... ", filepath.Base(wco.Root))
@@ -493,6 +528,27 @@ func downWorktrees(co gitx.Checkout) error {
 		fmt.Printf("stopped %d worktree stack%s; the main checkout's stack is untouched.\n", stopped, plural(stopped))
 	}
 	return nil
+}
+
+// downStopped is `hydra down` where process-compose isn't running. After a
+// clean stop that is all there is to say. After a kill, part of the stack
+// is still there.
+func downStopped(co gitx.Checkout, file string) error {
+	if !stopRemains(co, file, true, os.Stderr) {
+		fmt.Fprintln(os.Stderr, "hydra: this checkout's stack isn't running; nothing to stop.")
+	}
+	return nil
+}
+
+// indent puts prefix before every line of text.
+func indent(text, prefix string) string {
+	var b strings.Builder
+	for _, line := range strings.SplitAfter(text, "\n") {
+		if line != "" {
+			b.WriteString(prefix + line)
+		}
+	}
+	return b.String()
 }
 
 func contains(xs []string, x string) bool {

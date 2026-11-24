@@ -178,8 +178,8 @@ What it checks:
   (next section);
 - everything that should run here does, including the steps hydra adds. A
   service that died because its port was taken comes with the program that
-  holds the port, and the command that clears it when that program is a
-  leftover of this stack;
+  holds the port; when that is a leftover of this stack, the restart it
+  suggests stops it first;
 - main's copy of a routed service can serve this worktree;
 - no changed file is left out of every service's `paths`.
 
@@ -326,15 +326,39 @@ any checkout (or `hydra update`) frees it. The same start stops a stack
 whose watcher wasn't running; from the folder it then only deletes hydra's
 own files, and names the folder if anything else is left in it.
 
-If a stack's process-compose is killed, its services live on and keep their
-ports. hydra's own processes (the watcher, the router) notice and exit, and
-after the next `hydra up -D`, `hydra status` names each program in the way:
+If a stack's process-compose is killed, nothing it had started ends with
+it. hydra's own process in the stack (the watcher in a worktree, the router
+in main) notices, stops every one of those processes, and exits: a second
+later `hydra status` says the stack isn't running, and `hydra up -D` brings
+it back. What stays up is what process-compose never held as a process, such
+as a worktree's own Supabase stack.
+
+When the watcher was killed too (`pkill -f process-compose` matches both),
+the processes live on. The watcher had written down what process-compose
+ran, so the next hydra command there deals with it: `hydra up -D` stops them
+before it starts anything, `hydra down` stops them and a worktree's own
+database, `hydra down --worktrees` does that for every worktree, and a
+worktree removed in that state is cleaned up after like any other.
+
+```
+hydra: stopped what an earlier run of this stack left running: api (pid 4820), web (pid 4821), worker (pid 4822)
+```
+
+hydra goes by the pids it wrote down: a process counts only if it has no
+parent any more and was started before the note was written, which makes it
+the one the note names. For a stack nobody kept a note for (a main checkout
+without a routed service has no router) it goes by the port instead: the
+process listens on a port of a service of this slot, carries the
+`HYDRA_SLOT` and `HYDRA_SERVICE` hydra started that service with, has no
+parent any more, and runs from this checkout. Nothing else is touched. If
+process-compose was started some other way and ran into a leftover,
+`hydra status` names it, and `hydra process restart` stops it first:
 
 ```
 ✗ web here exited with code 1. Its last output:
       | listen tcp 127.0.0.1:3200: bind: address already in use
     Port 3200 is held by node (pid 4821), left over from an earlier run of this stack.
-  fix: kill 4821 && hydra process restart web
+  fix: hydra process restart web   (stops the leftover first)
 ```
 
 ### Stacked branches
@@ -520,8 +544,8 @@ the watcher starting and stopping services as files change in them.
 `./examples/demo/tls.sh` a TLS front. `./examples/demo/update.sh` is the
 end-to-end test: `hydra status`, the checks before `hydra up`,
 `hydra update`, a second start, the order in which an edit's services
-start, a removed worktree and a killed process-compose, checking what every
-step printed. Each demo builds hydra
+start, a removed worktree, a killed process-compose and
+`hydra down --worktrees`, checking what every step printed. Each demo builds hydra
 into its own throwaway directory, so none of them changes the `hydra` on
 your PATH.
 

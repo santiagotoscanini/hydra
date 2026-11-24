@@ -255,7 +255,7 @@ $ hydra status --wait
       <tr><td>Look at a process</td><td><code>hydra attach</code></td><td>The checkout. Opens process-compose's terminal UI on the running stack. <code>hydra process logs web</code> prints one process's output.</td></tr>
       <tr><td>Also run a service the branch didn't change</td><td><code>hydra up worker</code></td><td>The worktree. Works on a stack that is already up.</td></tr>
       <tr><td>Bring main and the worktrees to the latest commit</td><td><code>hydra update</code></td><td>Anywhere. <code>--dry-run</code> first, if you want to see what it would do.</td></tr>
-      <tr><td>Stop one stack</td><td><code>hydra down</code></td><td>Its checkout. It can't reach another checkout's stack.</td></tr>
+      <tr><td>Stop one stack</td><td><code>hydra down</code></td><td>Its checkout. It can't reach another checkout's stack. It also stops what a killed process-compose left running there.</td></tr>
       <tr><td>Stop every worktree's stack</td><td><code>hydra down --worktrees</code></td><td>Anywhere. Main's stack keeps running.</td></tr>
     </table></div>
     <p>Every one of them is safe to run twice. Starting a stack that is up, or stopping one that is down, says so and exits 0.</p>
@@ -506,7 +506,13 @@ ok: main's stack is up and runs what main has checked out.
     <div class="msgs">
       <div><p class="said">✗ this worktree's stack isn't running.</p><p><code>hydra up -D</code>.</p></div>
       <div><p class="said">✗ web here exited with code 1. Its last output: …</p><p>A process of this worktree failed, one of hydra's own steps included (<code>hydra-prepare-worker</code>, say). Fix what the output says, then <code>hydra process restart web</code>.</p></div>
-      <div><p class="said">    Port 3200 is held by node (pid 4821), left over from an earlier run of this stack.</p><p>Added under a failed process when its output says its port was taken. A leftover is a service that outlived a process-compose that was killed; the fix line stops it for you: <code>kill 4821 &amp;&amp; hydra process restart web</code>. When the port is held by another program, hydra names it and leaves stopping it to you.</p></div>
+      <div><p class="said">    Port 3200 is held by node (pid 4821), left over from an earlier run of this stack.</p><p>Added under a failed process when its output says its port was taken. A leftover is the service's own earlier copy, which outlived a process-compose that <a href="#cleanup">was killed</a>. The fix line is the restart: <code>hydra process restart web</code> stops the leftover first.</p></div>
+      <div><p class="said">    Port 3200 is held by node (pid 4821), which runs in this checkout but not as part of its stack.</p><p>Someone started it by hand here, a dev server in a terminal for instance. Stop it there, or use the fix line: <code>kill 4821 &amp;&amp; hydra process restart web</code>.</p></div>
+      <div><p class="said">    Port 3200 is held by another program: Slack (pid 612).</p><p>Not hydra's to stop. Quit that program, then <code>hydra process restart web</code>.</p></div>
+      <div><p class="said">hydra: stopped what an earlier run of this stack left running: api (pid 4820), web (pid 4821)</p><p>Nothing to do. Printed by <code>hydra up</code>, <code>hydra down</code>, <code>hydra process restart</code> and <code>hydra process start</code> when they found what a killed process-compose had left, and stopped it.</p></div>
+      <div><p class="said">hydra: stopped this worktree's Supabase stack, which an earlier run of this stack left up</p><p>Nothing to do. Printed by <code>hydra down</code> in a worktree whose process-compose was killed: only its shutdown would have stopped the database. The data is kept.</p></div>
+      <div><p class="said">hydra: warning: this worktree's Supabase stack may still be up: …</p><p><code>hydra down</code> couldn't stop it; the reason follows (Docker isn't running, for one). <code>hydra up -D</code> and then <code>hydra down</code> stops it the regular way.</p></div>
+      <div><p class="said">hydra: warning: an earlier run of this stack left web running (node, pid 4821), and it didn't stop: kill -9 4821</p><p>The leftover survived being asked and being killed. Run the command shown, then start the service again.</p></div>
       <div><p class="said">✗ api wasn't started here, because a process it waits for failed.</p><p>The failed one is listed too. Fix it first, then <code>hydra process start api</code>.</p></div>
       <div><p class="said">✗ api should run here but is off.</p><p>It was stopped by hand. <code>hydra process start api</code>.</p></div>
       <div><p class="said">✗ web: main's copy can't serve this worktree on :3400: …</p><p>The <a href="#routed">routed</a> copy in main can't be used: the router isn't listening on the port, or the copy doesn't pass the worktree's mark on. <code>hydra up web</code> runs a copy here instead.</p></div>
@@ -521,7 +527,7 @@ ok: main's stack is up and runs what main has checked out.
     <p>The watcher runs two of these checks all the time. It writes to the worktree's log when main's stack stops answering and when the branch falls out of step with main.</p>
     <p><b>About worktrees that were removed.</b> These are lines of <code>hydra up</code>, <code>hydra update</code> and <code>hydra down --worktrees</code>, in any checkout. See <a href="#cleanup">when a worktree is removed</a>.</p>
     <div class="msgs">
-      <div><p class="said">hydra: shop-notes was removed: stopped its stack, removed its Supabase stack, deleted what was left of its folder; slot 2 is free again</p><p>Nothing to do. A worktree was removed since the last start, and this is what hydra cleaned up after it. Each part is named only when there was something to do.</p></div>
+      <div><p class="said">hydra: shop-notes was removed: stopped its stack, removed its Supabase stack, deleted what was left of its folder; slot 2 is free again</p><p>Nothing to do. A worktree was removed since the last start, and this is what hydra cleaned up after it. Each part is named only when there was something to do. <code>stopped what its stack had left running (api, web)</code> is one more part: its process-compose had been <a href="#cleanup">killed</a> before.</p></div>
       <div><p class="said">hydra: its folder still holds files git didn't delete: rm -rf ~/code/shop-notes</p><p>git forgot the worktree but left files in its folder, and hydra only found it later. Look at what is in there, then delete it with the command shown.</p></div>
       <div><p class="said">hydra: warning: shop-notes was removed, and cleaning up after it failed (slot 2 stays taken; the next start tries again): …</p><p>The reason follows: Docker isn't running, so its database couldn't be destroyed, or a process wouldn't stop. Nothing is handed on meanwhile. Fix the reason and start anything, or run <code>hydra slots free ~/code/shop-notes</code>.</p></div>
       <div><p class="said">hydra: shop-notes is no longer a worktree: stopped its stack (git still lists it, so it keeps slot 2 and its database for now)</p><p>Its <code>.git</code> file is gone, and git still lists the worktree. <code>git worktree repair ~/code/shop-notes</code> mends it; <code>git worktree prune</code> makes git forget it, and the next start cleans up after it.</p></div>
@@ -682,13 +688,42 @@ hydra: its folder still holds files git didn't delete: rm -rf ~/code/shop-notes
     </div>
     <p><b>A <code>.git</code> file deleted by hand</b> is not a removal: <code>git worktree list</code> still shows the worktree. hydra stops its stack, because nothing there can work without it, and keeps its slot, its database and every file. <code>git worktree repair PATH</code> makes it a worktree again; <code>git worktree prune</code> makes git forget it, and then hydra cleans up after it like after any removed worktree.</p>
     <h3>When process-compose is killed</h3>
-    <p>If a stack's process-compose dies without stopping its processes (a <code>kill -9</code>, a crash), the services live on and keep their ports. hydra's own processes, the watcher and the router, notice and exit. After the next <code>hydra up -D</code>, each service that can't get its port is reported with the program that holds it and the command that clears it:</p>
+    <p>If a stack's process-compose dies without stopping its processes (a <code>kill -9</code>, a crash, the machine running out of memory), nothing it had started ends with it. The api keeps its port, a worker goes on taking work with the code it was started on, and <code>next dev</code> keeps a lock on the project.</p>
+    <p><b>hydra stops them by itself.</b> Its own process in the stack, the watcher in a worktree and the router in main, asks process-compose every two seconds what it runs. When process-compose is gone, it stops every one of those processes and then exits. About a second later nothing of the stack is running, and <code>hydra status</code> says so:</p>
+    <div class="code">
+<pre data-lang="text">
+✗ this worktree's stack isn't running.
+  fix: hydra up -D
+</pre>
+    </div>
+    <p>It asks each process to stop and kills what is still there after five seconds, the whole program each time: <code>next dev</code> is a parent and a child. What stays up is what process-compose never held as a process: a database or containers started with <code>is_daemon</code>, such as a worktree's <a href="#supabase">own Supabase stack</a>. <code>hydra up -D</code> picks those up again, and <code>hydra down</code> stops a worktree's database.</p>
+    <p><b>When the watcher was killed too</b>, the processes live on. <code>pkill -f process-compose</code> does that: the watcher's command line names your stack file. The watcher had written down what process-compose ran, so the next hydra command in that checkout deals with it:</p>
+    <div class="code">
+<pre data-lang="text">
+$ hydra up -D          # stops them first, then starts
+hydra: stopped what an earlier run of this stack left running: api (pid 4820), web (pid 4821), worker (pid 4822)
+hydra: slot 2, running here: api, web, worker
+
+$ hydra down           # or only stops them, and a worktree's own database
+hydra: stopped what an earlier run of this stack left running: api (pid 4820), web (pid 4821), worker (pid 4822)
+hydra: stopped this worktree's Supabase stack, which an earlier run of this stack left up
+</pre>
+    </div>
+    <p><code>hydra down --worktrees</code> does the same for every worktree, and a worktree that is removed in that state is cleaned up after like any other: the line about it then also says <code>stopped what its stack had left running (api, web, worker)</code>. The names are process-compose's, so a worktree's idle stand-ins for main's services show up among them.</p>
+    <p><b>How hydra knows what to stop.</b> Narrowly, in two ways.</p>
+    <ul>
+      <li><b>By its note.</b> The watcher keeps the name and pid of each process in <code>$TMPDIR/hydra-&lt;hash&gt;.pids</code>. A pid from that file counts only if the process has no parent any more and was started before the file was written, which makes it the very process the file names and not another program that got the number since. Where its environment can be read, it must also carry this stack's marks: hydra gives <code>HYDRA_SLOT</code> and <code>HYDRA_SERVICE</code> to every process it renders.</li>
+      <li><b>By its port</b>, for a stack nobody kept a note for. All four must hold: the process listens on a port of a service of this slot; its program was started for that service (the two marks); that program has no parent any more; and it runs from this checkout.</li>
+    </ul>
+    <p>Anything else is left alone. A Docker VM that a step of your stack started, or a build tool's daemon, runs on without a parent by design and carries the marks too: it is neither a pid process-compose named nor on the service's port. A service marked <code>is_daemon</code> is never touched.</p>
+    <p><b>One case is yours:</b> a main checkout without a <a href="#routed">routed</a> service has no router, so nothing keeps a note there. After a kill, <code>hydra up -D</code> and <code>hydra down</code> still stop what holds a port, and a process without one (a worker) has to be stopped by hand: <code>ps</code> shows it.</p>
+    <p>If process-compose was started some other way and ran into a leftover, <code>hydra status</code> names it, and the restart it suggests stops it first (<code>hydra process restart</code> and <code>hydra process start</code> check the ports of the processes they are given):</p>
     <div class="code">
 <pre data-lang="text">
 ✗ web here exited with code 1. Its last output:
       | listen tcp 127.0.0.1:3200: bind: address already in use
     Port 3200 is held by node (pid 4821), left over from an earlier run of this stack.
-  fix: kill 4821 && hydra process restart web
+  fix: hydra process restart web   (stops the leftover first)
 </pre>
     </div>
     <h3>Freeing a slot by hand</h3>
@@ -764,6 +799,7 @@ $ hydra down             # when the work is done
       <li>Takes a slot for the worktree, which it keeps until the worktree is removed.</li>
       <li><a href="#status">Checks the main checkout</a>: its stack is running, the services this worktree takes from it are up, and they are the version the branch was built on. If not, it says what is wrong and how to fix it, and doesn't start.</li>
       <li>Writes <code>.process-compose/hydra.yaml</code>: those services only, on the slot's ports, with each upstream variable set.</li>
+      <li>Stops what an earlier run of the stack left running, if its process-compose <a href="#cleanup">was killed</a>.</li>
       <li>Starts process-compose on that file, on a unix socket that belongs to this worktree.</li>
     </ol>
     <p>Because of the socket, <code>hydra down</code>, <code>hydra attach</code> and <code>hydra process …</code> in a worktree reach that worktree's stack and never main's. If the stack is already up, <code>hydra up</code> starts nothing new and says so.</p>
@@ -802,7 +838,7 @@ note: changed, but in no service's paths, so nothing runs here for them: package
     </table></div>
     <p>Those are the only two things the watcher does to your services. Further edits to a service that already runs here are left to the service's own reload, such as <code>next dev</code>, <code>air</code> or process-compose's <code>watch</code>. A <code>watch</code> block in your file works in every worktree, also for a service that started after the stack did, and is dropped in main.</p>
     <p>The watcher polls git instead of watching the file system. Only git can answer "does this differ from <code>main</code>": a revert has to stop the service, and ignored files such as <code>node_modules</code> must not start one. It reads git without taking the index lock, so it doesn't collide with an agent committing in the same worktree.</p>
-    <p>It also re-reads the stack file and <a href="#local"><code>.hydra.local.yaml</code></a> on every tick, so an edit to either applies without a restart. And it keeps three watches of its own: it logs when main's stack stops answering and when the branch falls <a href="#instep">out of step</a>; when its worktree <a href="#cleanup">is removed</a> it starts <code>hydra reap</code>, a process of its own that stops the stack and deletes what is left of the folder (the watcher itself is one of the processes that stop); and it exits if the process-compose that started it is killed.</p>
+    <p>It also re-reads the stack file and <a href="#local"><code>.hydra.local.yaml</code></a> on every tick, so an edit to either applies without a restart. And it keeps three watches of its own: it logs when main's stack stops answering and when the branch falls <a href="#instep">out of step</a>; when its worktree <a href="#cleanup">is removed</a> it starts <code>hydra reap</code>, a process of its own that stops the stack and deletes what is left of the folder (the watcher itself is one of the processes that stop); and it writes down what process-compose runs, so that when process-compose <a href="#cleanup">is killed</a> it can stop what that left running before it exits itself.</p>
   </section>
 
   <section id="instep">
@@ -867,7 +903,7 @@ note: changed, but in no service's paths, so nothing runs here for them: package
       <tr><td>Main's <code>web</code> calls the API</td><td>In main, a routed service's <code>API_URL</code> points at the router. The call carries the header of the request being served.</td></tr>
       <tr><td>The router picks the API</td><td>Slot 2's API on 8480 if that worktree runs one, main's on 8080 otherwise. The response says which in <code>X-Hydra-Served-By</code>.</td></tr>
     </table></div>
-    <p>The router is one more process in main's project, <code>hydra-router</code>. Each running worktree tells it what it runs, and <code>hydra down</code> in a worktree closes that worktree's ports. When a worktree later changes <code>web</code>, the router hands the port over and the worktree's own copy listens there, so a worktree's address for <code>web</code> never changes.</p>
+    <p>The router is one more process in main's project, <code>hydra-router</code>. Each running worktree tells it what it runs, and <code>hydra down</code> in a worktree closes that worktree's ports. When a worktree later changes <code>web</code>, the router hands the port over and the worktree's own copy listens there, so a worktree's address for <code>web</code> never changes. The router is also what stops main's processes when main's process-compose <a href="#cleanup">is killed</a>.</p>
     <h3>Passing the header on</h3>
     <p>The routed service has to copy the header from the request it is serving onto the calls it makes.</p>
     <ul>
@@ -1167,8 +1203,8 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>hydra up --force</code></td><td>Starts the worktree despite what the checks found.</td></tr>
       <tr><td><code>hydra up NAME…</code></td><td>In a worktree: also runs <code>NAME</code> here, changed or not, and switches it on if it is <code>disabled: true</code>. Everything else the worktree runs starts too. On a stack that is already up, <code>NAME</code> is added to it. In the main checkout it is process-compose's own <code>up NAME</code>, or a start of that process if the stack is up.</td></tr>
       <tr><td><code>hydra attach</code></td><td>Opens the terminal UI of this checkout's running stack.</td></tr>
-      <tr><td><code>hydra down</code></td><td>Stops this checkout's stack only.</td></tr>
-      <tr><td><code>hydra down --worktrees</code></td><td>Stops every worktree's stack. The main checkout's keeps running.</td></tr>
+      <tr><td><code>hydra down</code></td><td>Stops this checkout's stack only. Where process-compose <a href="#cleanup">was killed</a>, it stops what that left running, and a worktree's own database.</td></tr>
+      <tr><td><code>hydra down --worktrees</code></td><td>Stops every worktree's stack, and what a killed process-compose left of one. The main checkout's keeps running.</td></tr>
       <tr><td><code>hydra process …</code></td><td>process-compose's process commands, for this checkout's stack: <code>list</code>, <code>logs NAME</code>, <code>restart NAME</code>, <code>start NAME</code>, <code>stop NAME</code>.</td></tr>
       <tr><td><code>hydra status</code></td><td>Says whether everything this checkout uses is up and <a href="#instep">in step with main</a>. See <a href="#status">checking</a>. Flags: <code>--wait</code>, <code>--timeout D</code>, <code>--all</code>.</td></tr>
       <tr><td><code>hydra ui</code></td><td>Serves <a href="#ui">the status page</a>. Flags: <code>--port N</code>, <code>--no-open</code>.</td></tr>
@@ -1230,6 +1266,7 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>hydra-update.lock</code><span class="type">shared .git</span></td><td>Lets one <code>hydra update</code> run at a time.</td></tr>
       <tr><td><code>info/exclude</code><span class="type">shared .git</span></td><td>With <code>kind: supabase</code>, a few lines that keep the Supabase CLI's lock and link files out of <code>git status</code>.</td></tr>
       <tr><td><code>$TMPDIR/hydra-&lt;hash&gt;.sock</code></td><td>A worktree's process-compose socket. The name comes from the worktree's path.</td></tr>
+      <tr><td><code>$TMPDIR/hydra-&lt;hash&gt;.pids</code></td><td>What process-compose runs in that checkout, name and pid, written by its watcher (the router, in main) whenever it changes. It is how hydra finds what a <a href="#cleanup">killed process-compose</a> left running.</td></tr>
       <tr><td><code>$TMPDIR/hydra-&lt;hash&gt;.reap</code></td><td>Empty, and there only while hydra cleans up after that worktree, so that one process does it at a time.</td></tr>
       <tr><td><code>.env.local</code>, one block<span class="type">in a worktree</span></td><td>With a Supabase of its own: the stack's settings, between two marker lines, so <code>supabase</code> commands typed there reach it. Removed when the worktree goes back to main's database.</td></tr>
       <tr><td><code>.process-compose/supabase-branch</code><span class="type">in a worktree</span></td><td>With a Supabase of its own: there while the database is started and migrated, which is what the services that read it wait for. It holds the branch the stack was started for.</td></tr>
@@ -1252,7 +1289,7 @@ $ hydra plan --route web.api=local       # also starts api here
       <li><b>Paths are written by hand.</b> They aren't derived from a dependency graph yet, so a shared package has to be listed on each service that imports it. The report of <a href="#changes">changed files that no service lists</a> is the safety net.</li>
       <li><b>Ports are per repository.</b> Two repositories whose stacks use the same ports can't run at once.</li>
       <li><b>Ports are computed, not probed.</b> If another program already listens on one of a slot's ports, the service there fails to start, and <code>hydra status</code> names the program.</li>
-      <li><b>Stacks stop when you stop them.</b> A worktree's stack runs until <code>hydra down</code>, <code>hydra down --worktrees</code>, or the worktree's removal. Nothing stops an idle one for you.</li>
+      <li><b>Stacks stop when you stop them.</b> A worktree's stack runs until <code>hydra down</code>, <code>hydra down --worktrees</code>, or the worktree's removal. Nothing stops an idle one for you. A stack whose process-compose is killed is the exception: hydra stops the rest of it.</li>
       <li><b>Merged branches.</b> <code>hydra update</code> recognises a branch whose changes are all in main when the merge is clean. One that was squash-merged and then conflicts with later commits shows up as a conflict.</li>
       <li><b>Tested with process-compose v1.124</b> on macOS.</li>
     </ul>

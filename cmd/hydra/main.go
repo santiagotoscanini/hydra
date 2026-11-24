@@ -56,7 +56,10 @@ the worktree takes from it. hydra up --force starts anyway. Starting a stack
 that is already up changes nothing and is not an error.
 
 A worktree that is removed while its stack runs stops that stack by itself,
-deletes what git left of its folder and frees its slot.
+deletes what git left of its folder and frees its slot. A stack whose
+process-compose is killed is stopped by its watcher (main's by its router);
+where that was killed too, the next hydra up or hydra down there stops what
+was left running.
 
 Hydra's own commands:
   hydra status [--all] [--wait]  is everything this checkout uses up and in step

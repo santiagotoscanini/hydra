@@ -79,21 +79,27 @@ func lsof(args ...string) string {
 	return string(out)
 }
 
-// takenText and takenFix word a holder for a problem. A program started from
-// inside this checkout is a leftover of an earlier run of the same stack
-// (its process-compose was killed, and the services lived on): stopping it
-// is safe to suggest. Anything else is someone else's program.
-func takenText(h *holder, root string) string {
+// takenBy words the holder of a service's port for a problem, and what to do
+// about it. root is the checkout, restart the command that starts the
+// service again.
+//
+//   - The service's own earlier copy (see leftovers): the restart stops it
+//     first, so the restart is the whole fix.
+//   - Something else that runs in this checkout, a dev server started by
+//     hand, say: named, with the command that ends it.
+//   - Anything else is someone else's program, and is only named.
+func takenBy(h *holder, st *config.Stack, slot int, name, root, restart string) (text, fix string) {
 	who := fmt.Sprintf("%s (pid %d)", h.Cmd, h.Pid)
-	if h.Dir != "" && (h.Dir == root || strings.HasPrefix(h.Dir, root+"/")) {
-		return fmt.Sprintf("\n  Port %d is held by %s, left over from an earlier run of this stack.", h.Port, who)
+	for _, l := range leftovers(st, slot, []string{name}, []string{root}) {
+		if containsInt(l.Tree, h.Pid) {
+			return fmt.Sprintf("\n  Port %d is held by %s, left over from an earlier run of this stack.", h.Port, who),
+				restart + "   (stops the leftover first)"
+		}
 	}
-	return fmt.Sprintf("\n  Port %d is held by another program: %s.", h.Port, who)
-}
-
-func takenFix(h *holder, root, restart string) string {
-	if h.Dir != "" && (h.Dir == root || strings.HasPrefix(h.Dir, root+"/")) {
-		return fmt.Sprintf("kill %d && %s", h.Pid, restart)
+	if h.Dir != "" && inside(h.Dir, root) {
+		return fmt.Sprintf("\n  Port %d is held by %s, which runs in this checkout but not as part of its stack.", h.Port, who),
+			fmt.Sprintf("kill %d && %s", h.Pid, restart)
 	}
-	return fmt.Sprintf("stop %s, then: %s", h.Cmd, restart)
+	return fmt.Sprintf("\n  Port %d is held by another program: %s.", h.Port, who),
+		fmt.Sprintf("stop %s, then: %s", h.Cmd, restart)
 }

@@ -134,7 +134,7 @@ problem is an error (✗: exit 1, and `hydra up` refuses) or a note (!).
 | What this worktree takes from main | a service it calls, waits for or is routed to has failed or was stopped (with the end of its log) |
 | Main's stack against main's files | the checkout moved since the stack was last brought to a commit, and a process this worktree uses has files in between |
 | Branch against main | main changed a service the worktree takes from it since the branch left main, or main is older than the branch's starting point (see below) |
-| This worktree's stack | a process that should run here failed, was skipped (the step it waited for is shown) or isn't running; `hydra-watch` is down. A process whose output says its port was taken comes with the program listening there (`lsof`): one started from inside this checkout is a leftover of an earlier run, and the fix kills it; anyone else's is only named |
+| This worktree's stack | a process that should run here failed, was skipped (the step it waited for is shown) or isn't running; `hydra-watch` is down. A process whose output says its port was taken comes with the program listening there (`lsof`): the service's own earlier copy is a leftover, which the suggested restart stops first; another program in this checkout is named with the `kill` that ends it; anyone else's is only named |
 | Routed services | the router doesn't answer on the worktree's port, or main's copy doesn't pass the worktree's tag on (`/__hydra/status` on that port) |
 
 Also an error: a migration that didn't apply to a worktree's own running
@@ -785,12 +785,103 @@ Now:
 - **Temporal** needs no cleanup at removal: the namespace is replaced when
   the slot's next worktree prepares it (see Kinds), which also works when
   Temporal was down at the time of the removal.
-- **A killed process-compose** is the other way to leave things behind: the
-  services live on and keep their ports. The watcher and the router compare
-  their parent process on every tick and exit when it changes, so two
-  watchers never update one project and two routers never fight over a
-  port. The services are the stack's own programs; `hydra status` names
-  each one in the way of a restart.
+- **A killed process-compose** is the other way to leave things behind:
+  nothing it had started ends with it (next section). A worktree removed in
+  that state has no watcher to notice; the reap then stops what the stack
+  left running before it frees the slot.
+
+## What a killed process-compose leaves
+
+process-compose starts each process in a group of its own, so killing it
+(`kill -9`, a crash, the out-of-memory killer) ends none of them. In the
+monorepo this was written against, all of these outlived it: the api, on its
+port; the worker, taking work with the code it was started on; `next dev`,
+which is two processes, a child on the port and a parent that holds a lock
+on the project; and the idle stand-ins for main's services, which nothing
+ever ends. Twenty-one of those had piled up on one machine before anyone
+looked.
+
+**First, hydra's own process in the stack stops them**: the watcher in a
+worktree, the router in main. Both compare their parent process four times a
+second, which also keeps two watchers from updating one project and two
+routers from fighting over a port. Both ask process-compose every two
+seconds what it runs: the processes it reports as `Running`, which are the
+ones it holds as children. A daemon (`Launched`) is left out, because the
+pid process-compose has for it is its launcher's, long gone and possibly
+somebody else's by now; so are hydra's own steps, which look after
+themselves. When the parent is gone, each of those pids that is still there
+and has no parent is stopped with everything below it (SIGTERM, SIGKILL
+after five seconds), and the watcher or router exits.
+
+Two things about that process are easy to get wrong. It prints into a pipe
+that process-compose reads, and the first line it prints after
+process-compose died would end it with SIGPIPE before it had stopped
+anything; it asks for that signal, which turns the failed write into an
+error it ignores. And it must not go by the stack file to tell a daemon: in
+a worktree, `supabase` and `containers` are stand-ins, ordinary processes,
+though the stack file marks the real ones `is_daemon`.
+
+**Second, the note.** Whatever killed process-compose may have killed the
+watcher with it: `pkill -f process-compose` matches both, because the
+watcher's command line names the stack file. So what process-compose runs
+is also written down, name and pid, in `$TMPDIR/hydra-<hash>.pids` beside
+the stack's socket, whenever it changes. It outlives the checkout's folder
+and goes when the slot is freed. `hydra up` reads it before it starts
+anything, `hydra down` when process-compose isn't running (it then also
+stops a worktree's own Supabase stack, by id, since only process-compose's
+shutdown would have), `hydra down --worktrees` for every worktree, and the
+reap of a removed worktree.
+
+A pid from a note may be days old, and a number can belong to another
+program by then. It counts only if the process
+
+1. has no parent (pid 1, or systemd's user instance where that adopts
+   orphans);
+2. was started before the note was written. It then held that number when
+   the note was written, so it is the process the note names;
+3. carries this slot's `HYDRA_SLOT` and its service's `HYDRA_SERVICE`,
+   where its environment can be read. hydra renders both into every
+   process and children inherit them; they are read from
+   `/proc/PID/environ`, or from `ps -E` on macOS. A stand-in has none, and
+   a program that renames itself (`next-server`) can't be read.
+
+**Third, the port**, for a stack nobody kept a note for: a main checkout
+without a routed service has no router. `hydra up`, `hydra down`,
+`hydra process restart NAME` and `hydra process start NAME` take a process
+tree for the service's own earlier copy when all four hold:
+
+1. one of its processes listens on a port of the service, in this slot
+   (one `lsof` for every listener);
+2. its top process, found by walking up from the listener, carries the
+   marks for this slot and that service. The listener itself is often a
+   child whose marks can't be read;
+3. that top process has no parent;
+4. its working directory is in this checkout, or in the worktree the plan
+   runs the service from. Another repository's slot of the same number has
+   services of the same names.
+
+**The marks alone are never enough.** They, the missing parent and the
+directory also fit what a step of the stack leaves running on purpose. In
+the monorepo, main's stack has a `colima` step that starts a Docker VM: its
+host agent is orphaned by design, carries `HYDRA_SERVICE=colima` and
+`HYDRA_SLOT=0`, and runs from the main checkout. A build tool's daemon
+started by a service looks the same. A rule on the marks would have stopped
+every container the next time main's stack started. Neither is a pid
+process-compose named, and neither listens on a port of the service whose
+marks it carries: where the VM does listen (it forwards the database's
+port), its marks name another service than the one that owns the port. A
+service that does leave something listening on its own port after its
+command ends says so with `is_daemon`, and those are skipped.
+
+What this leaves uncovered: a process without a port in a stack without a
+note (a worker in a main checkout that has no routed service), and a process
+without a port that was started in the two seconds before the kill, with
+the watcher killed as well.
+
+With nothing noted and every port free, which is the usual start, the check
+is one `lsof` and costs about 50 ms. A note with entries costs one listing
+of the processes (about 45 ms with `ps` on macOS), and one more `ps` for
+each pid that is still there.
 
 A `prepare` command of the stack file has no counterpart that runs at
 removal. What it creates is named after the slot, so it is found again by

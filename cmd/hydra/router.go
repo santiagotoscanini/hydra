@@ -56,12 +56,18 @@ func routerCmd(args []string) error {
 		Load: func() (*router.State, error) { return routerState(co.CommonDir, *file) },
 		Logf: logf,
 	}
+	outliveOutput()
 	logf("routing for %s", co.Root)
 	go func(parent int) {
-		for !orphaned(parent) {
-			time.Sleep(2 * time.Second)
+		var started roster // what main's process-compose runs, as it last said
+		for tick := 0; !orphaned(parent); tick++ {
+			if tick%8 == 0 { // every 2 seconds
+				started = track(co.Main, mainClient(co.CommonDir), started)
+			}
+			time.Sleep(goneCheck)
 		}
-		logf("the process-compose that started this router is gone; stopping")
+		logf("the process-compose that started this router is gone; stopping, with what it left running")
+		buryOrphans(started, 0)
 		stop()
 	}(os.Getppid())
 	return r.Run(ctx)
