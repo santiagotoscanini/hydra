@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -78,15 +80,34 @@ func dbConnsProblem(st *config.Stack) *problem {
 	}
 	text += " Each worktree that runs its own api or worker on it takes more, and the next one will fail to connect (\"remaining connection slots are reserved\")."
 	// Only supabase_admin may change the setting (Supabase's postgres role is
-	// not a superuser), and it takes a restart of the database container.
-	// Auth keeps its pool of connections across that and answers every login
-	// with "Database error querying schema" until it is restarted too, so the
-	// fix restarts both. The data stays: it lives in the container's volume.
-	// 300 first; past that, 200 more each time.
+	// not a superuser), and it takes a restart of the database. 300 first;
+	// past that, 200 more each time.
 	want := 300
 	if c.Max >= want {
 		want = c.Max + 200
 	}
+	set := fmt.Sprintf("alter system set max_connections = %d", want)
+	// In Docker, auth keeps its pool of connections across a restart of the
+	// database container and answers every login with "Database error
+	// querying schema" until it is restarted too, so the fix restarts both.
+	// The data stays in the container's volume.
+	if c := dockerContainerOn(port); c != "" {
+		return &problem{Text: text,
+			Fix: fmt.Sprintf(`docker exec %s psql -U supabase_admin -d postgres -c '%s' && docker restart %s %s`, c, set, c, strings.Replace(c, "_db_", "_auth_", 1))}
+	}
+	// Natively (the Supabase CLI's stack mode), the stack restarts as a whole.
 	return &problem{Text: text,
-		Fix: fmt.Sprintf(`d=$(docker ps --filter publish=%d --format '{{.Names}}'); docker exec "$d" psql -U supabase_admin -d postgres -c 'alter system set max_connections = %d' && docker restart "$d" "${d/_db_/_auth_}"`, port, want)}
+		Fix: fmt.Sprintf(`psql postgresql://supabase_admin:postgres@%s:%d/postgres -c '%s' && hydra process restart supabase   (in the main checkout)`, st.Hydra.Host, port, set)}
+}
+
+// dockerContainerOn names the Docker container that publishes port, "" when
+// none does or Docker doesn't answer.
+func dockerContainerOn(port int) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "ps", "--filter", fmt.Sprintf("publish=%d", port), "--format", "{{.Names}}").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
 }

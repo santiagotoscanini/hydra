@@ -572,6 +572,16 @@ same `project_root`, so the reap needs nothing new. The CLI fixes a stack's
 runtime at creation and refuses another later, hence the fallback, which
 resumes an existing Docker stack.
 
+Main can run natively too, still from the stack file alone, as it has in
+the monorepo since 2026-11-24. The CLI keys a stack on folder and branch
+(`--stack NAME` included: tried, and a start on another branch made a new
+Docker record), so main's stack is opened by `--stack-id`, looked up by
+folder and name. That keeps one database whatever main has checked out, as
+Docker had. The data moved with `pg_dump` and a data-only `pg_restore` into
+an unseeded stack; all 565 tables had equal row counts. `hydra status`'s
+connections fix picks Docker or native by asking Docker who publishes the
+port.
+
 ## Routed services
 
 A routed service has one copy, the baseline's, for every worktree that didn't
@@ -770,9 +780,10 @@ worktrees started together:
   SQLSTATE 53300, which reads like a bug in the service. `hydra status`
   asks main's Postgres (`pg_stat_activity`, 2 s timeout) and warns from 75%.
   Its fix raises `max_connections` to 300 (by 200 when it is there already) as `supabase_admin` (the
-  `postgres` role may not) and restarts the database container together
-  with Supabase auth: auth keeps its dead pool across a database restart
-  and fails every login until it is restarted.
+  `postgres` role may not) and restarts the database: in Docker the container
+  together with Supabase auth (auth keeps its dead pool across a database
+  restart and fails every login until it is restarted), natively the whole
+  stack through `hydra process restart supabase`.
 
 ## Removed worktrees
 

@@ -494,7 +494,7 @@ ok: main's stack is up and runs what main has checked out.
       <div><p class="said">✗ main's stack has no api (…): it was started from an older process-compose.yaml.</p><p>The service was added to the stack file after main's stack started. <code>hydra update</code> adds it.</p></div>
       <div><p class="said">✗ main's TLS front for supabase isn't listening on :54421 (hydra-router opens it).</p><p><code>hydra process restart hydra-router</code> in the main checkout. See <a href="#tls">HTTPS in front of a service</a>.</p></div>
       <div><p class="said">! this machine doesn't trust the certificate of main's TLS fronts, so a browser refuses their https addresses.</p><p><code>hydra trust</code>, once per machine.</p></div>
-      <div><p class="said">! main's database has 81 of its 100 connections in use. Each worktree that runs its own api or worker on it takes more, and the next one will fail to connect ("remaining connection slots are reserved").</p><p>Shown from three quarters full, and as "main's database is out of connections" once it refuses hydra's. A local Postgres allows 100 connections, Supabase's own services hold about a third, and each copy of a service with a connection pool holds its pool. The fix line raises the limit to 300, or by 200 when it is 300 or more already: it changes the setting as <code>supabase_admin</code> (Supabase's <code>postgres</code> role isn't allowed to) and restarts the database container and Supabase auth, which otherwise keeps answering logins with "Database error querying schema". The data stays. Everything connected to the database reconnects within seconds; a request in flight meanwhile fails.</p></div>
+      <div><p class="said">! main's database has 81 of its 100 connections in use. Each worktree that runs its own api or worker on it takes more, and the next one will fail to connect ("remaining connection slots are reserved").</p><p>Shown from three quarters full, and as "main's database is out of connections" once it refuses hydra's. A local Postgres allows 100 connections, Supabase's own services hold about a third, and each copy of a service with a connection pool holds its pool. The fix line raises the limit to 300, or by 200 when it is 300 or more already: it changes the setting as <code>supabase_admin</code> (Supabase's <code>postgres</code> role isn't allowed to) and restarts the database. In Docker it restarts the database container and Supabase auth with it, which otherwise keeps answering logins with "Database error querying schema"; a native stack (see <a href="#supabase-main">main's database natively</a>) restarts as a whole with <code>hydra process restart supabase</code>. The data stays. Everything connected to the database reconnects within seconds; a request in flight meanwhile fails.</p></div>
       <div><p class="said">! the main checkout is on branch hotfix, not main: worktrees are compared with what it has checked out.</p><p>Worktrees take what main runs, whatever branch that is. Check out the default branch there again when you are done.</p></div>
       <div><p class="said">! the main checkout has uncommitted changes, which its stack runs: …</p><p>Someone edited files in the main checkout. Worktrees that take those services from main get the edits too.</p></div>
       <div><p class="said">! ~/code/shop-old was removed, but its stack is still running (slot 3). …</p><p>Shown in the main checkout. A removed worktree's stack normally stops by itself; this one didn't. The next <code>hydra up</code> in any checkout stops it, or now: <code>hydra slots free ~/code/shop-old</code>.</p></div>
@@ -975,6 +975,44 @@ api:
       <li><b>Files the CLI writes.</b> It adds lines to <code>supabase/.gitignore</code> and writes <code>supabase/supabase.lock</code> on every start. hydra undoes the first when it is all that changed and ignores the rest through <code>.git/info/exclude</code>, so the worktree shows no changes it didn't make.</li>
       <li><b>Ports.</b> A stack also takes the ports from <code>port − 2</code> to <code>port + 8</code> in each slot, and none of them may fall in 10000–19999, which the CLI keeps for itself. From 54321, a few slots in, they reach 49152 and up, where macOS picks the local port of every outgoing connection: a busy browser can hold one at the moment the stack binds it, and the start fails. <code>worktree_port</code> moves every worktree's stack below that: slot N listens on <code>worktree_port + (N − 1) × slot_stride</code>, while main keeps <code>port</code>.</li>
     </ul>
+    <h3 id="supabase-main">Main's database natively too</h3>
+    <p>Main can drop Docker for its Supabase as well. Nothing in hydra changes; the stack file does, and three things work differently in the CLI there:</p>
+    <ul>
+      <li><b>A stack belongs to a folder and a branch.</b> Check out another branch in the main checkout and <code>supabase start</code> would make a new, empty database. So main's stack gets a name once and is opened by its id from then on, whatever branch is checked out.</li>
+      <li><b>Stack mode takes only Deno 2</b> for edge functions, and the functions inspector listens on 8083 unless told otherwise.</li>
+      <li><b>CLI commands typed in main</b> need <code>SUPABASE_EXPERIMENTAL_STACK=1</code> and <code>--stack-id</code>; without them the CLI looks for a Docker database, finds none and stops. Commands that take an address work as they did: <code>supabase migration up --db-url 'postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable'</code>.</li>
+    </ul>
+    <div class="code">
+<pre data-lang="yaml">
+supabase:
+  x-hydra:
+    kind: supabase
+    worktree_port: 40321
+    baseline_command: |
+      export SUPABASE_EXPERIMENTAL_STACK=1 SUPABASE_EDGE_RUNTIME_DENO_VERSION=2 SUPABASE_EDGE_RUNTIME_INSPECTOR_PORT=54319 SUPABASE_DB_SHADOW_PORT=54320
+      id=$$(supabase stack list --output-format json | jq -r --arg r "$$PWD" '.stacks[] | select(.project_root == $$r and .name == "main") | .id' | head -1)
+      if [ -n "$$id" ]; then exec supabase start --stack-id "$$id"; fi
+      exec supabase start --stack main --runtime native
+  command: supabase start --runtime native || supabase start
+  shutdown:
+    command: |
+      if [ "$${HYDRA_SLOT:-0}" = 0 ]; then
+        export SUPABASE_EXPERIMENTAL_STACK=1 SUPABASE_EDGE_RUNTIME_DENO_VERSION=2 SUPABASE_EDGE_RUNTIME_INSPECTOR_PORT=54319 SUPABASE_DB_SHADOW_PORT=54320
+        id=$$(supabase stack list --output-format json | jq -r --arg r "$$PWD" '.stacks[] | select(.project_root == $$r and .name == "main") | .id' | head -1)
+        [ -z "$$id" ] || supabase stop --stack-id "$$id"
+      else
+        supabase stop
+      fi
+</pre>
+    </div>
+    <p><b>Moving main's data over</b>, with nothing lost (measured on a 193 MB database: 565 tables, every row count equal afterwards):</p>
+    <ol>
+      <li><code>docker exec supabase_db_&lt;project&gt; pg_dump -U supabase_admin -d postgres -Fc &gt; main.dump</code>, then stop main's Supabase (<code>hydra process stop supabase</code>). Docker keeps its volumes: that database is still there, stopped.</li>
+      <li>Create the native stack without seeds: <code>SUPABASE_EXPERIMENTAL_STACK=1 SUPABASE_EDGE_RUNTIME_DENO_VERSION=2 SUPABASE_EDGE_RUNTIME_INSPECTOR_PORT=54319 SUPABASE_DB_SEED_ENABLED=false supabase start --stack main --runtime native</code>. The migrations make the same schema.</li>
+      <li>Empty your own schemas (migrations insert rows too) and restore their data, leaving out the services' own bookkeeping (<code>auth.schema_migrations</code>, <code>storage.migrations</code>): <code>pg_restore --data-only --disable-triggers</code> as <code>supabase_admin</code>, with a list made by <code>pg_restore -l</code>. Logins work at once: local stacks share the same keys.</li>
+      <li>Change the stack file as above and run <code>hydra update</code>.</li>
+    </ol>
+    <p><b>Known problems</b>, as of Supabase CLI 2.122: <code>supabase db dump</code> stops after about 1.4 MB on a native stack ("could not write to output file: Resource temporarily unavailable"); <code>supabase db dump --db-url 'postgresql://postgres:postgres@host.docker.internal:54322/postgres'</code> runs it in Docker instead and writes the same output, byte for byte. <code>supabase gen types --local</code> is unaffected. And every start adds the CLI's lock files to <code>supabase/.gitignore</code>; commit those lines once and it stops.</p>
     <h3>When the branch is renamed or switched</h3>
     <p>The Supabase CLI keeps one stack per directory <em>and branch</em>. Rename a worktree's branch, or check out another one in it, and the CLI's own commands no longer find the stack that is running. hydra goes by the directory, so nothing breaks:</p>
     <ul>
