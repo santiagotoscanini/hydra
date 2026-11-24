@@ -206,8 +206,10 @@ hydra-ui:
 ### Watching
 
 The generated file has one extra process, `hydra-watch`, so the watcher starts
-with the services and stops with them. Every 2 seconds it lists the changed
-files again. When the set of services to run differs, it rewrites the file and
+with the services and stops with them. Every 2 seconds it looks at `git
+status`, the branches and hydra's files; when any of them moved (and at least
+every 30 seconds) it lists the changed files again. When the set of services
+to run differs, it rewrites the file and
 calls `process-compose project update`, which touches only the processes that
 differ. It hands the file over in dependency order, since process-compose
 starts what one update adds in no order of its own: a service starts after

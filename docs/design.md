@@ -122,6 +122,18 @@ takes the index lock from an agent's git) respects `.gitignore` and costs
 about 0.35s per tick on the monorepo with a two-branch stack. A file watcher
 on a tree with `node_modules` would cost more than it saves.
 
+A plan costs about a second of CPU in a large repository (41 git calls in
+the monorepo, 22 of them ancestry checks against the other worktrees for
+stacked branches), so twenty watchers re-planning every 2 seconds kept
+several cores busy with nothing changing. A tick first computes a key: `git
+status` of the worktree (nearly free with a file system monitor), `git
+worktree list`, every branch's commit, and the size and mtime of the stack
+file, `.hydra.local.yaml`, `hydra-slots.json` and `hydra-baseline.json`. It
+plans only when the key moved, and at least every 30 seconds for what the
+key leaves out (a stacked parent's uncommitted edits). The note about main's
+stack being down, and migrations of a worktree's own database, still run
+every tick.
+
 ## Status
 
 `hydra status` plans the checkout, asks the two process-compose servers what

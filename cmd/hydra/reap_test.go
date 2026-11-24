@@ -515,7 +515,7 @@ func TestTheWatcherDoesNotPlanForAFolderGitTakesForMain(t *testing.T) {
 		t.Fatalf("expected git to take the folder for main: %+v, %v", again, err)
 	}
 
-	err = step(tgt, options{slot: -1}, "true", out, socketFor(tgt.checkout.Root))
+	_, err = step(tgt, options{slot: -1}, "true", out, socketFor(tgt.checkout.Root))
 	if err == nil || !strings.Contains(err.Error(), "no longer a worktree") {
 		t.Errorf("step = %v, want it to refuse", err)
 	}

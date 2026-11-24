@@ -452,7 +452,7 @@ func alsoRun(co gitx.Checkout, file string, names []string, c *pc.Client) error 
 		if err != nil {
 			return err
 		}
-		if err := step(t, o, watch, renderedPath(co.Root), socketPath(co)); err != nil {
+		if _, err := step(t, o, watch, renderedPath(co.Root), socketPath(co)); err != nil {
 			return err
 		}
 	}

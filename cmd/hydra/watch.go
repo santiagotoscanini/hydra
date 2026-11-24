@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
@@ -111,6 +113,11 @@ func watchCmd(args []string) error {
 	logf("watching %s every %s", describeStack(t), *interval)
 	parent := os.Getppid()
 	var started roster // what process-compose runs here, as it last said
+	var (
+		lastKey  string     // what the last full step planned from
+		lastFull time.Time  // when it ran
+		last     *plan.Plan // and what it planned
+	)
 	for {
 		if orphaned(parent) {
 			logf("the process-compose that started this watcher is gone; stopping, with what it left running")
@@ -124,8 +131,25 @@ func watchCmd(args []string) error {
 			stopGone(t)
 			return nil
 		}
-		if err := step(t, o, cmd, out, sock); err != nil {
-			logf("%v", err) // a failed git call (mid-rebase, say) shouldn't end the watch
+		// Planning walks git for this worktree and every other (stacked
+		// branches), about a second of CPU in a large repository: twenty
+		// watchers doing it every two seconds keep the machine busy for
+		// nothing. So a tick plans only when what a plan reads has changed,
+		// and at least every fullEvery whatever it says.
+		if key := watchKey(t); key == "" || key != lastKey || time.Since(lastFull) >= fullEvery {
+			p, err := step(t, o, cmd, out, sock)
+			if err != nil {
+				logf("%v", err) // a failed git call (mid-rebase, say) shouldn't end the watch
+				key = ""
+			} else {
+				last = p
+			}
+			lastKey, lastFull = key, time.Now()
+		} else {
+			noteMainUp(t)
+			if last != nil {
+				migrateSupabase(t, last)
+			}
 		}
 		if *once {
 			return nil
@@ -173,49 +197,88 @@ func forgetOnStop(root string) {
 	}()
 }
 
-func step(t *target, o options, cmd, out, sock string) error {
+// fullEvery is how often the watcher plans even when watchKey says nothing
+// changed: the key leaves out what is rare and slow to read (a stacked
+// parent's uncommitted edits, say), and this catches it.
+const fullEvery = 30 * time.Second
+
+// watchKey sums up, cheaply, what the plan of t is made from: the files that
+// differ from HEAD (git status, which a file system monitor makes nearly
+// free), where every worktree and branch points, and the files hydra reads.
+// Equal keys mean an equal plan. "" means it couldn't tell.
+func watchKey(t *target) string {
+	h := sha256.New()
+	for _, args := range [][]string{
+		{"status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"},
+		{"worktree", "list", "--porcelain"},
+		{"for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/remotes"},
+	} {
+		out, err := exec.Command("git", append([]string{"-C", t.checkout.Root}, args...)...).Output()
+		if err != nil {
+			return ""
+		}
+		h.Write(out)
+		h.Write([]byte{0})
+	}
+	for _, f := range []string{
+		t.file,
+		filepath.Join(t.checkout.Root, "process-compose.yaml"),
+		filepath.Join(t.checkout.Root, ".hydra.local.yaml"),
+		filepath.Join(t.checkout.CommonDir, "hydra-slots.json"),
+		filepath.Join(t.checkout.CommonDir, "hydra-baseline.json"),
+	} {
+		if fi, err := os.Stat(f); err == nil {
+			fmt.Fprintf(h, "%s %d %d\n", f, fi.Size(), fi.ModTime().UnixNano())
+		} else {
+			fmt.Fprintf(h, "%s -\n", f)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func step(t *target, o options, cmd, out, sock string) (*plan.Plan, error) {
 	// Re-read the stack file: an edit to x-hydra applies without a restart.
 	fresh, err := resolve(t.checkout.Root, t.file)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// A worktree removed under its running stack can leave its folder behind
 	// without the `.git` that made it one. git then answers for whatever
 	// repository lies above the folder, and for a worktree kept inside the
 	// main checkout that is the main checkout, whose plan is the whole stack.
 	if fresh.checkout.Root != t.checkout.Root {
-		return fmt.Errorf("%s is no longer a worktree: git finds %s there", t.checkout.Root, fresh.checkout.Root)
+		return nil, fmt.Errorf("%s is no longer a worktree: git finds %s there", t.checkout.Root, fresh.checkout.Root)
 	}
 	*t = *fresh
 	p, err := t.build(o)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	noteMain(t, p)
 	data, err := t.render(p, cmd)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if slots.Removed(t.checkout.Root) {
 		// It was removed while this looked: what git said on the way can't
 		// be trusted, and nothing more is written into the folder.
-		return fmt.Errorf("%s was removed", t.checkout.Root)
+		return nil, fmt.Errorf("%s was removed", t.checkout.Root)
 	}
 	// Before the update: the router has to release the port of a routed
 	// service that is about to start here.
 	if err := publishRoutes(t, p); err != nil {
-		return err
+		return nil, err
 	}
 	if err := syncEnvLocal(t, p); err != nil {
-		return err
+		return nil, err
 	}
 	current, _ := os.ReadFile(out)
 	if bytes.Equal(current, data) {
 		migrateSupabase(t, p)
-		return nil
+		return p, nil
 	}
 	if err := os.MkdirAll(filepath.Join(t.checkout.Root, render.WatchAnchor), 0o755); err != nil {
-		return err
+		return nil, err
 	}
 	forgetPrepared(t, p, processesOf(current), processesOf(data))
 	// In steps, so nothing starts before what it waits for (see applyProject).
@@ -227,7 +290,7 @@ func step(t *target, o options, cmd, out, sock string) error {
 		return update.Run()
 	})
 	if err != nil {
-		return fmt.Errorf("project update: %w", err)
+		return nil, fmt.Errorf("project update: %w", err)
 	}
 
 	// Report against what was running (the old file), not a remembered plan.
@@ -247,7 +310,7 @@ func step(t *target, o options, cmd, out, sock string) error {
 		}
 	}
 	migrateSupabase(t, p)
-	return nil
+	return p, nil
 }
 
 // forgetPrepared removes the mark of a worktree's own database being ready
@@ -277,25 +340,33 @@ var said = map[string]string{}
 // noteMain logs, in the worktree's own log, when the main checkout's stack
 // stops answering and when the branch falls out of step with main: both
 // break what runs here without anything here changing.
-func noteMain(t *target, p *plan.Plan) {
-	say := func(key, bad, good string) {
-		if said[key] == bad {
-			return
-		}
-		was := said[key]
-		said[key] = bad
-		switch {
-		case bad != "":
-			logf("%s", bad)
-		case was != "":
-			logf("%s", good)
-		}
+// say logs bad when it differs from what was last said under key, and good
+// once bad is over.
+func say(key, bad, good string) {
+	if said[key] == bad {
+		return
 	}
+	was := said[key]
+	said[key] = bad
+	switch {
+	case bad != "":
+		logf("%s", bad)
+	case was != "":
+		logf("%s", good)
+	}
+}
+
+// noteMainUp logs when main's stack stops answering, and when it is back.
+func noteMainUp(t *target) {
 	down := ""
 	if !mainClient(t.checkout.CommonDir).Alive() {
 		down = "! main's stack isn't answering: what this worktree takes from it is down (cd " + shQuote(t.checkout.Main) + " && hydra up -D)"
 	}
 	say("main", down, "main's stack answers again")
+}
+
+func noteMain(t *target, p *plan.Plan) {
+	noteMainUp(t)
 	skew := ""
 	if pr := skewProblem(t.stack, p); pr != nil {
 		skew = "! " + strings.ReplaceAll(pr.Text, "\n", "\n    ") + "\n    fix: " + pr.Fix
