@@ -391,3 +391,57 @@ processes:
 		t.Errorf("processes that use no front were given dependencies")
 	}
 }
+
+// process-compose builds its file watcher only when some process has a
+// `watch` as the project starts. A worktree that starts with nothing of its
+// own (the usual case: `hydra up`, then edit) would have none, and a service
+// hydra-watch adds later would never restart on a change. So hydra-watch
+// carries a watch of its own that never fires.
+func TestAWorktreeAlwaysHasAWatchWhenTheStackUsesOne(t *testing.T) {
+	render := func(src string, slot int, changed []string, watch string) map[string]map[string]any {
+		t.Helper()
+		st, err := config.Parse([]byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := plan.Build(st, plan.Request{Slot: slot, Changed: changed})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := Render(st, p, Options{Dir: "/repo", Watch: watch})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Processes map[string]map[string]any `yaml:"processes"`
+		}
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc.Processes
+	}
+
+	// Nothing changed: hydra-watch is the only process, and it has the watch.
+	procs := render(stack, 2, nil, "hydra watch")
+	if _, runs := procs["api"]; runs {
+		t.Fatal("api should not run in a worktree that changed nothing")
+	}
+	w, _ := procs["hydra-watch"]["watch"].(map[string]any)
+	paths, _ := w["paths"].([]any)
+	if len(paths) != 1 {
+		t.Fatalf("hydra-watch should carry one watch path, got %v", procs["hydra-watch"]["watch"])
+	}
+	first, _ := paths[0].(map[string]any)
+	if first["path"] != "/repo/"+WatchAnchor {
+		t.Errorf("the watch should point at the anchor directory, got %v", first["path"])
+	}
+	if inc, _ := first["include"].([]any); len(inc) != 1 {
+		t.Errorf("the watch needs an include that matches nothing, got %v", first["include"])
+	}
+
+	// A stack with no watch anywhere gets none.
+	plain := strings.Replace(stack, "    watch: { paths: [ { path: ./api } ] }\n", "", 1)
+	if _, has := render(plain, 2, nil, "hydra watch")["hydra-watch"]["watch"]; has {
+		t.Error("a stack without a watch should not get one")
+	}
+}

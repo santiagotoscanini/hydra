@@ -7,7 +7,9 @@
 #  docs      changed nothing that runs: its web is main's copy and main's api.
 #
 #  Then an edit to the web in `backend` starts a web there (the router gives
-#  the port up), and reverting it hands the port back.
+#  the port up), and reverting it hands the port back. And an edit to the api
+#  in `docs`, which started with nothing to run, starts an api there; the
+#  edit after that restarts it.
 #
 # Everything happens in a throwaway repo under $TMPDIR.
 set -euo pipefail
@@ -87,6 +89,25 @@ echo "--- backend reverts that edit: main's copy serves it again"
 rm "$repo/backend/apps/web/page.tsx"
 wait_chain "$web_b" "web(slot 0"
 echo "backend web   :$web_b    $(chain "$web_b")"
+
+echo
+echo "--- docs edits the api: one starts there, and the next edit restarts it"
+api_d=$((21010 + d * 100))
+api_pid() { (cd "$repo/docs" && "$H" process get api -o json 2>/dev/null) | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print((d[0] if isinstance(d, list) else d).get("pid", 0))' 2>/dev/null || echo 0; }
+(cd "$repo/docs" && mkdir -p apps/api && echo one >apps/api/list.go)
+wait_for "$api_d"
+first=$(api_pid)
+echo "docs    api   :$api_d    started by the first edit"
+sleep 1 # let the first run settle before the edit that must restart it
+(cd "$repo/docs" && echo two >apps/api/list.go)
+for _ in $(seq 100); do now=$(api_pid); [ "$now" != "$first" ] && [ "$now" != 0 ] && break; sleep 0.2; done
+if [ "$now" = "$first" ] || [ "$now" = 0 ]; then
+  echo "the api in docs did not restart on an edit (pid $first)" >&2; exit 1
+fi
+wait_for "$api_d"
+echo "docs    api   :$api_d    restarted by the second edit"
 
 echo
 echo "--- backend goes down: its port closes"

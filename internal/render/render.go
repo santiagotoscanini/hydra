@@ -36,6 +36,24 @@ type Options struct {
 
 const idle = "while :; do sleep 3600; done"
 
+// WatchAnchor is an empty directory in each worktree, relative to its root,
+// which hydra-watch's own `watch` points at (see Render). Whoever writes the
+// rendered file creates it.
+const WatchAnchor = ".process-compose/watch-anchor"
+
+// anyWatch reports whether a process of the stack restarts on file changes.
+func anyWatch(st *config.Stack) bool {
+	procs, _ := st.Raw["processes"].(map[string]any)
+	for _, raw := range procs {
+		if proc, ok := raw.(map[string]any); ok {
+			if _, has := proc["watch"]; has {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Render returns a process-compose document with the plan's local services,
 // `x-hydra` keys removed, and ports and upstream values injected as
 // environment variables.
@@ -250,13 +268,26 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 		procs[row.Name] = proc
 	}
 	if opt.Watch != "" {
-		procs["hydra-watch"] = map[string]any{
+		w := map[string]any{
 			"namespace":    "hydra",
 			"description":  "Starts services here as soon as their paths change",
 			"command":      opt.Watch,
 			"working_dir":  dir,
 			"availability": map[string]any{"restart": "on_failure", "backoff_seconds": 5},
 		}
+		if anyWatch(st) {
+			// process-compose builds its file watcher only when a process has
+			// a `watch` as the project starts, and a worktree often starts
+			// with nothing of its own to run. A service hydra-watch adds
+			// later would then never restart on a change to its files. This
+			// watch, on a directory nothing writes to, never fires: it is
+			// there so the watcher exists.
+			w["watch"] = map[string]any{"paths": []any{map[string]any{
+				"path":    filepath.Join(dir, WatchAnchor),
+				"include": []any{"nothing-is-ever-written-here"},
+			}}}
+		}
+		procs["hydra-watch"] = w
 	}
 	if opt.Router != "" && p.Slot == 0 {
 		procs["hydra-router"] = map[string]any{

@@ -83,6 +83,17 @@ transitions:
 Edits to a service that is already running here are left to its own reload
 (process-compose `watch`, `next dev`, `tsx watch`, ...).
 
+process-compose's `watch` needs help to work here. It builds its file watcher
+once, as the project starts, and only if some process has a `watch` then; a
+process added later through `project update` is registered with that watcher
+if it exists, and silently not at all if it doesn't. A worktree usually
+starts with nothing of its own to run, so its first service arrives through
+`project update`, and would never restart on an edit: the second change to
+a Go file in the monorepo was not picked up. So when the stack file uses
+`watch` anywhere, `hydra-watch` is rendered with a `watch` of its own on an
+empty directory (`.process-compose/watch-anchor`) and an include that matches
+nothing. It never fires; it makes the watcher exist.
+
 Polling `git diff`/`git ls-files` (with `GIT_OPTIONAL_LOCKS=0`, so it never
 takes the index lock from an agent's git) respects `.gitignore` and costs
 about 0.35s per tick on the monorepo with a two-branch stack. A file watcher

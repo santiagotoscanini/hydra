@@ -14,6 +14,13 @@ x-hydra:
 processes:
   api:
     command: bin/mocksvc
+    # In a worktree, an edit restarts it (process-compose's own file watch;
+    # hydra drops it in main, where code only changes on `hydra update`).
+    watch:
+      debounce: 200ms
+      paths:
+        - path: ./apps/api
+          include: ["*.go"]
     x-hydra:
       port: 21010
       paths: ["apps/api/**"]

@@ -769,7 +769,7 @@ note: changed, but in no service's paths, so nothing runs here for them: package
       <tr><td>Unchanged → changed</td><td>The service starts in the worktree. Services here that point at it restart with its address.</td></tr>
       <tr><td>Changed → unchanged</td><td>The service stops. Services here that pointed at it restart on main's address.</td></tr>
     </table></div>
-    <p>Those are the only two things the watcher does to your services. Further edits to a service that already runs here are left to the service's own reload, such as <code>next dev</code>, <code>air</code> or process-compose's <code>watch</code>.</p>
+    <p>Those are the only two things the watcher does to your services. Further edits to a service that already runs here are left to the service's own reload, such as <code>next dev</code>, <code>air</code> or process-compose's <code>watch</code>. A <code>watch</code> block in your file works in every worktree, also for a service that started after the stack did, and is dropped in main.</p>
     <p>The watcher polls git instead of watching the file system. Only git can answer "does this differ from <code>main</code>": a revert has to stop the service, and ignored files such as <code>node_modules</code> must not start one. It reads git without taking the index lock, so it doesn't collide with an agent committing in the same worktree.</p>
     <p>It also re-reads the stack file and <a href="#local"><code>.hydra.local.yaml</code></a> on every tick, so an edit to either applies without a restart. And it keeps three watches of its own: it logs when main's stack stops answering and when the branch falls <a href="#instep">out of step</a>; it stops its stack when its worktree's directory <a href="#cleanup">is removed</a>; and it exits if the process-compose that started it is killed.</p>
   </section>
@@ -990,7 +990,7 @@ web:
       <li>Readiness and liveness probes on main's port move to the slot's port. Otherwise a worktree's probe would hit main's copy and pass at once.</li>
       <li>A stand-in replaces every process of main that one here depends on, in a namespace called <code>main</code>. It copies only the readiness probe or ready log line, so <code>process_healthy</code> waits for main's database instead of starting a second one. Stopping the worktree never runs main's shutdown commands.</li>
       <li>A <code>hydra-prepare-&lt;service&gt;</code> step runs before each service that has <code>prepare</code>.</li>
-      <li>In a worktree: <code>hydra-watch</code> is added.</li>
+      <li>In a worktree: <code>hydra-watch</code> is added. When any process of your file has a <code>watch</code>, <code>hydra-watch</code> carries one too, on an empty directory (<code>.process-compose/watch-anchor</code>), which never fires. process-compose only sets its file watching up when a process has a <code>watch</code> as the project starts, and a worktree usually starts with nothing of its own to run: without this, a service the watcher adds later would never restart on an edit.</li>
       <li>In the main checkout: <code>watch</code> blocks are dropped and <code>baseline_command</code> replaces <code>command</code>. When a service is <code>routed</code> or has <code>tls</code>, a <code>hydra-router</code> process is added, and a routed service's HTTP upstreams point at it.</li>
     </ul>
     <p>hydra relies on the process environment winning over <code>.env</code> files. That holds for Next.js and for godotenv; check it for other loaders.</p>
@@ -1188,6 +1188,7 @@ $ hydra plan --route web.api=local       # also starts api here
     <div class="table"><table>
       <tr><th>File</th><th>What it is</th></tr>
       <tr><td><code>.process-compose/hydra.yaml</code><span class="type">in each checkout</span></td><td>The generated process-compose file. Written by <code>hydra up</code> and, in a worktree, by the watcher. Don't edit it; ignore it in git.</td></tr>
+      <tr><td><code>.process-compose/watch-anchor/</code><span class="type">in a worktree</span></td><td>An empty directory. <code>hydra-watch</code>'s own <code>watch</code> points at it, so that process-compose restarts your services on edits (see <a href="#generated">the generated file</a>). Nothing is ever written there.</td></tr>
       <tr><td><code>.hydra.local.yaml</code><span class="type">in a worktree</span></td><td>Yours, and optional: <a href="#local">per-worktree settings</a>. hydra only reads it.</td></tr>
       <tr><td><code>hydra-slots.json</code><span class="type">shared .git</span></td><td>Which worktree holds which slot.</td></tr>
       <tr><td><code>hydra-baseline.json</code><span class="type">shared .git</span></td><td>The commit main's stack was last brought to, and where its process-compose listens. Written when main's stack starts and after a successful <code>hydra update</code>.</td></tr>

@@ -15,6 +15,7 @@ import (
 	"github.com/santiagotoscanini/hydra/internal/gitx"
 	"github.com/santiagotoscanini/hydra/internal/pc"
 	"github.com/santiagotoscanini/hydra/internal/plan"
+	"github.com/santiagotoscanini/hydra/internal/render"
 	"github.com/santiagotoscanini/hydra/internal/stack"
 )
 
@@ -289,6 +290,10 @@ func renderFor(co gitx.Checkout, file string, names []string, starting, force bo
 		return "", nil, err
 	}
 	out := filepath.Join(co.Root, ".process-compose", "hydra.yaml")
+	// What hydra-watch's own watch points at (see render.WatchAnchor).
+	if err := os.MkdirAll(filepath.Join(co.Root, render.WatchAnchor), 0o755); err != nil {
+		return "", nil, err
+	}
 	if err := writeFile(out, data); err != nil {
 		return "", nil, err
 	}

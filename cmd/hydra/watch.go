@@ -16,6 +16,7 @@ import (
 
 	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/plan"
+	"github.com/santiagotoscanini/hydra/internal/render"
 )
 
 // watchCommand is the command line of the hydra-watch process for t. It must
@@ -159,6 +160,9 @@ func step(t *target, o options, cmd, out, sock string) error {
 	if bytes.Equal(current, data) {
 		migrateSupabase(t, p)
 		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(t.checkout.Root, render.WatchAnchor), 0o755); err != nil {
+		return err
 	}
 	if err := writeFile(out, data); err != nil {
 		return err
