@@ -114,7 +114,8 @@ to no service (docs, CI, other apps) under `ignore` in the top-level
 3. Takes a **slot** for the worktree, kept until the worktree is removed.
    Slot N listens on each service's port + N × `slot_stride`. When all
    `max_slots` are taken, it takes the slot of a worktree whose stack isn't
-   running (that one gets a slot again when it starts).
+   running (that one gets a slot again when it starts). A slot where a port
+   would be one browsers refuse (6000, 10080, ...) is skipped.
 4. Checks the main checkout: its stack is running, the services this
    worktree takes from it are up, and they are the version the branch was
    built on. If not, it prints what is wrong and the fix, and doesn't start

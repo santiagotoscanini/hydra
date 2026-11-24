@@ -207,7 +207,7 @@ func slotted(t *testing.T, co gitx.Checkout, name string) slots.Entry {
 	if err != nil {
 		t.Fatal(err)
 	}
-	slot, _, err := slots.Acquire(co.CommonDir, wt.Root, 9, nil, nil)
+	slot, _, err := slots.Acquire(co.CommonDir, wt.Root, 9, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

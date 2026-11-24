@@ -312,6 +312,49 @@ func (st *Stack) Shift(s *Service, slot int) int {
 	return slot * st.Hydra.SlotStride
 }
 
+// badPorts are the ports browsers refuse to connect to (the Fetch
+// standard's "bad ports"), which Next.js also refuses to listen on.
+var badPorts = map[int]bool{
+	1: true, 7: true, 9: true, 11: true, 13: true, 15: true, 17: true, 19: true, 20: true,
+	21: true, 22: true, 23: true, 25: true, 37: true, 42: true, 43: true, 53: true, 69: true,
+	77: true, 79: true, 87: true, 95: true, 101: true, 102: true, 103: true, 104: true,
+	109: true, 110: true, 111: true, 113: true, 115: true, 117: true, 119: true, 123: true,
+	135: true, 137: true, 139: true, 143: true, 161: true, 179: true, 389: true, 427: true,
+	465: true, 512: true, 513: true, 514: true, 515: true, 526: true, 530: true, 531: true,
+	532: true, 540: true, 548: true, 554: true, 556: true, 563: true, 587: true, 601: true,
+	636: true, 989: true, 990: true, 993: true, 995: true, 1719: true, 1720: true, 1723: true,
+	2049: true, 3659: true, 4045: true, 4190: true, 5060: true, 5061: true, 6000: true,
+	6566: true, 6665: true, 6666: true, 6667: true, 6668: true, 6669: true, 6679: true,
+	6697: true, 10080: true,
+}
+
+// BadSlot names a port of slot that a browser would refuse, "" when there is
+// none. Such a slot is never handed out: a page on it can't be opened, and
+// Next.js won't even start there.
+func (st *Stack) BadSlot(slot int) string {
+	for _, name := range st.Names() {
+		s := st.Services[name]
+		if s.Shared {
+			continue
+		}
+		ports := st.SlotPorts(s, slot)
+		labels := make([]string, 0, len(ports))
+		for l := range ports {
+			labels = append(labels, l)
+		}
+		sort.Strings(labels)
+		for _, l := range labels {
+			if badPorts[ports[l]] {
+				if l == "" {
+					return fmt.Sprintf("%s on %d", name, ports[l])
+				}
+				return fmt.Sprintf("%s's %s port on %d", name, l, ports[l])
+			}
+		}
+	}
+	return ""
+}
+
 // SlotPorts lists every port s listens on in a slot, keyed by name ("" for
 // Port): its named ports, and in a worktree the rest of a Supabase stack's.
 func (st *Stack) SlotPorts(s *Service, slot int) map[string]int {

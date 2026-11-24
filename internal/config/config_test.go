@@ -213,6 +213,24 @@ processes:
 	}
 }
 
+func TestSlotsWhereABrowserRefusesAPortAreBad(t *testing.T) {
+	st, err := Parse([]byte(`
+x-hydra: { slot_stride: 200, max_slots: 20 }
+processes:
+  web: { command: x, x-hydra: { port: 3000 } }
+  api: { command: x, x-hydra: { port: 8080 } }
+  db: { command: x, x-hydra: { shared: true, port: 6665 } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for slot, want := range map[int]string{0: "", 1: "", 10: "api on 10080", 15: "web on 6000", 20: ""} {
+		if got := st.BadSlot(slot); got != want {
+			t.Errorf("slot %d: %q, want %q", slot, got, want)
+		}
+	}
+}
+
 func TestTLSFronts(t *testing.T) {
 	st, err := Parse([]byte(`
 x-hydra: { slot_stride: 100, max_slots: 5 }

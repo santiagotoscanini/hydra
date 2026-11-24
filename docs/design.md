@@ -725,6 +725,13 @@ port). From Supabase's 54321 with a stride of 200, slot 4 and up reach
 49152, macOS's ephemeral range, where any outgoing connection may hold the
 port at the moment a stack binds it.
 
+A slot where any service's port is one of the Fetch standard's "bad ports"
+(6000, 6665-6669, 10080, ...) is skipped when slots are handed out: browsers
+refuse those ports and Next.js won't listen on them, and the monorepo's web
+on 3000 with a stride of 200 reaches 6000 in slot 15. Skipping beats failing
+the config: the stride is often set by habit across a team, and losing two
+slots of twenty costs less than renumbering every port.
+
 Only a start takes a slot. `hydra plan`, `render`, `status` and the page
 peek: the slot the worktree has, or the lowest free one, recorded nowhere.
 Once `plan` took one, and worktrees that were planned but never run filled
