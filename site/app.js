@@ -83,355 +83,127 @@ document.addEventListener("click", function (e) {
   });
 });
 
-// What runs where: agents edit files in worktrees, and the same rules hydra
-// applies decide which cells light up. Nothing below is a recording.
+// What runs where, in five steps. Each step is a whole state, so the reader
+// can go back and forth; the only motion is the cell that just changed.
 (function () {
   var el = document.getElementById("sim");
   if (!el) return;
 
-  var STRIDE = 200, WATCH = 1000, HOLD = 5200;
-  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var ORDER = ["web", "api", "worker", "db"];
-  var SVC = {
-    web: { port: 3000, paths: ["apps/web/", "packages/shared/"], up: "api", routed: true },
-    api: { port: 8080, paths: ["services/api/", "packages/shared/"] },
-    worker: { paths: ["services/worker/", "packages/shared/"], up: "api" },
-    db: { port: 5432, shared: true }
-  };
-
-  var SCENES = [
+  var MAIN = { web: ":3000", api: ":8080", worker: "running", db: ":5432" };
+  var ROWS = [
+    { name: "fix-cart", slot: 1 },
+    { name: "api-paging", slot: 2 }
+  ];
+  // cells: "row:svc" → [what the cell says, its second line, "here" | "via"]
+  var STEPS = [
     {
-      label: "three agents",
-      cap: "Three agents in three worktrees. Each starts only the service it touched, and the one fixing a typo starts nothing. A worktree that left the frontend alone uses main's, on a port of its own.",
-      lanes: [{ name: "fix-cart-total", tag: "slot 1", slot: 1 }, { name: "api-pagination", tag: "slot 2", slot: 2 }, { name: "docs-typo", tag: "slot 3", slot: 3 }],
-      script: [
-        [500, 0, "say", "reading apps/web/cart.tsx"],
-        [400, 1, "say", "reading services/api/list.go"],
-        [400, 2, "say", "reading README.md"],
-        [1100, 0, "edit", "apps/web/cart.tsx"],
-        [500, 1, "edit", "services/api/list.go"],
-        [600, 2, "edit", "README.md"],
-        [100, 2, "note", "No service owns README.md, so nothing starts."],
-        [900, 0, "say", "checking the total at localhost:3200"],
-        [700, 1, "say", "checking page 2 of the orders list at localhost:3400"],
-        [700, 2, "say", "done"]
-      ]
+      cap: "Main runs the whole stack, once. The two worktrees haven't changed anything yet, so nothing runs in them: whatever they need is main's.",
+      changed: [[], []], cells: {}
     },
     {
-      label: "change, then revert",
-      cap: "The agent tries a fix in the worker, drops it, and fixes the frontend instead. The worker stops when its change is gone.",
-      lanes: [{ name: "retry-backoff", tag: "slot 1", slot: 1 }],
-      script: [
-        [500, 0, "say", "reading services/worker/retry.go"],
-        [1100, 0, "edit", "services/worker/retry.go"],
-        [1100, 0, "say", "go test ./services/worker/..."],
-        [1500, 0, "say", "wrong layer. git checkout -- services/worker"],
-        [900, 0, "revert", "services/worker/"],
-        [1000, 0, "edit", "apps/web/orders.tsx"],
-        [900, 0, "say", "checking localhost:3200/orders"]
-      ]
+      cap: "An agent in fix-cart edits apps/web/cart.tsx. That file is in web's paths, so hydra starts web in this worktree, on a port of its own. Its API calls go to main's api, which the branch didn't touch.",
+      changed: [["apps/web/cart.tsx"], []],
+      cells: { "0:web": [":3200", "api → main's", "here"] }, focus: "0:web"
     },
     {
-      label: "one branch that grows",
-      cap: "A feature starts in the frontend and spreads. When the API starts here, the frontend is restarted to talk to it instead of main's.",
-      lanes: [{ name: "order-notes", tag: "slot 1", slot: 1 }],
-      script: [
-        [500, 0, "say", "adding a notes field to the order page"],
-        [1100, 0, "edit", "apps/web/notes.tsx"],
-        [1300, 0, "say", "the API needs the field too"],
-        [900, 0, "edit", "services/api/notes.go"],
-        [100, 0, "note", "web restarted: its API_URL now points at :8280."],
-        [1300, 0, "say", "moving the type into the shared package"],
-        [900, 0, "edit", "packages/shared/types.ts"],
-        [100, 0, "note", "packages/shared belongs to web, api and worker."]
-      ]
+      cap: "In api-paging, another agent edits services/api/list.go. Only the api starts there, on :8480, and it uses main's database.",
+      changed: [["apps/web/cart.tsx"], ["services/api/list.go"]],
+      cells: { "0:web": [":3200", "api → main's", "here"], "1:api": [":8480", "db → main's", "here"], "1:web": ["main's :3400", "api → here", "via"] },
+      focus: "1:api"
     },
     {
-      label: "stacked branches",
-      cap: "Three branches stacked on each other, one agent in each. hydra runs once, in the top worktree, and starts each service from the worktree of the branch that changed it.",
-      stack: true,
-      lanes: [
-        { name: "orders-api", tag: "on main", slot: 1, init: ["services/api/orders.go"] },
-        { name: "orders-jobs", tag: "on orders-api", slot: 1 },
-        { name: "orders-ui", tag: "on orders-jobs · hydra runs here, slot 1", slot: 1, init: ["apps/web/orders.tsx"] }
-      ],
-      script: [
-        [600, 2, "say", "building the orders page"],
-        [500, 0, "say", "tightening the orders query"],
-        [700, 1, "say", "adding the nightly export job"],
-        [1100, 1, "edit", "services/worker/export.go"],
-        [1300, 0, "say", "editing services/api/orders.go"],
-        [300, 0, "note", "Already running: the api's own reload picks this edit up."],
-        [900, 2, "say", "checking localhost:3200/orders"]
-      ]
+      cap: "api-paging has no frontend of its own, and its agent still has a page to check: main's web answers on this worktree's port, :3400, and sends the page's API calls to this worktree's api.",
+      changed: [["apps/web/cart.tsx"], ["services/api/list.go"]],
+      cells: { "0:web": [":3200", "api → main's", "here"], "1:api": [":8480", "db → main's", "here"], "1:web": ["main's :3400", "api → here", "via"] },
+      focus: "1:web"
+    },
+    {
+      cap: "The first agent drops its change. Within two seconds web stops in fix-cart, and the worktree uses main's copy again.",
+      changed: [[], ["services/api/list.go"]],
+      cells: { "1:api": [":8480", "db → main's", "here"], "1:web": ["main's :3400", "api → here", "via"] },
+      focus: "0:web"
     }
   ];
 
-  var bar = el.querySelector(".sim-bar"), cap = el.querySelector(".sim-cap"), grid = el.querySelector(".grid");
-  var count = el.querySelector(".sim-count"), log = el.querySelector(".sim-log"), prog = el.querySelector(".sim-prog i");
+  var dots = el.querySelector(".sim-steps"), cap = el.querySelector(".sim-cap");
+  var grid = el.querySelector(".grid"), count = el.querySelector(".sim-count");
   var toggle = el.querySelector("[data-sim-toggle]");
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var at = 0, timer = null, playing = !reduce, inView = false;
 
-  var scene, rows, changed, shown, steps, at, timer, typing = [], playing = false, auto = true, current = 0, started = false;
-
-  SCENES.forEach(function (s, i) {
+  STEPS.forEach(function (s, i) {
     var b = document.createElement("button");
-    b.className = "sc"; b.textContent = s.label; b.setAttribute("aria-pressed", "false");
-    b.addEventListener("click", function () { auto = false; started = true; load(i, reduce); });
-    bar.insertBefore(b, bar.querySelector(".sim-ctl"));
+    b.textContent = i + 1;
+    b.setAttribute("aria-label", "Step " + (i + 1));
+    b.addEventListener("click", function () { stop(); show(i); });
+    dots.appendChild(b);
   });
-  var tabs = bar.querySelectorAll(".sc");
 
-  function cellHTML(svc) {
-    return '<div class="g-cell" data-svc="' + svc + '"><span class="off">·</span><span class="on"><i></i><b></b></span><span class="via"><i></i><b></b></span><span class="wire"></span></div>';
+  function cell(svc, text, note, kind) {
+    return '<div class="g-cell' + (kind ? " is-" + kind : "") + '" data-svc="' + svc + '"><span class="v">' + esc(text) + "</span>" +
+      (note ? '<span class="n">' + esc(note) + "</span>" : "") + "</div>";
   }
 
-  function build() {
+  function show(i) {
+    at = i;
+    var st = STEPS[i];
     var html = '<div class="g-row head"><div>checkout</div>' + ORDER.map(function (s) { return "<div>" + s + "</div>"; }).join("") + "</div>";
-    html += '<div class="g-row base"><div><div class="co-name">main<small>slot 0</small></div><div class="co-line remark">Runs the whole stack, once.</div></div>' + ORDER.map(cellHTML).join("") + "</div>";
-    scene.lanes.forEach(function (l) {
-      html += '<div class="g-row"><div><div class="co-name">' + l.name + "<small>" + l.tag + "</small></div>" +
-        '<div class="co-line agent idle">idle</div><div class="co-line changed"></div><div class="co-line remark"></div></div>' +
-        ORDER.map(cellHTML).join("") + "</div>";
+    html += '<div class="g-row base"><div><div class="co-name">main<small>slot 0</small></div></div>' +
+      ORDER.map(function (s) { return cell(s, MAIN[s], "", "main"); }).join("") + "</div>";
+    ROWS.forEach(function (r, n) {
+      var files = st.changed[n];
+      html += '<div class="g-row"><div><div class="co-name">' + r.name + "<small>slot " + r.slot + "</small></div>" +
+        '<div class="co-line">' + (files.length ? "changed <span>" + files.map(esc).join("</span> <span>") + "</span>" : "nothing changed") + "</div></div>" +
+        ORDER.map(function (s) {
+          var c = st.cells[n + ":" + s];
+          return c ? cell(s, c[0], c[1], c[2]) : cell(s, "main's", "", "");
+        }).join("") + "</div>";
     });
     grid.innerHTML = html;
-    var all = grid.querySelectorAll(".g-row");
-    ORDER.forEach(function (svc) {
-      var c = all[1].querySelector('[data-svc="' + svc + '"]');
-      c.classList.add("is-on");
-      c.querySelector("b").textContent = SVC[svc].port ? ":" + SVC[svc].port : "running";
-    });
-    rows = Array.prototype.slice.call(all, 2);
-  }
-
-  function match(svc, files) {
-    return files.slice().sort().filter(function (f) {
-      return SVC[svc].paths.some(function (p) { return f.indexOf(p) === 0; });
-    })[0];
-  }
-
-  // The plan: which service runs in which row, on which port, wired to what.
-  // via: a routed service the row didn't change. Main's copy answers on the
-  // row's own port and calls the row's services.
-  var via = {};
-  function addVia(row, slot, local) {
-    ORDER.forEach(function (svc) {
-      var s = SVC[svc];
-      if (!s.routed || svc in local) return;
-      via[row + ":" + svc] = { row: row, svc: svc, text: ":" + (s.port + slot * STRIDE),
-        wire: "main's copy\n" + s.up + " → " + (s.up in local ? "here" : "main") };
-    });
-  }
-
-  function plan() {
-    var out = {}, top = scene.lanes.length - 1;
-    via = {};
-    function add(row, svc, slot, why, local) {
-      var s = SVC[svc];
-      out[row + ":" + svc] = {
-        row: row, svc: svc, why: why,
-        text: s.port ? ":" + (s.port + slot * STRIDE) : "running",
-        wire: s.up ? s.up + " → " + (s.up in local ? "here" : "main") : ""
-      };
+    if (st.focus) {
+      var f = st.focus.split(":");
+      var c = grid.querySelectorAll(".g-row")[2 + Number(f[0])].querySelector('[data-svc="' + f[1] + '"]');
+      c.classList.add("focus");
     }
-    if (scene.stack) {
-      var owner = {}, why = {};
-      for (var i = top; i >= 0; i--) ORDER.forEach(function (svc) {
-        if (SVC[svc].shared || svc in owner) return;
-        var f = match(svc, changed[i]);
-        if (f) { owner[svc] = i; why[svc] = "changed" + (i < top ? " in " + scene.lanes[i].name : "") + ": " + f; }
-      });
-      Object.keys(owner).forEach(function (svc) { add(owner[svc], svc, 1, why[svc], owner); });
-      addVia(top, 1, owner);
-    } else {
-      scene.lanes.forEach(function (l, i) {
-        var local = {}, w = {};
-        ORDER.forEach(function (svc) {
-          if (SVC[svc].shared) return;
-          var f = match(svc, changed[i]);
-          if (f) { local[svc] = true; w[svc] = "changed: " + f; }
-        });
-        Object.keys(local).forEach(function (svc) { add(i, svc, l.slot, w[svc], local); });
-        addVia(i, l.slot, local);
-      });
-    }
-    return out;
+    cap.textContent = st.cap;
+    var running = 4 + Object.keys(st.cells).filter(function (k) { return st.cells[k][2] === "here"; }).length;
+    count.innerHTML = "<b>" + running + "</b> processes running. A full stack in every checkout would be <b>" + 4 * (ROWS.length + 1) + "</b>.";
+    dots.querySelectorAll("button").forEach(function (b, n) { b.setAttribute("aria-pressed", n === i ? "true" : "false"); });
+    label();
   }
 
-  function stamp() {
-    var d = new Date();
-    return [d.getHours(), d.getMinutes(), d.getSeconds()].map(function (n) { return (n < 10 ? "0" : "") + n; }).join(":");
-  }
-
-  function say(cls, row, text) {
-    var who = scene.stack ? scene.lanes[scene.lanes.length - 1].name : scene.lanes[row].name;
-    var empty = log.querySelector(".empty");
-    if (empty) empty.remove();
-    var line = document.createElement("div");
-    line.innerHTML = '<span class="who">' + esc(who) + " " + stamp() + " hydra:</span> <span class=\"" + cls + '">' + esc(text) + "</span>";
-    log.appendChild(line);
-    while (log.children.length > 5) log.removeChild(log.firstChild);
-  }
-
-  // Apply the plan the way the watcher does: start, stop, re-point.
-  function apply(quiet) {
-    var next = plan();
-    Object.keys(shown).forEach(function (k) {
-      if (next[k]) return;
-      var c = rows[shown[k].row].querySelector('[data-svc="' + shown[k].svc + '"]');
-      c.classList.remove("is-on", "pop", "rewire");
-      say("minus", shown[k].row, "- " + shown[k].svc + " stopped; main's copy is used again");
-    });
-    Object.keys(next).sort(function (a, b) { return next[a].svc < next[b].svc ? -1 : 1; }).forEach(function (k) {
-      var n = next[k], c = rows[n.row].querySelector('[data-svc="' + n.svc + '"]');
-      c.querySelector("b").textContent = n.text;
-      c.querySelector(".wire").textContent = n.wire;
-      if (!shown[k]) {
-        c.classList.add("is-on");
-        if (!quiet) { c.classList.remove("pop"); void c.offsetWidth; c.classList.add("pop"); }
-        say("plus", n.row, "+ " + n.svc + " now runs here (" + n.why + ")");
-      } else if (shown[k].wire !== n.wire && !quiet) {
-        c.classList.remove("rewire"); void c.offsetWidth; c.classList.add("rewire");
-      }
-    });
-    rows.forEach(function (r, i) {
-      ORDER.forEach(function (svc) {
-        if (!SVC[svc].routed) return;
-        var c = r.querySelector('[data-svc="' + svc + '"]'), v = via[i + ":" + svc];
-        c.classList.toggle("is-via", !!v);
-        if (!v) return;
-        var wire = c.querySelector(".wire"), was = wire.textContent;
-        c.querySelector(".via b").textContent = v.text;
-        wire.textContent = v.wire;
-        if (was && was !== v.wire && !quiet) { c.classList.remove("rewire"); void c.offsetWidth; c.classList.add("rewire"); }
-      });
-    });
-    shown = next;
-    tally();
-  }
-
-  function tally() {
-    var running = 4 + Object.keys(shown).length, full = 4 * (scene.lanes.length + 1), cells = "";
-    for (var i = 0; i < full; i++) cells += i < running ? '<i class="f"></i>' : "<i></i>";
-    count.innerHTML = "<span><b>" + running + "</b> processes running. A full stack in every checkout would be <b>" + full + "</b>.</span>" +
-      '<span class="meter" aria-hidden="true">' + cells + "</span>";
-  }
-
-  function type(row, text, instant) {
-    var line = rows[row].querySelector(".agent");
-    clearInterval(typing[row]);
-    line.classList.remove("idle");
-    if (instant) { line.textContent = text; return; }
-    var n = 0;
-    line.innerHTML = '<span></span><i class="cur"></i>';
-    var span = line.firstChild;
-    typing[row] = setInterval(function () {
-      n += 2;
-      span.textContent = text.slice(0, n);
-      if (n >= text.length) { clearInterval(typing[row]); line.textContent = text; }
-    }, 28);
-  }
-
-  function showChanged(row) {
-    rows[row].querySelector(".changed").innerHTML = changed[row].slice().sort().map(function (f) { return "<span>" + esc(f) + "</span>"; }).join("");
-  }
-
-  function flash(row) {
-    rows[row].classList.remove("flash"); void rows[row].offsetWidth; rows[row].classList.add("flash");
-  }
-
-  function load(i, instant) {
+  function label() { toggle.textContent = playing ? "pause" : at === STEPS.length - 1 ? "replay" : "play"; }
+  function stop() { playing = false; clearTimeout(timer); label(); }
+  function schedule() {
     clearTimeout(timer);
-    typing.forEach(clearInterval);
-    current = i; scene = SCENES[i]; at = 0; shown = {}; steps = [];
-    tabs.forEach(function (t, n) { t.setAttribute("aria-pressed", n === i ? "true" : "false"); });
-    cap.textContent = scene.cap;
-    log.innerHTML = '<div class="empty">hydra-watch has nothing to report yet.</div>';
-    build();
-    changed = scene.lanes.map(function (l) { return (l.init || []).slice(); });
-    scene.lanes.forEach(function (l, n) { showChanged(n); });
-    apply(true);
-
-    scene.script.forEach(function (s) {
-      var wait = s[0], row = s[1], kind = s[2], val = s[3];
-      if (kind === "say") steps.push([wait, function (q) { type(row, val, q); }]);
-      if (kind === "note") steps.push([wait, function () { rows[row].querySelector(".remark").textContent = val; }]);
-      if (kind === "edit" || kind === "revert") {
-        steps.push([wait, function (q) {
-          if (kind === "edit") {
-            if (changed[row].indexOf(val) < 0) changed[row].push(val);
-            type(row, "editing " + val, q);
-          } else {
-            changed[row] = changed[row].filter(function (f) { return f.indexOf(val) !== 0; });
-          }
-          rows[row].querySelector(".remark").textContent = "";
-          showChanged(row);
-          if (!q) flash(row);
-        }]);
-        steps.push([WATCH, function (q) { apply(q); }]);
-      }
-    });
-
-    if (instant) {
-      steps.forEach(function (s) { s[1](true); });
-      at = steps.length; playing = false;
-      progress(); label();
-    } else {
-      playing = true; progress(); label(); tick();
-    }
-  }
-
-  function progress() { prog.style.width = (steps.length ? (at / steps.length) * 100 : 0) + "%"; }
-  function label() { toggle.textContent = at >= steps.length ? "replay" : playing ? "pause" : "play"; }
-
-  function tick() {
-    if (at >= steps.length) {
-      playing = false; label();
-      if (auto) timer = setTimeout(function () { load((current + 1) % SCENES.length); }, HOLD);
-      return;
-    }
-    timer = setTimeout(function () { steps[at][1](false); at++; progress(); tick(); }, steps[at][0]);
+    if (!playing || !inView || document.hidden) return;
+    timer = setTimeout(function () {
+      if (at === STEPS.length - 1) { playing = false; label(); return; }
+      show(at + 1); schedule();
+    }, at === 0 ? 3500 : 6000);
   }
 
   toggle.addEventListener("click", function () {
-    auto = false; started = true;
-    if (at >= steps.length) return load(current, reduce);
-    if (playing) { playing = false; clearTimeout(timer); } else { playing = true; tick(); }
-    label();
+    if (playing) return stop();
+    playing = true;
+    if (at === STEPS.length - 1) show(0); else label();
+    schedule();
   });
+  document.addEventListener("visibilitychange", schedule);
 
-  // Scenes have different numbers of rows. Reserve the tallest, so the page
-  // below doesn't move when the scene changes.
-  function reserve() {
-    var keep = scene, max = 0;
-    grid.style.minHeight = "";
-    SCENES.forEach(function (s) { scene = s; build(); max = Math.max(max, grid.offsetHeight); });
-    scene = keep;
-    grid.style.minHeight = max + "px";
-  }
-
-  // Only run while someone can see it.
-  var inView = false;
-  function resume() {
-    clearTimeout(timer);
-    if (!inView || document.hidden || reduce) return;
-    if (!started) { started = true; load(0, false); }
-    else if (playing || (auto && at >= steps.length)) tick();
-  }
-  document.addEventListener("visibilitychange", resume);
-
-  reserve();
-  load(0, true);
-  if (reduce) toggle.hidden = true; // every scene is drawn finished; nothing to play
-  var resized;
-  window.addEventListener("resize", function () {
-    clearTimeout(resized);
-    resized = setTimeout(function () { var i = current; reserve(); load(i, true); if (!reduce) { at = steps.length; label(); } }, 200);
-  });
-  if (reduce || !("IntersectionObserver" in window)) return;
+  // Every step has the same rows; reserve the tallest caption so the page
+  // below doesn't move.
+  var tallest = 0;
+  STEPS.forEach(function (s, i) { show(i); tallest = Math.max(tallest, cap.offsetHeight); });
+  cap.style.minHeight = tallest + "px";
+  show(0);
+  if (reduce) { toggle.hidden = true; return; }
+  if (!("IntersectionObserver" in window)) { inView = true; schedule(); return; }
   new IntersectionObserver(function (entries) {
     inView = entries[0].isIntersecting;
-    resume();
-  }, { threshold: 0.3 }).observe(el);
+    schedule();
+  }, { threshold: 0.4 }).observe(el);
 })();
 
 // The planner: hydra's rules on a four-service stack, slot 1.
