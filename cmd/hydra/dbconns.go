@@ -82,6 +82,11 @@ func dbConnsProblem(st *config.Stack) *problem {
 	// Auth keeps its pool of connections across that and answers every login
 	// with "Database error querying schema" until it is restarted too, so the
 	// fix restarts both. The data stays: it lives in the container's volume.
+	// 300 first; past that, 200 more each time.
+	want := 300
+	if c.Max >= want {
+		want = c.Max + 200
+	}
 	return &problem{Text: text,
-		Fix: fmt.Sprintf(`d=$(docker ps --filter publish=%d --format '{{.Names}}'); docker exec "$d" psql -U supabase_admin -d postgres -c 'alter system set max_connections = 300' && docker restart "$d" "${d/_db_/_auth_}"`, port)}
+		Fix: fmt.Sprintf(`d=$(docker ps --filter publish=%d --format '{{.Names}}'); docker exec "$d" psql -U supabase_admin -d postgres -c 'alter system set max_connections = %d' && docker restart "$d" "${d/_db_/_auth_}"`, port, want)}
 }

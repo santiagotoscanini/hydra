@@ -730,7 +730,7 @@ worktrees started together:
   Main and two or three worktrees fill it, and the next copy fails with
   SQLSTATE 53300, which reads like a bug in the service. `hydra status`
   asks main's Postgres (`pg_stat_activity`, 2 s timeout) and warns from 75%.
-  Its fix raises `max_connections` to 300 as `supabase_admin` (the
+  Its fix raises `max_connections` to 300 (by 200 when it is there already) as `supabase_admin` (the
   `postgres` role may not) and restarts the database container together
   with Supabase auth: auth keeps its dead pool across a database restart
   and fails every login until it is restarted.
