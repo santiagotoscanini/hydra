@@ -18,8 +18,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -234,13 +236,40 @@ type options struct {
 // badSlot rules out the slots where a browser would refuse a service's port.
 func (t *target) badSlot(slot int) bool { return t.stack.BadSlot(slot) != "" }
 
+// busySlot rules out, for a worktree that doesn't hold it yet, a slot where
+// something already answers on one of the worktree's ports: macOS's AirPlay
+// Receiver on 5000 and 7000, another tool, a stack left running. Its service
+// would only fail there with "address already in use". It connects rather
+// than binds, so a service starting at that moment can't lose its port.
+func (t *target) busySlot(slot int) bool {
+	for _, name := range t.stack.Names() {
+		s := t.stack.Services[name]
+		if s.Shared {
+			continue
+		}
+		for _, port := range t.stack.SlotPorts(s, slot) {
+			c, err := net.DialTimeout("tcp", net.JoinHostPort(t.stack.Hydra.Host, strconv.Itoa(port)), 200*time.Millisecond)
+			if err == nil {
+				c.Close()
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// slotRules are the rules this worktree's slot is chosen by.
+func (t *target) slotRules() slots.Rules {
+	return slots.Rules{Max: t.stack.Hydra.MaxSlots, Skip: t.badSlot, Busy: t.busySlot}
+}
+
 // slot is the worktree's slot. Only a start takes one (take): planning,
 // rendering and looking use the slot the worktree has or would get, so a
 // worktree nobody started holds none.
 func (t *target) slot(take bool) (int, error) {
 	co, max := t.checkout, t.stack.Hydra.MaxSlots
 	if !take {
-		if s := slots.Peek(co.CommonDir, co.Root, max, t.badSlot); s > 0 {
+		if s := slots.Peek(co.CommonDir, co.Root, t.slotRules()); s > 0 {
 			return s, nil
 		}
 		return 0, fmt.Errorf("all %d slots are taken; `hydra up -D` here takes the slot of a worktree whose stack isn't running", max)
@@ -255,7 +284,9 @@ func (t *target) slot(take bool) (int, error) {
 		}
 		return info.ModTime()
 	}
-	s, took, err := slots.Acquire(co.CommonDir, co.Root, max, t.badSlot, idle, since)
+	rules := t.slotRules()
+	rules.Idle, rules.Since = idle, since
+	s, took, err := slots.Acquire(co.CommonDir, co.Root, rules)
 	if err != nil {
 		return 0, err
 	}

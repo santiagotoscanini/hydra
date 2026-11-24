@@ -388,6 +388,13 @@ func TestTakenWording(t *testing.T) {
 	if !strings.Contains(text, "held by another program: Slack (pid 42)") || strings.Contains(fix, "kill") {
 		t.Errorf("for another program: %q, %q", text, fix)
 	}
+	// A worktree moves to another slot rather than stop it; main can't move.
+	if !strings.HasPrefix(fix, "hydra slots free && hydra up -D") {
+		t.Errorf("a worktree wasn't offered another slot: %q", fix)
+	}
+	if _, fix = takenBy(&holder{Port: 3000, Pid: 42, Cmd: "Slack", Dir: "/"}, st, 0, "web", "/main", restart); fix != "stop Slack, then: hydra process restart web" {
+		t.Errorf("for another program on main's port: %q", fix)
+	}
 	// A sibling directory with the same prefix isn't this checkout.
 	if _, fix = takenBy(&holder{Port: 3800, Pid: 43, Cmd: "node", Dir: "/wt/a-2/apps"}, st, 4, "web", "/wt/a", restart); strings.Contains(fix, "kill") {
 		t.Errorf("a sibling worktree's program was offered a kill: %q", fix)

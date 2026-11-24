@@ -52,7 +52,7 @@ func TestASlotStaysTakenUntilItIsReleased(t *testing.T) {
 }
 
 func acquire(common, root string, max int) (int, error) {
-	s, _, err := Acquire(common, root, max, nil, nil, nil)
+	s, _, err := Acquire(common, root, Rules{Max: max})
 	return s, err
 }
 
@@ -72,27 +72,27 @@ func TestAStartTakesTheSlotOfAStoppedWorktreeWhenAllAreTaken(t *testing.T) {
 	last := map[string]time.Time{b: time.Unix(200, 0), c: time.Unix(100, 0)}
 	since := func(root string) time.Time { return last[root] }
 
-	if Peek(common, d, 3, nil) != 0 {
+	if Peek(common, d, Rules{Max: 3}) != 0 {
 		t.Error("Peek promised a slot while all were taken")
 	}
-	slot, took, err := Acquire(common, d, 3, nil, idle, since)
+	slot, took, err := Acquire(common, d, Rules{Max: 3, Idle: idle, Since: since})
 	if err != nil || took != c || slot != 3 {
 		t.Fatalf("d: slot %d from %q, %v; want c's slot 3", slot, took, err)
 	}
-	if again, took, _ := Acquire(common, d, 3, nil, idle, since); again != 3 || took != "" {
+	if again, took, _ := Acquire(common, d, Rules{Max: 3, Idle: idle, Since: since}); again != 3 || took != "" {
 		t.Errorf("d asked again: slot %d, took %q", again, took)
 	}
 	// c starts again: it takes b's, now the only stopped one besides d...
 	running[d] = true
-	if slot, took, err := Acquire(common, c, 3, nil, idle, since); err != nil || took != b || slot != 2 {
+	if slot, took, err := Acquire(common, c, Rules{Max: 3, Idle: idle, Since: since}); err != nil || took != b || slot != 2 {
 		t.Errorf("c: slot %d from %q, %v; want b's slot 2", slot, took, err)
 	}
 	// ...and with every stack running there is nothing to take.
 	running[c] = true
-	if _, _, err := Acquire(common, b, 3, nil, idle, since); err == nil {
+	if _, _, err := Acquire(common, b, Rules{Max: 3, Idle: idle, Since: since}); err == nil {
 		t.Error("b got a slot while every stack runs")
 	}
-	if got := Peek(common, a, 3, nil); got != 1 {
+	if got := Peek(common, a, Rules{Max: 3}); got != 1 {
 		t.Errorf("Peek of a worktree with a slot = %d, want 1", got)
 	}
 }
@@ -193,24 +193,57 @@ func TestALookCreatesNothing(t *testing.T) {
 func TestASlotToSkipIsNeverHandedOut(t *testing.T) {
 	common := t.TempDir()
 	skip := func(s int) bool { return s == 2 }
-	if s, _, err := Acquire(common, "/a", 3, skip, nil, nil); err != nil || s != 1 {
+	if s, _, err := Acquire(common, "/a", Rules{Max: 3, Skip: skip}); err != nil || s != 1 {
 		t.Fatalf("a: %d, %v", s, err)
 	}
-	if got := Peek(common, "/b", 3, skip); got != 3 {
+	if got := Peek(common, "/b", Rules{Max: 3, Skip: skip}); got != 3 {
 		t.Errorf("peek for b = %d, want 3", got)
 	}
-	if s, _, err := Acquire(common, "/b", 3, skip, nil, nil); err != nil || s != 3 {
+	if s, _, err := Acquire(common, "/b", Rules{Max: 3, Skip: skip}); err != nil || s != 3 {
 		t.Fatalf("b: %d, %v", s, err)
 	}
 	// A worktree that holds a slot to skip (given out before) moves.
-	if _, _, err := Acquire(common, "/c", 3, nil, nil, nil); err != nil {
+	if _, _, err := Acquire(common, "/c", Rules{Max: 3}); err != nil {
 		t.Fatal(err)
 	}
-	if got := Peek(common, "/c", 3, skip); got != 0 {
+	if got := Peek(common, "/c", Rules{Max: 3, Skip: skip}); got != 0 {
 		t.Errorf("peek for c, on slot 2 = %d, want 0 (nothing else is free)", got)
 	}
-	if _, _, err := Acquire(common, "/c", 3, skip, nil, nil); err == nil {
+	if _, _, err := Acquire(common, "/c", Rules{Max: 3, Skip: skip}); err == nil {
 		t.Error("c kept slot 2")
 	}
 }
 
+func TestABusySlotGoesOnlyToTheWorktreeThatHoldsIt(t *testing.T) {
+	common := t.TempDir()
+	busy := false
+	rules := Rules{Max: 3, Busy: func(s int) bool { return busy && s == 1 }}
+	if s, _, err := Acquire(common, "/a", rules); err != nil || s != 1 {
+		t.Fatalf("a got %d, %v; want 1", s, err)
+	}
+	busy = true // a's own stack now answers on slot 1's ports
+	if s, _, err := Acquire(common, "/a", rules); err != nil || s != 1 {
+		t.Errorf("a moved off its own slot to %d (%v)", s, err)
+	}
+	if err := Release(common, "/a"); err != nil {
+		t.Fatal(err)
+	}
+	// Something else now answers on slot 1: a new worktree skips it.
+	if got := Peek(common, "/b", rules); got != 2 {
+		t.Errorf("Peek(b) = %d, want 2", got)
+	}
+	if s, _, err := Acquire(common, "/b", rules); err != nil || s != 2 {
+		t.Errorf("b got %d, %v; want 2", s, err)
+	}
+	// Nor is a busy slot taken from an idle holder when every slot is held.
+	if _, _, err := Acquire(common, "/c", rules); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Acquire(common, "/x", Rules{Max: 3}); err != nil { // takes slot 1, which a's leftovers answer on
+		t.Fatal(err)
+	}
+	idle := func(root string) bool { return root == "/x" }
+	if s, took, err := Acquire(common, "/d", Rules{Max: 3, Busy: rules.Busy, Idle: idle}); err == nil {
+		t.Errorf("d took slot %d from %s, whose ports something answers on", s, took)
+	}
+}

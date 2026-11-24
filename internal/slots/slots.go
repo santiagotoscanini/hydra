@@ -34,37 +34,59 @@ type Entry struct {
 	Slot int
 }
 
-// Acquire returns the slot for root, allocating the lowest free one in
-// 1..max if root has none.
+// Rules say which slots a worktree may get. Only Max is required.
+type Rules struct {
+	Max int // slots are 1..Max
+	// Skip rules a slot out for good (a port a browser refuses): it is never
+	// handed out, and a worktree that holds one gets another.
+	Skip func(slot int) bool
+	// Busy rules a slot out for a worktree that doesn't hold it yet:
+	// something already listens on one of its ports. A worktree that holds
+	// it keeps it, since what listens may be its own stack.
+	Busy func(slot int) bool
+	// Idle says a holder's stack isn't running, so that its slot may be taken
+	// when every slot is held; nil: none is.
+	Idle func(root string) bool
+	// Since orders idle holders: the one idle the longest gives way first.
+	Since func(root string) time.Time
+}
+
+func (rl Rules) skip(s int) bool { return rl.Skip != nil && rl.Skip(s) }
+
+// open reports whether slot s may go to a worktree that doesn't hold it.
+func (rl Rules) open(s int) bool { return !rl.skip(s) && (rl.Busy == nil || !rl.Busy(s)) }
+
+// Acquire returns the slot for root, allocating the lowest open one if root
+// has none.
 //
 // When every slot is taken, it takes one from a worktree whose stack isn't
-// running (idle says which; nil: none is): the one idle the longest, by
-// since. That worktree gets a slot again, possibly another, the next time it
-// starts. A slot then counts stacks that run, not worktrees that once ran.
-// took is the root the slot was taken from, "" when none was. A slot skip
-// rules out is never handed out, and one root holds already is replaced.
-func Acquire(commonDir, root string, max int, skip func(slot int) bool, idle func(root string) bool, since func(root string) time.Time) (slot int, took string, err error) {
+// running (rules.Idle): the one idle the longest, by rules.Since. That
+// worktree gets a slot again, possibly another, the next time it starts. A
+// slot then counts stacks that run, not worktrees that once ran. took is the
+// root the slot was taken from, "" when none was.
+func Acquire(commonDir, root string, rules Rules) (slot int, took string, err error) {
+	max := rules.Max
 	err = withRegistry(commonDir, func(r *registry) (bool, error) {
-		if s, ok := r.Slots[root]; ok && s <= max && (skip == nil || !skip(s)) {
+		if s, ok := r.Slots[root]; ok && s <= max && !rules.skip(s) {
 			slot = s
 			return false, nil
 		}
 		delete(r.Slots, root) // over max, or a slot to skip: it gets another
-		if s := lowestFree(r, max, skip); s > 0 {
+		if s := lowestFree(r, rules); s > 0 {
 			r.Slots[root] = s
 			slot = s
 			return true, nil
 		}
-		if idle != nil {
+		if rules.Idle != nil {
 			var best string
 			var bestAt time.Time
 			for other, s := range r.Slots {
-				if s > max || other == root || (skip != nil && skip(s)) || !idle(other) {
+				if s > max || other == root || !rules.open(s) || !rules.Idle(other) {
 					continue
 				}
 				at := time.Time{}
-				if since != nil {
-					at = since(other)
+				if rules.Since != nil {
+					at = rules.Since(other)
 				}
 				if best == "" || at.Before(bestAt) || (at.Equal(bestAt) && other < best) {
 					best, bestAt = other, at
@@ -84,29 +106,28 @@ func Acquire(commonDir, root string, max int, skip func(slot int) bool, idle fun
 
 // Peek returns the slot root has, or the one Acquire would give it now,
 // without taking it: 0 when every slot is taken.
-func Peek(commonDir, root string, max int, skip func(slot int) bool) int {
+func Peek(commonDir, root string, rules Rules) int {
 	all, _ := List(commonDir)
 	r := &registry{Slots: map[string]int{}}
 	for _, e := range all {
-		if e.Root == root && e.Slot <= max && (skip == nil || !skip(e.Slot)) {
+		if e.Root == root && e.Slot <= rules.Max && !rules.skip(e.Slot) {
 			return e.Slot
 		}
 		if e.Root != root {
 			r.Slots[e.Root] = e.Slot
 		}
 	}
-	return lowestFree(r, max, skip)
+	return lowestFree(r, rules)
 }
 
-// lowestFree is the lowest slot up to max that nobody holds and skip doesn't
-// rule out, 0 if none.
-func lowestFree(r *registry, max int, skip func(slot int) bool) int {
+// lowestFree is the lowest open slot that nobody holds, 0 if none.
+func lowestFree(r *registry, rules Rules) int {
 	used := map[int]bool{}
 	for _, s := range r.Slots {
 		used[s] = true
 	}
-	for s := 1; s <= max; s++ {
-		if !used[s] && (skip == nil || !skip(s)) {
+	for s := 1; s <= rules.Max; s++ {
+		if !used[s] && rules.open(s) {
 			return s
 		}
 	}

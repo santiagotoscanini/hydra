@@ -759,6 +759,16 @@ on 3000 with a stride of 200 reaches 6000 in slot 15. Skipping beats failing
 the config: the stride is often set by habit across a team, and losing two
 slots of twenty costs less than renumbering every port.
 
+Nor is a slot handed out to a new holder while something already answers on
+one of its ports (a 200 ms connect to each, on `x-hydra.host`). The program
+may be the system's own: macOS's AirPlay Receiver listens on 5000 and 7000,
+and the monorepo's web reaches 7000 in slot 20. A worktree that already
+holds the slot keeps it, since what answers is usually its own stack; when
+it isn't, `hydra status` names the program and the fix is
+`hydra slots free && hydra up -D`, which starts the worktree on a slot
+where nothing listens. Main can't move, so for slot 0 the fix is to stop
+the program.
+
 Only a start takes a slot. `hydra plan`, `render`, `status` and the page
 peek: the slot the worktree has, or the lowest free one, recorded nowhere.
 Once `plan` took one, and worktrees that were planned but never run filled

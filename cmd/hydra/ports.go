@@ -100,6 +100,12 @@ func takenBy(h *holder, st *config.Stack, slot int, name, root, restart string) 
 		return fmt.Sprintf("\n  Port %d is held by %s, which runs in this checkout but not as part of its stack.", h.Port, who),
 			fmt.Sprintf("kill %d && %s", h.Pid, restart)
 	}
-	return fmt.Sprintf("\n  Port %d is held by another program: %s.", h.Port, who),
-		fmt.Sprintf("stop %s, then: %s", h.Cmd, restart)
+	text = fmt.Sprintf("\n  Port %d is held by another program: %s.", h.Port, who)
+	if slot == 0 {
+		return text, fmt.Sprintf("stop %s, then: %s", h.Cmd, restart)
+	}
+	// A worktree can move instead: a slot is only ever handed out where
+	// nothing answers on its ports. The program may be the system's own
+	// (macOS's AirPlay Receiver holds 5000 and 7000).
+	return text, "hydra slots free && hydra up -D   (moves this worktree to a slot where nothing else listens)"
 }
