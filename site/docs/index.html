@@ -43,6 +43,7 @@
   <a href="#cleanup">Stopping and cleaning up</a>
   <a href="#agents">With coding agents</a>
   <a href="#troubleshooting">When something is wrong</a>
+  <a href="#journal">The journal</a>
   <h4>How it works</h4>
   <a href="#how">Overview</a>
   <a href="#changes">What counts as changed</a>
@@ -258,6 +259,7 @@ $ hydra status --wait
       <tr><td>Bring main and the worktrees to the latest commit</td><td><code>hydra update</code></td><td>Anywhere. <code>--dry-run</code> first, if you want to see what it would do.</td></tr>
       <tr><td>Stop one stack</td><td><code>hydra down</code></td><td>Its checkout. It can't reach another checkout's stack. It also stops what a killed process-compose left running there.</td></tr>
       <tr><td>Stop every worktree's stack</td><td><code>hydra down --worktrees</code></td><td>Anywhere. Main's stack keeps running.</td></tr>
+      <tr><td>See what happened, in every checkout</td><td><code>hydra log</code></td><td>Anywhere. <code>hydra report</code> puts it in one file to send to whoever helps. See <a href="#journal">the journal</a>.</td></tr>
     </table></div>
     <p>Every one of them is safe to run twice. Starting a stack that is up, or stopping one that is down, says so and exits 0.</p>
   </section>
@@ -797,6 +799,27 @@ $ hydra down             # when the work is done
     </table></div>
   </section>
 
+  <section id="journal">
+    <h2>The journal</h2>
+    <p>hydra writes down what it does and sees, in main and in every worktree, to one journal per repository: <code>hydra-journal/</code> in the shared <code>.git</code>, one file of JSON lines per day, kept 30 days. Nothing needs to be switched on.</p>
+    <div class="table wrap"><table>
+      <tr><th>Event</th><th>Written when</th></tr>
+      <tr><td><code>command</code></td><td>Any hydra command ends: its arguments, where it ran, how long it took, its exit status and the error it printed.</td></tr>
+      <tr><td><code>problem</code></td><td>A check shows a ✗ or a ! (<code>hydra status</code>, <code>hydra up</code>): its text and its fix.</td></tr>
+      <tr><td><code>process</code></td><td>A process of a stack changes state: started, ready, exited, restarted, failed. With the last 30 lines of its output when it failed or restarted. Seen by the watcher in a worktree and by <code>hydra-router</code> in main, within two seconds.</td></tr>
+      <tr><td><code>usage</code></td><td>Once a minute for each stack that runs: the resident memory and CPU of each process and its children. Main's also records the machine's free memory and swap.</td></tr>
+      <tr><td><code>slot</code></td><td>A worktree takes its slot on <code>hydra up</code>, or the slot of a stopped one.</td></tr>
+      <tr><td><code>start</code>, <code>log</code></td><td>The watcher, the router or the status page starts; every line the watcher and the router print.</td></tr>
+    </table></div>
+<pre><span class="p">$</span> hydra log --since 2h --errors
+10:25:59  fresh [3]                    problem  ✗ main's stack isn't running (nothing answers on localhost:8198). This worktree takes from it: db, migrate, web.
+        fix: cd ~/shop && hydra up -D
+10:25:59  fresh [3]                    command  hydra status   exit 1, 274ms</pre>
+    <p><code>hydra log</code> prints the last hour of every checkout. <code>--since 24h</code> goes further back, <code>--here</code> keeps this checkout's, <code>--errors</code> keeps what went wrong (failed commands, ✗ problems, failed processes), <code>-f</code> follows, <code>--json</code> prints the lines as written. Kinds narrow it: <code>hydra log process usage</code>.</p>
+    <p><code>hydra report</code> writes one Markdown file and prints its path: hydra's, process-compose's and macOS's versions, <code>hydra status --all</code> and <code>hydra slots</code> as they are now, how long each stack ran and its average and peak memory and CPU, the heaviest processes, each command's runs, failures and timings, what went wrong grouped with counts, and the journal itself. It covers the last 24 hours (<code>--since</code>); <code>-o FILE</code> writes it elsewhere. It is the thing to send when asking for help with hydra: it holds paths and command lines of this machine, and no secrets hydra knows of.</p>
+    <p>Memory is resident memory as <code>ps</code> counts it, which includes files a process maps: <code>next dev</code> reads several hundred MB higher than macOS's own figure. Compare a stack with itself over time. Main's stack is only sampled when it has a <code>hydra-router</code>, that is when a service is routed or has a TLS front. <code>HYDRA_JOURNAL=off</code> stops a process from writing.</p>
+  </section>
+
   <section id="how">
     <h2>How it works</h2>
     <p>hydra runs no services itself. It works out what should run in this checkout, writes an ordinary process-compose file for it, and hands that file to process-compose. In a worktree, <code>hydra up</code> does this:</p>
@@ -1299,6 +1322,8 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>hydra process …</code></td><td>process-compose's process commands, for this checkout's stack: <code>list</code>, <code>logs NAME</code>, <code>restart NAME</code>, <code>start NAME</code>, <code>stop NAME</code>.</td></tr>
       <tr><td><code>hydra status</code></td><td>Says whether everything this checkout uses is up and <a href="#instep">in step with main</a>. See <a href="#status">checking</a>. Flags: <code>--wait</code>, <code>--timeout D</code>, <code>--all</code>.</td></tr>
       <tr><td><code>hydra ui</code></td><td>Serves <a href="#ui">the status page</a>. Flags: <code>--port N</code>, <code>--no-open</code>.</td></tr>
+      <tr><td><code>hydra log [KIND…]</code></td><td>Prints <a href="#journal">the journal</a> of main and every worktree. Flags: <code>--since D</code> (1h), <code>--here</code>, <code>--errors</code>, <code>-f</code>/<code>--follow</code>, <code>--json</code>.</td></tr>
+      <tr><td><code>hydra report</code></td><td>Writes one Markdown file of versions, every stack's state, usage over time, what went wrong and the journal, and prints its path. Flags: <code>--since D</code> (24h), <code>-o FILE</code>.</td></tr>
       <tr><td><code>hydra update</code></td><td>Pulls main, restarts what the new commits touched in its stack, and merges main into the worktrees. See <a href="#updating">updating main</a>. Flags: <code>-n</code>/<code>--dry-run</code>, <code>--main-only</code>, <code>--no-pull</code>, <code>--timeout D</code>.</td></tr>
       <tr><td><code>hydra plan</code></td><td>Shows what this checkout runs, on which ports, wired to what, and why. Starts nothing.</td></tr>
       <tr><td><code>hydra render [-o FILE]</code></td><td>Prints or writes the generated process-compose file.</td></tr>
@@ -1328,6 +1353,7 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><th>Variable</th><th>Meaning</th></tr>
       <tr><td><code>PC_PORT_NUM</code>, <code>PC_ADDRESS</code></td><td>process-compose's own: where the main checkout's process-compose listens (default localhost:8080). <code>-p</code> and <code>--address</code> on the command line win. hydra records the answer when main's stack starts.</td></tr>
       <tr><td><code>HYDRA_TLS_DIR</code></td><td>Where hydra keeps its CA and certificate, instead of the user's config directory.</td></tr>
+      <tr><td><code>HYDRA_JOURNAL</code></td><td>Set to <code>off</code>: this process writes nothing to <a href="#journal">the journal</a>.</td></tr>
       <tr><td><code>HYDRA_DRY_RUN</code></td><td>Set to anything: print the process-compose command instead of running it.</td></tr>
       <tr><td><code>TEMPORAL_ADDRESS</code></td><td>Read by the step that prepares a <a href="#temporal">Temporal namespace</a>, as the <code>temporal</code> CLI does.</td></tr>
     </table></div>
@@ -1345,7 +1371,7 @@ $ hydra plan --route web.api=local       # also starts api here
 
   <section id="files">
     <h2>Files hydra writes</h2>
-    <p>hydra keeps no database and runs no daemon. Its state is a handful of small files. "Shared <code>.git</code>" is the main checkout's <code>.git</code> directory, which every worktree of the repository shares.</p>
+    <p>hydra keeps no database and runs no daemon. Its state is a handful of small files, and its journal. "Shared <code>.git</code>" is the main checkout's <code>.git</code> directory, which every worktree of the repository shares.</p>
     <div class="table"><table>
       <tr><th>File</th><th>What it is</th></tr>
       <tr><td><code>.process-compose/hydra.yaml</code><span class="type">in each checkout</span></td><td>The generated process-compose file. Written by <code>hydra up</code> and, in a worktree, by the watcher. Don't edit it; ignore it in git.</td></tr>
@@ -1355,6 +1381,8 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>hydra-slots.json</code><span class="type">shared .git</span></td><td>Which worktree holds which slot.</td></tr>
       <tr><td><code>hydra-baseline.json</code><span class="type">shared .git</span></td><td>The commit main's stack was last brought to, and where its process-compose listens. Written when main's stack starts and after a successful <code>hydra update</code>.</td></tr>
       <tr><td><code>hydra-routes/slot-N.json</code><span class="type">shared .git</span></td><td>What a running worktree runs, for main's router.</td></tr>
+      <tr><td><code>hydra-journal/YYYY-MM-DD.jsonl</code><span class="type">shared .git</span></td><td><a href="#journal">The journal</a>: one JSON object per line, from every checkout. Files older than 30 days are deleted.</td></tr>
+      <tr><td><code>hydra-journal/reports/*.md</code><span class="type">shared .git</span></td><td>What <code>hydra report</code> wrote. Never deleted by hydra.</td></tr>
       <tr><td><code>hydra-hook.cjs</code><span class="type">shared .git</span></td><td>The Node preload behind <code>routed: node</code>.</td></tr>
       <tr><td><code>hydra-update.lock</code><span class="type">shared .git</span></td><td>Lets one <code>hydra update</code> run at a time.</td></tr>
       <tr><td><code>info/exclude</code><span class="type">shared .git</span></td><td>With <code>kind: supabase</code>, a few lines that keep the Supabase CLI's lock and link files out of <code>git status</code>.</td></tr>

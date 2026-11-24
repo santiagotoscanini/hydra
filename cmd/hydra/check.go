@@ -776,6 +776,7 @@ func blocking(ps []problem) []problem {
 }
 
 func printProblems(w *os.File, ps []problem) {
+	logProblems(ps)
 	for _, p := range ps {
 		mark := "!"
 		if p.Blocks {

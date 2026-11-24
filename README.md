@@ -60,10 +60,19 @@ at which service), then run `hydra` wherever you'd run `process-compose`:
 | See what would run, and why | `hydra plan` | the checkout |
 | Stop one stack | `hydra down` | its checkout |
 | Stop every worktree's stack | `hydra down --worktrees` | anywhere |
+| See what happened, in every checkout | `hydra log` (`--errors`, `-f`, `--since 24h`) | anywhere |
+| Get help with hydra | `hydra report`: one Markdown file to send | anywhere |
 
 Every one of them is safe to run twice: starting a stack that is up, or
 stopping one that is down, says so and exits 0. On a stack that is already
 up, `hydra up NAME` adds NAME to it.
+
+Everything hydra does and sees goes into one journal per repository
+(`hydra-journal/` in the shared `.git`, a JSON-lines file per day, kept 30
+days): every command and its outcome, each ✗ and ! a check showed, every
+change in a process's state with its last output when it failed, and once a
+minute each stack's memory and CPU. `hydra log` reads it; `hydra report`
+writes it, with the state of every stack and usage over time, to one file.
 
 Set up once per repository: the `x-hydra` keys; `.process-compose/` and
 `.hydra.local.yaml` in `.gitignore`; a port of its own for main's

@@ -9,6 +9,8 @@
 //	hydra throttle NAME N -- CMD   run CMD when fewer than N named NAME run
 //	hydra status [--all]           check this checkout against main's stack
 //	hydra update                   pull main and bring everything along
+//	hydra log [KIND...]            what hydra did and saw, in every checkout
+//	hydra report                   all of it in one file, to send for help
 //	hydra ui                       the same as a local web page
 //	hydra trust                    trust the CA behind TLS fronts
 //	hydra version                  which hydra, which process-compose
@@ -32,6 +34,7 @@ import (
 	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/gitx"
 	"github.com/santiagotoscanini/hydra/internal/hook"
+	"github.com/santiagotoscanini/hydra/internal/journal"
 	"github.com/santiagotoscanini/hydra/internal/pc"
 	"github.com/santiagotoscanini/hydra/internal/plan"
 	"github.com/santiagotoscanini/hydra/internal/render"
@@ -74,6 +77,15 @@ Hydra's own commands:
                                  still starting then is an error)
   hydra update [flags]           pull main, restart what the new commits touched
                                  in its stack, merge main into the worktrees
+  hydra log [KIND...] [flags]    what hydra did and saw in main and every worktree:
+                                 commands, problems, process changes, usage once a
+                                 minute (--since D, 1h by default; --here: this
+                                 checkout only; --errors; -f: follow; --json).
+                                 KIND: command problem process usage slot start log
+  hydra report [--since D] [-o FILE]  write one Markdown file to send to whoever
+                                 helps: versions, every stack's state now, usage
+                                 over time, what went wrong, and the journal
+                                 (--since 24h by default); prints its path
   hydra ui [--port N] [--no-open]  a local web page of all of it: main, every
                                  worktree, what each runs and takes from main,
                                  commits, memory (default port 4937)
@@ -117,7 +129,13 @@ Docs: https://hydra.toscanini.me/docs/
 `
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	began := time.Now()
+	if len(os.Args) < 2 || !quiet[os.Args[1]] {
+		openJournal(".")
+	}
+	err := run(os.Args[1:])
+	logCommand(os.Args[1:], began, err)
+	if err != nil {
 		if code, ok := err.(errExit); ok {
 			os.Exit(int(code))
 		}
@@ -148,6 +166,10 @@ func run(args []string) error {
 			return slotsCmd(args[1:])
 		case "status":
 			return statusCmd(args[1:])
+		case "log":
+			return logCmd(args[1:])
+		case "report":
+			return reportCmd(args[1:])
 		case "update":
 			return updateCmd(args[1:])
 		case "ui":
@@ -290,6 +312,8 @@ func (t *target) slot(take bool) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	journal.SetSlot(s)
+	journal.Log("slot", journal.Fields{"slot": s, "took_from": took})
 	if took != "" {
 		// What the slot's last worktree left keyed by the slot number.
 		routes.Remove(co.CommonDir, s)

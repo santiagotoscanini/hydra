@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/santiagotoscanini/hydra/internal/gitx"
+	"github.com/santiagotoscanini/hydra/internal/journal"
 	"github.com/santiagotoscanini/hydra/internal/pc"
 	"github.com/santiagotoscanini/hydra/internal/stack"
 )
@@ -59,6 +60,7 @@ func uiCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	journal.Log("start", journal.Fields{"what": "ui"})
 	mainCo, err := gitx.Find(co.Main)
 	if err != nil {
 		return err

@@ -17,6 +17,7 @@ import (
 
 	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/gitx"
+	"github.com/santiagotoscanini/hydra/internal/journal"
 	"github.com/santiagotoscanini/hydra/internal/plan"
 	"github.com/santiagotoscanini/hydra/internal/router"
 	"github.com/santiagotoscanini/hydra/internal/routes"
@@ -59,13 +60,17 @@ func routerCmd(args []string) error {
 		Logf: logf,
 	}
 	outliveOutput()
+	openJournalFor(co)
+	journal.Log("start", journal.Fields{"what": "router"})
 	logf("routing for %s", co.Root)
+	mon := newMonitor(mainClient(co.CommonDir), true)
 	var killed atomic.Bool // main's process-compose was, as opposed to asking this router to stop
 	go func(parent int) {
 		var started roster // what main's process-compose runs, as it last said
 		for tick := 0; !orphaned(parent); tick++ {
 			if tick%8 == 0 { // every 2 seconds
-				started = track(co.Main, mainClient(co.CommonDir), started)
+				mon.client = mainClient(co.CommonDir)
+				started = track(co.Main, mon, started)
 			}
 			time.Sleep(goneCheck)
 		}

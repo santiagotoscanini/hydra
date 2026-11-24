@@ -1018,6 +1018,39 @@ removal. What it creates is named after the slot, so it is found again by
 the slot's next worktree; a step that must start clean has `HYDRA_ROOT` to
 tell whose it was.
 
+## The journal
+
+hydra is used by agents in many worktrees at once, and what goes wrong
+there is seen later, by someone else. So every hydra process writes what it
+does and sees to one journal per repository: `<git common dir>/hydra-journal/`,
+a JSON-lines file per local day, deleted after 30 days.
+
+- **What.** Every command when it ends (arguments, directory, duration, exit
+  status, the error it printed); each problem a check showed someone, from
+  the one place problems are printed; a worktree taking a slot; every line
+  the watcher and the router print; and the state of the stacks.
+- **Process changes cost nothing extra.** The watcher (a worktree) and the
+  router (main) already ask their process-compose what runs every two
+  seconds, to bury what a killed one leaves. The monitor rides on that
+  answer: a process whose status, readiness, restarts, exit code or pid
+  changed is written as it is seen, with the last 30 lines of its output
+  when it failed or restarted, fetched while process-compose still has them.
+- **Usage once a minute** from the same loop: one `ps` for the machine,
+  summed over each process's tree (`pnpm` and `go run` wrappers hold their
+  servers as children). Resident memory, not macOS's footprint, which takes
+  a call per process; it reads high for `next dev`, whose cache files are
+  mapped, so the trend is what it is good for. Main's monitor adds the
+  machine's free memory and swap, once for everyone. Main without a router
+  has no long-running hydra process, so it isn't sampled.
+- **Never in the way.** A line is one `write(2)` with `O_APPEND`, so the
+  machine's many hydra processes don't interleave; anything that fails is
+  skipped. `hydra log` and `hydra report` don't write (reading isn't news),
+  and `HYDRA_JOURNAL=off` turns a process off.
+- **`hydra report`** is for asking for help: one Markdown file with
+  versions, `hydra status --all` and `hydra slots` now, usage and command
+  timings summarised from the journal, what went wrong grouped with counts,
+  and the journal's lines (without the usage samples it summarised).
+
 ## Open problems
 
 - **A worktree's database starts empty of main's data.** It is migrated and

@@ -462,5 +462,27 @@ expect "$out" 'stopped 1 worktree stack'
 gone "$kids"
 run "$H" down --worktrees; echo "$out" | show
 expect "$out" "no worktree's stack is running"
+
+echo
+echo "--- 13. the journal"
+# Everything above went into one journal for main and every worktree.
+run "$H" log --since 1h --json
+for ev in command problem slot start process log; do
+  expect "$out" "\"ev\":\"$ev\""
+done
+expect "$out" '"ev":"command","checkout":"main".*"args":\["down","--worktrees"\]'
+expect "$out" '"ev":"process","checkout":"main".*"name":"api"'
+expect "$out" '"ev":"problem".*"level":"error","text":"main.s stack isn.t running'
+run "$H" log --since 1h --errors; echo "$out" | tail -3 | show
+expect "$out" "✗ main's stack isn't running"
+! grep -q ' usage ' <<<"$out" || fail "--errors listed usage samples: $out"
+run "$H" report --since 1h
+report="$(echo "$out" | tail -1)"
+[ -f "$report" ] || fail "hydra report wrote no file: $out"
+for h in '# hydra report' '## Versions' '## `hydra status --all` (in main)' '## Commands' '## What went wrong' '## Journal'; do
+  grep -qF -- "$h" "$report" || fail "the report has no '$h'"
+done
+expect "$(cat "$report")" "main's stack isn't running"
+echo "report: $(wc -l <"$report" | tr -d ' ') lines"
 echo
 echo "all checks passed"

@@ -20,6 +20,7 @@ import (
 
 	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/gitx"
+	"github.com/santiagotoscanini/hydra/internal/journal"
 	"github.com/santiagotoscanini/hydra/internal/pc"
 	"github.com/santiagotoscanini/hydra/internal/plan"
 	"github.com/santiagotoscanini/hydra/internal/render"
@@ -111,7 +112,10 @@ func watchCmd(args []string) error {
 
 	outliveOutput()
 	forgetOnStop(t.checkout.Root)
+	openJournalFor(t.checkout)
+	journal.Log("start", journal.Fields{"what": "watch"})
 	logf("watching %s every %s", describeStack(t), *interval)
+	mon := newMonitor(pc.Unix(sock), false)
 	parent := os.Getppid()
 	var started roster // what process-compose runs here, as it last said
 	var (
@@ -155,7 +159,7 @@ func watchCmd(args []string) error {
 		if *once {
 			return nil
 		}
-		started = track(t.checkout.Root, pc.Unix(sock), started)
+		started = track(t.checkout.Root, mon, started)
 		// Look for the removal more often than for changes: every file this
 		// stack writes while git deletes the worktree is one git can't delete
 		// the directory for, and the watcher's own are among them. The same
@@ -516,7 +520,9 @@ func describeStack(t *target) string {
 }
 
 func logf(format string, args ...any) {
-	fmt.Printf("%s hydra: %s\n", time.Now().Format("15:04:05"), fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	fmt.Printf("%s hydra: %s\n", time.Now().Format("15:04:05"), msg)
+	journal.Log("log", journal.Fields{"msg": msg})
 }
 
 func shQuote(s string) string {
