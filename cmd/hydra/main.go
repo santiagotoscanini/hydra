@@ -52,6 +52,7 @@ Use it in place of process-compose; arguments pass through:
                            that is already up, it adds web to it
   hydra attach | down | process ...
   hydra down --worktrees   stop every worktree's stack; main's keeps running
+A word that is neither a command nor a flag is refused, not taken as a start.
 
 In the main checkout everything runs, as plain process-compose would. In a
 worktree only the services it changed run, on that worktree's own ports, with

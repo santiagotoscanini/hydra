@@ -45,6 +45,7 @@ type pcArgs struct {
 	nameAt []int    // where each of them sits in rest
 	rest   []string // everything else, in order, minus -f
 	force  bool     // hydra's own --force: start despite what the checks found
+	stray  string   // a bare word before any subcommand: a typo, not a process
 }
 
 // dropNames removes from rest the process names that keep rejects. It goes
@@ -102,6 +103,8 @@ func parsePC(args []string) pcArgs {
 		case !strings.HasPrefix(arg, "-") && (a.sub == "up" || a.sub == "run"):
 			a.names = append(a.names, arg)
 			a.nameAt = append(a.nameAt, len(a.rest))
+		case !strings.HasPrefix(arg, "-") && a.sub == "" && a.stray == "":
+			a.stray = arg
 		}
 		a.rest = append(a.rest, arg)
 	}
@@ -115,6 +118,11 @@ func wrap(args []string) error {
 		return fmt.Errorf("process-compose is not installed")
 	}
 	a := parsePC(args)
+	// process-compose takes no process names without up or run, and starts
+	// the whole stack for a word it doesn't know: refuse a typo instead.
+	if a.stray != "" {
+		return fmt.Errorf("unknown command %q (hydra --help lists them; to start some processes, hydra up %s)", a.stray, a.stray)
+	}
 
 	co, err := gitx.Find(".")
 	if err != nil { // not a git checkout: nothing to be smart about

@@ -46,7 +46,8 @@ They mean the same thing.
 
 Hydra wraps process-compose. Add `x-hydra` fields to the existing
 `process-compose.yaml` (which services own which paths, which env vars point
-at which service), then run `hydra` wherever you'd run `process-compose`:
+at which service), then run `hydra` wherever you'd run `process-compose` (a mistyped command is
+refused, where process-compose would start the stack):
 
 | You want to | Run | Where |
 |---|---|---|

@@ -261,7 +261,7 @@ $ hydra status --wait
       <tr><td>Stop every worktree's stack</td><td><code>hydra down --worktrees</code></td><td>Anywhere. Main's stack keeps running.</td></tr>
       <tr><td>See what happened, in every checkout</td><td><code>hydra log</code></td><td>Anywhere. <code>hydra report</code> puts it in one file to send to whoever helps. See <a href="#journal">the journal</a>.</td></tr>
     </table></div>
-    <p>Every one of them is safe to run twice. Starting a stack that is up, or stopping one that is down, says so and exits 0.</p>
+    <p>Every one of them is safe to run twice. Starting a stack that is up, or stopping one that is down, says so and exits 0. A word that is neither a command nor a flag, such as a typo like <code>hydra stauts</code>, is refused rather than taken as a start: process-compose would start the whole stack for it.</p>
   </section>
 
   <section id="main">
