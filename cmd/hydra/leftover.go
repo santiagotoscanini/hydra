@@ -414,8 +414,10 @@ func startFromProc(stat, system []byte) time.Time {
 }
 
 // runningFile is where hydra's own process in the stack at root writes down
-// what process-compose runs there. It sits beside the stack's socket: it
-// outlives the checkout's folder, and goes when the slot is freed.
+// what process-compose runs there. It sits beside the stack's socket, so it
+// outlives the checkout's folder. It goes when the stack is stopped the
+// regular way (forgetOnStop), when a later command has stopped everything it
+// names (stopRemains), and when the slot is freed.
 func runningFile(root string) string {
 	return strings.TrimSuffix(socketFor(root), ".sock") + ".pids"
 }
@@ -635,6 +637,9 @@ func stopRemains(co gitx.Checkout, file string, database bool, out io.Writer) bo
 		return false
 	}
 	did := stopAndSay(leftBehind(st, co.Root, slot, serviceNames(st), []string{co.Root}), out)
+	if len(orphansOf(remembered(co.Root), slot)) == 0 {
+		os.Remove(runningFile(co.Root)) // nothing it names is left
+	}
 	if !database || co.IsMain() || !hasKind(st, config.KindSupabase) {
 		return did
 	}

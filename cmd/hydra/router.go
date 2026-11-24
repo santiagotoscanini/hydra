@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -58,6 +59,7 @@ func routerCmd(args []string) error {
 	}
 	outliveOutput()
 	logf("routing for %s", co.Root)
+	var killed atomic.Bool // main's process-compose was, as opposed to asking this router to stop
 	go func(parent int) {
 		var started roster // what main's process-compose runs, as it last said
 		for tick := 0; !orphaned(parent); tick++ {
@@ -67,10 +69,17 @@ func routerCmd(args []string) error {
 			time.Sleep(goneCheck)
 		}
 		logf("the process-compose that started this router is gone; stopping, with what it left running")
+		killed.Store(true)
 		buryOrphans(started, 0)
 		stop()
 	}(os.Getppid())
-	return r.Run(ctx)
+	err = r.Run(ctx)
+	if !killed.Load() {
+		// Stopped the regular way: nothing of main's stack is left running
+		// that the note would be needed for.
+		os.Remove(runningFile(co.Main))
+	}
+	return err
 }
 
 // routerState is the stack file plus the routes of every worktree whose

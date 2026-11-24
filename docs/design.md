@@ -825,8 +825,10 @@ though the stack file marks the real ones `is_daemon`.
 watcher with it: `pkill -f process-compose` matches both, because the
 watcher's command line names the stack file. So what process-compose runs
 is also written down, name and pid, in `$TMPDIR/hydra-<hash>.pids` beside
-the stack's socket, whenever it changes. It outlives the checkout's folder
-and goes when the slot is freed. `hydra up` reads it before it starts
+the stack's socket, whenever it changes. It outlives the checkout's folder,
+and goes when the stack is stopped the regular way (the watcher is asked to
+stop then, and nothing is left running), when a later command has stopped
+everything it names, and when the slot is freed. `hydra up` reads it before it starts
 anything, `hydra down` when process-compose isn't running (it then also
 stops a worktree's own Supabase stack, by id, since only process-compose's
 shutdown would have), `hydra down --worktrees` for every worktree, and the

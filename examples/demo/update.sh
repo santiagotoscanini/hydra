@@ -58,6 +58,10 @@ cleanup() {
   for wt in api web conflict dirty fresh order; do
     (cd "$repo/$wt" 2>/dev/null && "$H" down >/dev/null 2>&1) || true
   done
+  # A freed slot takes the worktree's socket and note out of $TMPDIR.
+  for wt in api web conflict dirty fresh order landed; do
+    (cd "$main" 2>/dev/null && "$H" slots free "$repo/$wt" >/dev/null 2>&1) || true
+  done
   (cd "$main" 2>/dev/null && "$H" down -p "$pc_port" >/dev/null 2>&1) || true
   # Step 10 kills process-compose on purpose; whatever that left running
   # from this directory goes with it.

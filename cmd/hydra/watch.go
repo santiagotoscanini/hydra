@@ -107,6 +107,7 @@ func watchCmd(args []string) error {
 	sock := socketPath(t.checkout)
 
 	outliveOutput()
+	forgetOnStop(t.checkout.Root)
 	logf("watching %s every %s", describeStack(t), *interval)
 	parent := os.Getppid()
 	var started roster // what process-compose runs here, as it last said
@@ -156,6 +157,20 @@ func orphaned(parent int) bool { return os.Getppid() != parent }
 // error; nobody needs to read it.
 func outliveOutput() {
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+}
+
+// forgetOnStop removes root's note of what process-compose runs (see
+// runningFile) when this process is asked to stop. That is how
+// process-compose ends it when the stack goes down the regular way, and
+// then nothing is left running that the note would be needed for.
+func forgetOnStop(root string) {
+	asked := make(chan os.Signal, 1)
+	signal.Notify(asked, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-asked
+		os.Remove(runningFile(root))
+		os.Exit(0)
+	}()
 }
 
 func step(t *target, o options, cmd, out, sock string) error {
