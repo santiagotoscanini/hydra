@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+
+	"github.com/santiagotoscanini/hydra/internal/gitx"
 )
 
 // FromBase returns paths that differ between commit base and the worktree's
@@ -33,7 +35,7 @@ func FromBase(dir, base string) ([]string, error) {
 }
 
 func git(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := gitx.WorkTree(dir, args...)
 	// Polling runs every few seconds next to an agent's own git commands;
 	// skip the optional index refresh lock so the two never collide.
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")

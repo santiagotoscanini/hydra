@@ -122,17 +122,29 @@ takes the index lock from an agent's git) respects `.gitignore` and costs
 about 0.35s per tick on the monorepo with a two-branch stack. A file watcher
 on a tree with `node_modules` would cost more than it saves.
 
-A plan costs about a second of CPU in a large repository (41 git calls in
-the monorepo, 22 of them ancestry checks against the other worktrees for
-stacked branches), so twenty watchers re-planning every 2 seconds kept
-several cores busy with nothing changing. A tick first computes a key: `git
-status` of the worktree (nearly free with a file system monitor), `git
+A plan costs about a second of CPU in a large repository, so twenty
+watchers re-planning every 2 seconds kept several cores busy with nothing
+changing. (Finding a stacked parent took an ancestry check against every
+other worktree's branch, three git processes per pair; one `git
+for-each-ref --merged=HEAD --no-merged=<fork point>` now names the only
+branches that can be a parent.) A tick first computes a key: `git
+status` of the worktree, `git
 worktree list`, every branch's commit, and the size and mtime of the stack
 file, `.hydra.local.yaml`, `hydra-slots.json` and `hydra-baseline.json`. It
 plans only when the key moved, and at least every 30 seconds for what the
 key leaves out (a stacked parent's uncommitted edits). The note about main's
 stack being down, and migrations of a worktree's own database, still run
 every tick.
+
+That `git status` was itself the next cost: without a file-system monitor
+it reads every tracked file's metadata, 0.3 s of kernel time in the
+monorepo, every 2 seconds in every worktree (about three cores for twenty).
+Hydra's git calls that read a working tree (`gitx.WorkTree`) pass
+`-c core.fsmonitor=true -c core.untrackedCache=true` on macOS and Windows,
+where git has a monitor: a daemon per worktree (about 6 MB) answers from
+the OS's file events, 0.01 s a call. Passed per call rather than set in the
+repository, so nobody's git configuration changes; the daemon stops when
+its worktree is removed.
 
 ## Status
 

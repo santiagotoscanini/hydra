@@ -19,6 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/santiagotoscanini/hydra/internal/config"
+	"github.com/santiagotoscanini/hydra/internal/gitx"
 	"github.com/santiagotoscanini/hydra/internal/pc"
 	"github.com/santiagotoscanini/hydra/internal/plan"
 	"github.com/santiagotoscanini/hydra/internal/render"
@@ -203,8 +204,9 @@ func forgetOnStop(root string) {
 const fullEvery = 30 * time.Second
 
 // watchKey sums up, cheaply, what the plan of t is made from: the files that
-// differ from HEAD (git status, which a file system monitor makes nearly
-// free), where every worktree and branch points, and the files hydra reads.
+// differ from HEAD (git status, which git's file-system monitor makes nearly
+// free: see gitx.WorkTree), where every worktree and branch points, and the
+// files hydra reads.
 // Equal keys mean an equal plan. "" means it couldn't tell.
 func watchKey(t *target) string {
 	h := sha256.New()
@@ -213,7 +215,7 @@ func watchKey(t *target) string {
 		{"worktree", "list", "--porcelain"},
 		{"for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/remotes"},
 	} {
-		out, err := exec.Command("git", append([]string{"-C", t.checkout.Root}, args...)...).Output()
+		out, err := gitx.WorkTree(t.checkout.Root, args...).Output()
 		if err != nil {
 			return ""
 		}
