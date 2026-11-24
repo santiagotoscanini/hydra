@@ -835,12 +835,15 @@ shutdown would have), `hydra down --worktrees` for every worktree, and the
 reap of a removed worktree.
 
 A pid from a note may be days old, and a number can belong to another
-program by then. It counts only if the process
+program by then. The watcher's own list can be as old: it keeps the last
+answer of a process-compose that stopped answering. So for either, a pid
+counts only if the process
 
 1. has no parent (pid 1, or systemd's user instance where that adopts
    orphans);
-2. was started before the note was written. It then held that number when
-   the note was written, so it is the process the note names;
+2. was started before the list was taken (the note written, or the last
+   answer heard). It then held that number at that moment, so it is the
+   process the list names;
 3. carries this slot's `HYDRA_SLOT` and its service's `HYDRA_SERVICE`,
    where its environment can be read. hydra renders both into every
    process and children inherit them; they are read from
