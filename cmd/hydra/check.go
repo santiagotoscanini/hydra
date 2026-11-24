@@ -423,6 +423,9 @@ func mainProblems(ms *mainState) []problem {
 			Fix:  "hydra update"})
 	}
 	out = append(out, tlsProblems(ms)...)
+	if p := dbConnsProblem(ms.target.stack); p != nil {
+		out = append(out, *p)
+	}
 	if base := ms.target.stack.Hydra.BaseRef; ms.Branch != base {
 		on := "a detached commit"
 		if ms.Branch != "" {

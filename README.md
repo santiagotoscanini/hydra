@@ -112,7 +112,9 @@ to no service (docs, CI, other apps) under `ignore` in the top-level
    [Stopping and cleaning up](#stopping-and-cleaning-up)).
 2. Lists the changed files and picks the services to run here.
 3. Takes a **slot** for the worktree, kept until the worktree is removed.
-   Slot N listens on each service's port + N × `slot_stride`.
+   Slot N listens on each service's port + N × `slot_stride`. When all
+   `max_slots` are taken, it takes the slot of a worktree whose stack isn't
+   running (that one gets a slot again when it starts).
 4. Checks the main checkout: its stack is running, the services this
    worktree takes from it are up, and they are the version the branch was
    built on. If not, it prints what is wrong and the fix, and doesn't start
@@ -526,6 +528,18 @@ web:
 
 See [docs/design.md](docs/design.md) for the `x-hydra` fields and the rules
 in full.
+
+### Many worktrees at once
+
+A worktree costs one copy of each service it changed, plus about 60 MB for
+its process-compose and watcher. Two things run out before memory:
+
+- **Builds started together.** Wrap a service's build step so builds take
+  turns across every stack on the machine:
+  `hydra throttle go-build 2 -- go build -o bin/api ./cmd/api && exec ./bin/api`.
+- **Main's database connections.** Each worktree's copy of a service with a
+  connection pool opens it on main's Postgres (100 connections by default).
+  `hydra status` warns from 75% and prints the command that raises the limit.
 
 ## The demos
 

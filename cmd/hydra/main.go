@@ -6,6 +6,7 @@
 //	hydra plan  [flags]            show what this checkout runs and how it is wired
 //	hydra render [flags] [-o FILE] print or write the rendered file
 //	hydra slots [free [PATH]]      list worktree slots, or free one
+//	hydra throttle NAME N -- CMD   run CMD when fewer than N named NAME run
 //	hydra status [--all]           check this checkout against main's stack
 //	hydra update                   pull main and bring everything along
 //	hydra ui                       the same as a local web page
@@ -29,8 +30,10 @@ import (
 	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/gitx"
 	"github.com/santiagotoscanini/hydra/internal/hook"
+	"github.com/santiagotoscanini/hydra/internal/pc"
 	"github.com/santiagotoscanini/hydra/internal/plan"
 	"github.com/santiagotoscanini/hydra/internal/render"
+	"github.com/santiagotoscanini/hydra/internal/routes"
 	"github.com/santiagotoscanini/hydra/internal/slots"
 	"github.com/santiagotoscanini/hydra/internal/stack"
 )
@@ -78,8 +81,12 @@ Hydra's own commands:
   hydra render [flags] [-o FILE] print (or write) the rendered process-compose file
   hydra slots                    list worktree slots
   hydra slots free [PATH]        stop a worktree's stack and free its slot
-                                 (default: this worktree)
-  hydra version                  which hydra this is, and which process-compose
+                                 (default: this worktree); when every slot is
+                                 taken, a start takes a stopped worktree's
+  hydra throttle NAME N -- CMD   run CMD once fewer than N commands named NAME
+                                 run on this machine (for a service's build step,
+                                 so many worktrees starting together take turns)
+  hydra version                 which hydra this is, and which process-compose
 
 Flags for update:
   -n, --dry-run    say what would happen, change nothing
@@ -151,6 +158,8 @@ func run(args []string) error {
 			return routerCmd(args[1:])
 		case "prepare":
 			return prepareCmd(args[1:])
+		case "throttle":
+			return throttleCmd(args[1:])
 		case "reap":
 			return reapCmd(args[1:])
 		}
@@ -214,11 +223,45 @@ func defaultFile(co gitx.Checkout) string {
 
 // options are the knobs shared by plan, render and the wrapper.
 type options struct {
-	slot    int // -1: decide from the checkout
+	take    bool // a stack is about to start: take the slot, not only look at it
+	slot    int  // -1: decide from the checkout
 	changed []string
 	with    []string
 	without []string
 	routes  []string
+}
+
+// slot is the worktree's slot. Only a start takes one (take): planning,
+// rendering and looking use the slot the worktree has or would get, so a
+// worktree nobody started holds none.
+func (t *target) slot(take bool) (int, error) {
+	co, max := t.checkout, t.stack.Hydra.MaxSlots
+	if !take {
+		if s := slots.Peek(co.CommonDir, co.Root, max); s > 0 {
+			return s, nil
+		}
+		return 0, fmt.Errorf("all %d slots are taken; `hydra up -D` here takes the slot of a worktree whose stack isn't running", max)
+	}
+	// A removed worktree's slot is the reap's to free: what ran there may
+	// still hold the ports.
+	idle := func(root string) bool { return !slots.Removed(root) && !pc.Unix(socketFor(root)).Alive() }
+	since := func(root string) time.Time {
+		info, err := os.Stat(filepath.Join(root, ".process-compose", "hydra.yaml"))
+		if err != nil {
+			return time.Time{} // never started, or gone: first in line
+		}
+		return info.ModTime()
+	}
+	s, took, err := slots.Acquire(co.CommonDir, co.Root, max, idle, since)
+	if err != nil {
+		return 0, err
+	}
+	if took != "" {
+		// What the slot's last worktree left keyed by the slot number.
+		routes.Remove(co.CommonDir, s)
+		fmt.Fprintf(os.Stderr, "hydra: every slot was taken; took slot %d from %s, whose stack isn't running (it gets a slot again when it starts)\n", s, filepath.Base(took))
+	}
+	return s, nil
 }
 
 // build plans the checkout. The main checkout gets the baseline plan unless
@@ -229,7 +272,7 @@ func (t *target) build(o options) (*plan.Plan, error) {
 		if t.checkout.IsMain() {
 			slot = 0
 		} else {
-			s, err := slots.Acquire(t.checkout.CommonDir, t.checkout.Root, t.stack.Hydra.MaxSlots)
+			s, err := t.slot(o.take)
 			if err != nil {
 				return nil, err
 			}

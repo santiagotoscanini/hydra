@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestASlotStaysTakenUntilItIsReleased(t *testing.T) {
@@ -12,11 +13,11 @@ func TestASlotStaysTakenUntilItIsReleased(t *testing.T) {
 	for _, d := range []string{a, b} {
 		worktree(t, d)
 	}
-	slotA, err := Acquire(common, a, 2)
+	slotA, err := acquire(common, a, 2)
 	if err != nil || slotA != 1 {
 		t.Fatalf("a: slot %d, %v", slotA, err)
 	}
-	if again, _ := Acquire(common, a, 2); again != slotA {
+	if again, _ := acquire(common, a, 2); again != slotA {
 		t.Errorf("a worktree keeps its slot: got %d, then %d", slotA, again)
 	}
 
@@ -25,7 +26,7 @@ func TestASlotStaysTakenUntilItIsReleased(t *testing.T) {
 	if err := os.RemoveAll(a); err != nil {
 		t.Fatal(err)
 	}
-	if slotB, err := Acquire(common, b, 2); err != nil || slotB != 2 {
+	if slotB, err := acquire(common, b, 2); err != nil || slotB != 2 {
 		t.Fatalf("b: slot %d, %v (a's slot must stay taken)", slotB, err)
 	}
 	gone, err := Gone(common)
@@ -34,7 +35,7 @@ func TestASlotStaysTakenUntilItIsReleased(t *testing.T) {
 	}
 	c := filepath.Join(t.TempDir(), "c")
 	worktree(t, c)
-	if _, err := Acquire(common, c, 2); err == nil {
+	if _, err := acquire(common, c, 2); err == nil {
 		t.Error("a third worktree got a slot while both were taken")
 	}
 
@@ -42,11 +43,57 @@ func TestASlotStaysTakenUntilItIsReleased(t *testing.T) {
 	if err := Release(common, a); err != nil {
 		t.Fatal(err)
 	}
-	if slotC, err := Acquire(common, c, 2); err != nil || slotC != 1 {
+	if slotC, err := acquire(common, c, 2); err != nil || slotC != 1 {
 		t.Errorf("c: slot %d, %v", slotC, err)
 	}
 	if gone, _ := Gone(common); len(gone) != 0 {
 		t.Errorf("Gone after the release = %v", gone)
+	}
+}
+
+func acquire(common, root string, max int) (int, error) {
+	s, _, err := Acquire(common, root, max, nil, nil)
+	return s, err
+}
+
+// A slot counts stacks that run: with every slot taken, a start takes the
+// slot of a worktree whose stack isn't running, the one idle the longest.
+func TestAStartTakesTheSlotOfAStoppedWorktreeWhenAllAreTaken(t *testing.T) {
+	common := t.TempDir()
+	a, b, c, d := filepath.Join(t.TempDir(), "a"), filepath.Join(t.TempDir(), "b"), filepath.Join(t.TempDir(), "c"), filepath.Join(t.TempDir(), "d")
+	for _, dir := range []string{a, b, c, d} {
+		worktree(t, dir)
+	}
+	acquire(common, a, 3)
+	acquire(common, b, 3)
+	acquire(common, c, 3)
+	running := map[string]bool{a: true}
+	idle := func(root string) bool { return !running[root] }
+	last := map[string]time.Time{b: time.Unix(200, 0), c: time.Unix(100, 0)}
+	since := func(root string) time.Time { return last[root] }
+
+	if Peek(common, d, 3) != 0 {
+		t.Error("Peek promised a slot while all were taken")
+	}
+	slot, took, err := Acquire(common, d, 3, idle, since)
+	if err != nil || took != c || slot != 3 {
+		t.Fatalf("d: slot %d from %q, %v; want c's slot 3", slot, took, err)
+	}
+	if again, took, _ := Acquire(common, d, 3, idle, since); again != 3 || took != "" {
+		t.Errorf("d asked again: slot %d, took %q", again, took)
+	}
+	// c starts again: it takes b's, now the only stopped one besides d...
+	running[d] = true
+	if slot, took, err := Acquire(common, c, 3, idle, since); err != nil || took != b || slot != 2 {
+		t.Errorf("c: slot %d from %q, %v; want b's slot 2", slot, took, err)
+	}
+	// ...and with every stack running there is nothing to take.
+	running[c] = true
+	if _, _, err := Acquire(common, b, 3, idle, since); err == nil {
+		t.Error("b got a slot while every stack runs")
+	}
+	if got := Peek(common, a, 3); got != 1 {
+		t.Errorf("Peek of a worktree with a slot = %d, want 1", got)
 	}
 }
 

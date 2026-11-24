@@ -279,7 +279,7 @@ func renderFor(co gitx.Checkout, file string, names []string, starting, force bo
 	if err != nil {
 		return "", nil, err
 	}
-	o := options{slot: -1}
+	o := options{slot: -1, take: starting}
 	watch := ""
 	if !co.IsMain() {
 		o.with = names // `hydra up web` means "run web here too"
@@ -327,7 +327,20 @@ func renderFor(co gitx.Checkout, file string, names []string, starting, force bo
 		clearLeftoversOf(t, p, os.Stderr)
 	}
 	if p.Slot > 0 {
-		fmt.Fprintf(os.Stderr, "hydra: slot %d, running here: %s\n", p.Slot, strings.Join(orNone(p.Local()), ", "))
+		var on, off []string
+		for _, row := range p.Services {
+			switch {
+			case row.Local && row.Disabled:
+				off = append(off, row.Name)
+			case row.Local:
+				on = append(on, row.Name)
+			}
+		}
+		line := fmt.Sprintf("hydra: slot %d, running here: %s", p.Slot, strings.Join(orNone(on), ", "))
+		if len(off) > 0 {
+			line += fmt.Sprintf("; off until started (`hydra up NAME`): %s", strings.Join(off, ", "))
+		}
+		fmt.Fprintln(os.Stderr, line)
 		routedNote(t, p)
 		if !starting { // the checks before a start already said these
 			for _, w := range p.Warnings {

@@ -292,7 +292,7 @@ Commands of its own: `hydra status` (is it all up and in step), `hydra ui`
 (the same as a web page), `hydra update` (move main and bring everything
 along), `hydra plan` (what runs where, and why), `hydra render` (the
 generated file), `hydra slots` (which worktree has which slot, and freeing
-one), `hydra trust` (the CA behind TLS fronts) and `hydra version` (the
+one), `hydra throttle` (machine-wide turns for a build step), `hydra trust` (the CA behind TLS fronts) and `hydra version` (the
 commit it was built from, read from the build's VCS stamp).
 
 ## The `x-hydra` extension
@@ -692,6 +692,48 @@ another program may sit on one, which `hydra status` then names.
 A slot stays taken until it is released. An entry whose worktree is gone
 is not dropped on sight, as it once was: whatever that worktree ran may
 still hold the slot's ports.
+
+Only a start takes a slot. `hydra plan`, `render`, `status` and the page
+peek: the slot the worktree has, or the lowest free one, recorded nowhere.
+Once `plan` took one, and worktrees that were planned but never run filled
+the registry.
+
+When every slot is taken, a start takes the slot of a worktree whose stack
+isn't running (its process-compose doesn't answer), the one whose generated
+file is oldest, and prints that it did. A removed worktree's slot is never
+taken this way: freeing it is the reap's, which first stops what still holds
+its ports. So `max_slots` bounds stacks that run at once, not worktrees that
+ever ran. Nothing keyed by the slot number goes with it to the new owner:
+the router's routes file for the slot is removed; a Temporal namespace is
+labelled with its worktree and replaced; a worktree's own Supabase stack is
+named by the Supabase CLI after folder and branch, so the old owner gets
+its data back when it starts again, on its new slot's ports. Should
+something of the old owner still hold a port, the checks before the start
+name it.
+
+## Many at once
+
+Two limits come before memory, both met in the monorepo with seven
+worktrees started together:
+
+- **Builds.** Each Go service builds before it runs. Fourteen builds at once
+  (api and worker in seven worktrees) put the load at 450 on 18 cores and
+  froze the machine for half a minute. `hydra throttle NAME N -- CMD` lets N
+  commands of a name run at once machine-wide, each holding a flock on one
+  of N files in `$TMPDIR`, polled every 200 ms. A lock goes with its process,
+  however that ends, so no turn is ever lost to a crash. Only the build is
+  wrapped; the service runs outside it. It is a command for the stack file
+  to use, not something hydra does by itself: hydra can't tell the build in
+  a command from the run.
+- **Connections to main's database.** Each copy of a Go service holds a pool
+  of 10 to 30 connections; Postgres allows 100 and Supabase holds about 34.
+  Main and two or three worktrees fill it, and the next copy fails with
+  SQLSTATE 53300, which reads like a bug in the service. `hydra status`
+  asks main's Postgres (`pg_stat_activity`, 2 s timeout) and warns from 75%.
+  Its fix raises `max_connections` to 300 as `supabase_admin` (the
+  `postgres` role may not) and restarts the database container together
+  with Supabase auth: auth keeps its dead pool across a database restart
+  and fails every login until it is restarted.
 
 ## Removed worktrees
 

@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const fileName = "hydra-slots.json"
@@ -35,27 +36,75 @@ type Entry struct {
 
 // Acquire returns the slot for root, allocating the lowest free one in
 // 1..max if root has none.
-func Acquire(commonDir, root string, max int) (int, error) {
-	var slot int
-	err := withRegistry(commonDir, func(r *registry) (bool, error) {
+//
+// When every slot is taken, it takes one from a worktree whose stack isn't
+// running (idle says which; nil: none is): the one idle the longest, by
+// since. That worktree gets a slot again, possibly another, the next time it
+// starts. A slot then counts stacks that run, not worktrees that once ran.
+// took is the root the slot was taken from, "" when none was.
+func Acquire(commonDir, root string, max int, idle func(root string) bool, since func(root string) time.Time) (slot int, took string, err error) {
+	err = withRegistry(commonDir, func(r *registry) (bool, error) {
 		if s, ok := r.Slots[root]; ok && s <= max {
 			slot = s
 			return false, nil
 		}
-		used := map[int]bool{}
-		for _, s := range r.Slots {
-			used[s] = true
+		if s := lowestFree(r, max); s > 0 {
+			r.Slots[root] = s
+			slot = s
+			return true, nil
 		}
-		for s := 1; s <= max; s++ {
-			if !used[s] {
-				r.Slots[root] = s
-				slot = s
+		if idle != nil {
+			var best string
+			var bestAt time.Time
+			for other, s := range r.Slots {
+				if s > max || other == root || !idle(other) {
+					continue
+				}
+				at := time.Time{}
+				if since != nil {
+					at = since(other)
+				}
+				if best == "" || at.Before(bestAt) || (at.Equal(bestAt) && other < best) {
+					best, bestAt = other, at
+				}
+			}
+			if best != "" {
+				slot, took = r.Slots[best], best
+				delete(r.Slots, best)
+				r.Slots[root] = slot
 				return true, nil
 			}
 		}
-		return false, fmt.Errorf("all %d slots are taken; free one (`hydra slots` lists them, `hydra slots free PATH` frees one) or raise x-hydra.max_slots", max)
+		return false, fmt.Errorf("all %d slots are taken by stacks that run; stop one (`hydra down` there, or `hydra down --worktrees`) or raise x-hydra.max_slots", max)
 	})
-	return slot, err
+	return slot, took, err
+}
+
+// Peek returns the slot root has, or the one Acquire would give it now,
+// without taking it: 0 when every slot is taken.
+func Peek(commonDir, root string, max int) int {
+	all, _ := List(commonDir)
+	r := &registry{Slots: map[string]int{}}
+	for _, e := range all {
+		if e.Root == root && e.Slot <= max {
+			return e.Slot
+		}
+		r.Slots[e.Root] = e.Slot
+	}
+	return lowestFree(r, max)
+}
+
+func lowestFree(r *registry, max int) int {
+	used := map[int]bool{}
+	for _, s := range r.Slots {
+		used[s] = true
+	}
+	for s := 1; s <= max; s++ {
+		if !used[s] {
+			return s
+		}
+	}
+	return 0
 }
 
 // Release frees root's slot.
