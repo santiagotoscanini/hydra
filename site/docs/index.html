@@ -1182,7 +1182,8 @@ api:
     <p>Each worktree's watcher asks git every two seconds what changed. On macOS (and Windows), hydra's own git calls turn on git's file-system monitor, so git answers from the operating system's file events instead of reading every file's metadata again. In a 23,000-file repository that is 0.01 s of kernel time per check instead of 0.3 s, and twenty worktrees no longer keep three cores busy doing nothing. The monitor is a git daemon per worktree (<code>git fsmonitor--daemon</code>, about 6 MB) that git starts on the first call and that stops by itself when the worktree is removed. Your repository's git configuration is left alone. On Linux git has no such monitor and the checks read the files as before.</p>
     <h3>Connections to main's database</h3>
     <p>Every worktree that runs its own copy of a service on main's database opens that service's connection pool there. A local Postgres allows 100 connections and Supabase's own services hold about a third, so with pools of ten and more, two or three worktrees fill it, and the next one fails with <code>remaining connection slots are reserved</code>. <code>hydra status</code> <a href="#messages">warns</a> from three quarters full and gives the command that raises the limit (to 300, then by 200 at a time), once per machine (it stays across restarts of the stack).</p>
-    <p>Better still, keep a worktree's pools small. One developer clicking through one worktree needs a few connections, not production's pool held open while idle. Hand worktrees a connection string that sizes the pool, and keep main's as it was with <code>baseline_value</code>:</p>
+    <p>Raising the limit is the fix to reach for first: a worktree's connections are idle almost all the time, and an idle Postgres connection costs a few MB. Measured with a Go API and worker of seven pools: about 20 connections per worktree that runs them, so a limit of 500 (two raises from <code>hydra status</code>) holds about 22 such worktrees at once. Worktrees that take the API from main open none.</p>
+    <p>If your app already reads its pool size from the connection string, you can also hand worktrees a smaller one and keep main's as it was with <code>baseline_value</code>. With pgx that works only when the code doesn't set <code>MaxConns</code> after parsing the string:</p>
     <div class="code">
 <pre data-lang="yaml">
 api:
@@ -1195,7 +1196,7 @@ api:
         baseline_value: "postgresql://postgres:postgres@{host}:{port.db}/postgres"
 </pre>
     </div>
-    <p>Code that sets the pool size after parsing the string overrides it; such code should only fill in what the string leaves out. Measured in a Go API and worker with seven pools: a worktree held about 20 connections before, 5 after, the ones its start-up used.</p>
+    <p>Don't change an app for this; a limit of a few hundred costs less.</p>
   </section>
 
   <section id="config">
