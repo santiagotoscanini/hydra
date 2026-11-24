@@ -1157,6 +1157,20 @@ api:
     </ul>
     <h3>Connections to main's database</h3>
     <p>Every worktree that runs its own copy of a service on main's database opens that service's connection pool there. A local Postgres allows 100 connections and Supabase's own services hold about a third, so with pools of ten and more, two or three worktrees fill it, and the next one fails with <code>remaining connection slots are reserved</code>. <code>hydra status</code> <a href="#messages">warns</a> from three quarters full and gives the command that raises the limit (to 300, then by 200 at a time), once per machine (it stays across restarts of the stack).</p>
+    <p>Better still, keep a worktree's pools small. One developer clicking through one worktree needs a few connections, not production's pool held open while idle. Hand worktrees a connection string that sizes the pool, and keep main's as it was with <code>baseline_value</code>:</p>
+    <div class="code">
+<pre data-lang="yaml">
+api:
+  x-hydra:
+    upstreams:
+      DATABASE_URL:
+        service: supabase
+        # pgx's own keys; other drivers have theirs (connection_limit, pool_size, …)
+        value: "postgresql://postgres:postgres@{host}:{port.db}/postgres?pool_max_conns=4&amp;pool_min_conns=0"
+        baseline_value: "postgresql://postgres:postgres@{host}:{port.db}/postgres"
+</pre>
+    </div>
+    <p>Code that sets the pool size after parsing the string overrides it; such code should only fill in what the string leaves out. Measured in a Go API and worker with seven pools: a worktree held about 20 connections before, 5 after, the ones its start-up used.</p>
   </section>
 
   <section id="config">
