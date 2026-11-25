@@ -106,6 +106,9 @@ Hydra's own commands:
 Flags for update:
   -n, --dry-run    say what would happen, change nothing
   --main-only      leave the worktrees alone
+  --here           in a worktree: merge main (or the branch it is stacked on)
+                   into this worktree only and restart what that touched;
+                   main isn't pulled and its stack is left alone
   --no-pull        don't pull; bring the stack and the worktrees to where main is
   --timeout D      how long one process may take to come back (default 15m)
 

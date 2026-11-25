@@ -59,7 +59,7 @@ cleanup() {
     (cd "$repo/$wt" 2>/dev/null && "$H" down >/dev/null 2>&1) || true
   done
   # A freed slot takes the worktree's socket and note out of $TMPDIR.
-  for wt in api web conflict dirty fresh order landed; do
+  for wt in api web conflict dirty fresh order landed solo; do
     (cd "$main" 2>/dev/null && "$H" slots free "$repo/$wt" >/dev/null 2>&1) || true
   done
   (cd "$main" 2>/dev/null && "$H" down -p "$pc_port" >/dev/null 2>&1) || true
@@ -155,6 +155,8 @@ g worktree add -q -b dirty "$repo/dirty" main
 (cd "$repo/dirty" && put apps/web/draft.tsx && g add -A && g commit -qm "web: draft" && echo wip >>apps/web/page.tsx)
 g worktree add -q -b landed "$repo/landed" main
 (cd "$repo/landed" && put docs/notes.md && g add -A && g commit -qm "docs: notes")
+g worktree add -q -b solo "$repo/solo" main
+(cd "$repo/solo" && put apps/web/solo.tsx && g add -A && g commit -qm "web: solo")
 
 echo
 echo "--- 2. teammates push; someone pulls main by hand"
@@ -167,6 +169,21 @@ run "$H" status --all; echo "$out" | show
 refuse "$out" "main's files moved from .* without .hydra update."
 expect "$out" 'api: apps/api/users.go'
 expect "$out" 'migrate: db/migrations/002.sql'
+echo
+echo "one worktree on its own: hydra update --here merges main into it, and moves nothing else"
+cd "$repo/conflict"
+run "$H" update --here --dry-run; echo "$out" | show
+refuse "$out" 'conflict +conflict +CONFLICTS with main in 1 file'
+cd "$repo/solo"
+run "$H" update --here; echo "$out" | show
+[ "$status" -eq 0 ] || fail "update --here should succeed"
+expect "$out" 'solo +solo +main merged in \(4 commits\)'
+expect "$out" "main itself wasn't pulled"
+run "$H" status --all
+expect "$out" "main's files moved from .* without .hydra update." # main's stack was left alone
+cd "$main"
+run "$H" update --here
+refuse "$out" '--here is for a worktree'
 
 echo
 echo "--- 3. hydra update"

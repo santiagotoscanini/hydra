@@ -34,15 +34,17 @@ import (
 //     services at the version its branch is built on.
 //
 // It never resolves a conflict, never touches a worktree with uncommitted
-// work, and never pushes.
+// work, and never pushes. With --here, run in a worktree, it does only the
+// third step, for that worktree.
 func updateCmd(args []string) error {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
-	var dry, noPull, mainOnly bool
+	var dry, noPull, mainOnly, here bool
 	fs.BoolVar(&dry, "dry-run", false, "")
 	fs.BoolVar(&dry, "n", false, "")
 	fs.BoolVar(&noPull, "no-pull", false, "")
 	fs.BoolVar(&mainOnly, "main-only", false, "")
+	fs.BoolVar(&here, "here", false, "")
 	timeout := fs.Duration("timeout", 15*time.Minute, "")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -50,6 +52,12 @@ func updateCmd(args []string) error {
 	co, err := gitx.Find(".")
 	if err != nil {
 		return err
+	}
+	if here && co.IsMain() {
+		return fmt.Errorf("--here is for a worktree; in the main checkout, `hydra update` pulls main and brings everything along")
+	}
+	if here && mainOnly {
+		return fmt.Errorf("--here and --main-only leave nothing to do together")
 	}
 	if !dry {
 		unlock, err := lockUpdate(co.CommonDir)
@@ -68,6 +76,24 @@ func updateCmd(args []string) error {
 	if dry {
 		would = "would be "
 		fmt.Println("(dry run: nothing is pulled, restarted or merged)")
+	}
+	if here {
+		// Main stays where it is; only this worktree catches up with it.
+		needHand, err := updateWorktrees(co, ms, ms.Head, dry, *timeout, co.Root)
+		if err != nil {
+			return err
+		}
+		fmt.Println()
+		switch {
+		case needHand > 0:
+			fmt.Println("this worktree needs a hand (above).")
+			return errProblems{}
+		case dry:
+			fmt.Println("Run `hydra update --here` to do it.")
+		default:
+			fmt.Println("ok: this worktree is up to date with main's checkout (main itself wasn't pulled).")
+		}
+		return nil
 	}
 
 	// 1. The main checkout.
@@ -133,7 +159,7 @@ func updateCmd(args []string) error {
 	// 3. The worktrees.
 	needHand := 0
 	if !mainOnly && !failed {
-		if needHand, err = updateWorktrees(co, ms, target, dry, *timeout); err != nil {
+		if needHand, err = updateWorktrees(co, ms, target, dry, *timeout, ""); err != nil {
 			return err
 		}
 	}
@@ -611,8 +637,9 @@ type wtUpdate struct {
 }
 
 // updateWorktrees merges main (or the branch a worktree is stacked on) into
-// every worktree that is behind it, and returns how many need a hand.
-func updateWorktrees(co gitx.Checkout, ms *mainState, mainCommit string, dry bool, timeout time.Duration) (int, error) {
+// every worktree that is behind it (only the one at only, when that is
+// set), and returns how many need a hand.
+func updateWorktrees(co gitx.Checkout, ms *mainState, mainCommit string, dry bool, timeout time.Duration, only string) (int, error) {
 	main, base := ms.target.checkout.Root, ms.target.stack.Hydra.BaseRef
 	wts, err := stack.List(main)
 	if err != nil {
@@ -620,7 +647,7 @@ func updateWorktrees(co gitx.Checkout, ms *mainState, mainCommit string, dry boo
 	}
 	var ups []*wtUpdate
 	for _, wt := range wts {
-		if wt.Root == main {
+		if wt.Root == main || (only != "" && wt.Root != only) {
 			continue
 		}
 		ups = append(ups, &wtUpdate{root: wt.Root, name: wt.Branch})
