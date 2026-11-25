@@ -201,7 +201,10 @@ What it checks:
   holds the port; when that is a leftover of this stack, the restart it
   suggests stops it first;
 - main's copy of a routed service can serve this worktree;
-- no changed file is left out of every service's `paths`.
+- no changed file is left out of every service's `paths`;
+- no port of what this checkout runs is held by a program outside any
+  stack (a dev server left by a removed worktree, say): it is named with
+  its pid and directory, and the fix is its `kill`.
 
 The same checks run before `hydra up` starts a worktree, and the watcher
 writes to the worktree's log when main's stack stops answering or the
@@ -211,6 +214,7 @@ branch falls out of step. The manual lists
 `hydra status --json` prints all of it, for main and every worktree, as
 one JSON object: what each runs and takes from main, its processes, its
 problems with their fixes (and the fix as a command when it is a hydra one),
+the programs outside any stack that hold its ports (`strays`),
 how far it is from main and what `hydra update` would do to it.
 `--watch` prints one every second.
 

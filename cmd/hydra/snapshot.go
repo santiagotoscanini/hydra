@@ -47,6 +47,7 @@ const (
 	gitAge         = 2 * time.Minute
 	mainAge        = 10 * time.Second
 	memoryAge      = 5 * time.Second
+	strayAge       = 15 * time.Second // lsof and ps of the machine
 	snapshotEvery  = time.Second
 	slowAtOnce     = 4 // background plans and git checks running at a time
 )
@@ -76,6 +77,17 @@ type snapService struct {
 	Memory int64  `json:"memory,omitempty"` // bytes: the process and its children
 }
 
+// snapStray is a program that holds a port of the checkout's stack and is
+// part of no stack (see strays.go).
+type snapStray struct {
+	Port    int    `json:"port"`
+	Service string `json:"service"`
+	Pid     int    `json:"pid"`
+	Command string `json:"command"`
+	Dir     string `json:"dir,omitempty"`
+	DirGone bool   `json:"dirGone,omitempty"` // a worktree that was removed, most likely
+}
+
 type snapSkew struct {
 	Service string   `json:"service"`
 	Why     string   `json:"why"`
@@ -94,6 +106,7 @@ type snapMain struct {
 	Processes []snapService `json:"processes"`
 	Memory    int64         `json:"memory"`
 	Problems  []snapProblem `json:"problems"`
+	Strays    []snapStray   `json:"strays,omitempty"`
 }
 
 // snapUpdate is what `hydra update` would do to a worktree now, worked out
@@ -124,6 +137,7 @@ type snapWorktree struct {
 	Services   []snapService `json:"services"`
 	Memory     int64         `json:"memory"`
 	Problems   []snapProblem `json:"problems"`
+	Strays     []snapStray   `json:"strays,omitempty"`
 	Update     *snapUpdate   `json:"update,omitempty"`
 	// Pending: not planned yet (the first seconds of a watch).
 	Pending   bool      `json:"pending,omitempty"`
@@ -161,6 +175,12 @@ type snapshotter struct {
 	changed  chan struct{}   // a slow refresh finished
 	mem      func(pid int) int64
 	memAt    time.Time
+	// What holds the stacks' ports without being part of one, by checkout,
+	// looked for every strayAge in the background (at once when once).
+	strays     map[string][]stray
+	straysAt   time.Time
+	straysBusy bool
+	once       bool // a single snapshot: nothing is left for the next one
 }
 
 // wtPlan is a worktree's plan, and the commits it was made at.
@@ -205,6 +225,7 @@ func statusJSON(co gitx.Checkout, watch bool) error {
 		return err
 	}
 	if !watch {
+		s.once = true
 		s.refresh(true, true, "")
 		return json.NewEncoder(os.Stdout).Encode(s.build())
 	}
@@ -519,12 +540,67 @@ func (s *snapshotter) build() *snapshot {
 	}
 	mem := s.mem
 	s.mu.Unlock()
+	strays := s.straysOf(ms, plans)
 	snap.Main = snapMainOf(ms, mem)
 	snap.Main.Subject = subject
+	addStrays(&snap.Main.Strays, &snap.Main.Problems, strays[ms.target.checkout.Root])
 	for i, wt := range wts {
-		snap.Worktrees = append(snap.Worktrees, snapWorktreeOf(ms, wt, plans[i], gits[i], mem))
+		w := snapWorktreeOf(ms, wt, plans[i], gits[i], mem)
+		addStrays(&w.Strays, &w.Problems, strays[wt.Root])
+		snap.Worktrees = append(snap.Worktrees, w)
 	}
 	return snap
+}
+
+// straysOf returns what was last found holding the stacks' ports, and looks
+// again in the background when that is due: an lsof and a ps of the
+// machine are too much to run every second.
+func (s *snapshotter) straysOf(ms *mainState, plans []*wtPlan) map[string][]stray {
+	s.mu.Lock()
+	due := !s.straysBusy && (s.strays == nil || time.Since(s.straysAt) > strayAge)
+	if due {
+		s.straysBusy = true
+	}
+	have := s.strays
+	s.mu.Unlock()
+	if !due {
+		return have
+	}
+	want := map[int]portUse{}
+	mainPorts(want, ms)
+	for _, p := range plans {
+		if p != nil && p.ws != nil {
+			worktreePorts(want, p.ws)
+		}
+	}
+	look := func() map[string][]stray {
+		found := map[string][]stray{}
+		for _, st := range findStrays(want) {
+			found[st.Root] = append(found[st.Root], st)
+		}
+		s.mu.Lock()
+		s.strays, s.straysAt, s.straysBusy = found, time.Now(), false
+		s.mu.Unlock()
+		return found
+	}
+	if s.once {
+		return look()
+	}
+	go func() {
+		look()
+		select {
+		case s.changed <- struct{}{}:
+		default:
+		}
+	}()
+	return have
+}
+
+func addStrays(into *[]snapStray, problems *[]snapProblem, list []stray) {
+	for _, st := range list {
+		*into = append(*into, snapStray{Port: st.Port, Service: st.Service, Pid: st.Pid, Command: st.Cmd, Dir: st.Dir, DirGone: st.DirGone})
+	}
+	*problems = append(*problems, snapProblems(strayProblems(list))...)
 }
 
 // processTrees returns, for every process on the machine, the memory it and

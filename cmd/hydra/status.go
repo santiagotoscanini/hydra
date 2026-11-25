@@ -74,6 +74,9 @@ func statusCmd(args []string) error {
 	printWorktreeTable(ms, ws)
 
 	problems := stillStarting(worktreeProblems(ms, ws, true), waited)
+	want := map[int]portUse{}
+	worktreePorts(want, ws)
+	problems = append(problems, strayProblems(findStrays(want))...)
 	fmt.Println()
 	if len(problems) == 0 {
 		fmt.Println("ok: everything this worktree uses is up and in step with main.")
@@ -390,6 +393,9 @@ func statusAll(co gitx.Checkout, ms *mainState, waited time.Duration) error {
 		problems = append(problems, failing(ms, nil)...)
 	}
 	problems = stillStarting(append(problems, goneProblems(co)...), waited)
+	want := map[int]portUse{}
+	mainPorts(want, ms)
+	problems = append(problems, strayProblems(findStrays(want))...)
 	fmt.Println()
 	if len(problems) > 0 {
 		printProblems(os.Stdout, problems)

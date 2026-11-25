@@ -189,7 +189,22 @@ stack file or hydra being newer than the running stack, the main checkout
 on another branch or with uncommitted changes, plan warnings, changed
 files that no service's `paths` (nor `ignore`) cover, a worktree's own
 Supabase that was started for another branch than the one checked out now,
-and (in the main checkout) a removed worktree whose stack still answers.
+(in the main checkout) a removed worktree whose stack still answers, and a
+port of the checkout's stack held by a program that is part of no stack.
+
+That last one (`strays.go`): for each port of a service the checkout is
+meant to run (main: every one that isn't off; a worktree: what runs there,
+on its slot, once it has one), who listens (one `lsof` of the machine's
+listeners), and whether that program descends from a process-compose (one
+`ps`, walking the parent chain). The stack's own processes, and another
+stack's, do; a server that outlived a removed worktree, or one started by
+hand, doesn't. It is named with its pid, program and working directory,
+"which no longer exists (a worktree that was removed)" when that is gone,
+and the fix is `kill PID`. A note, not an error: the stack may run around
+it, and `hydra up` doesn't refuse on it. Left out: `is_daemon` services and
+Supabase stacks (they detach from process-compose on purpose) and ports a
+container runtime's forwarder holds (Docker, OrbStack, Lima, Colima,
+gvproxy). Both commands together take about 0.1 s.
 
 "What this worktree takes from main" is: the upstream targets and
 `depends_on` entries of its local, enabled services that don't run here, and
@@ -223,6 +238,9 @@ own clock:
   HEAD, main's or its parent's moves, and otherwise every 2 minutes, for
   uncommitted work, which keeps an update away.
 - Which worktrees there are: every second (`git worktree list`).
+- Programs outside any stack holding a stack's ports (`strays`, with a
+  problem each): every 15 seconds, one `lsof` and one `ps` for all
+  checkouts together.
 
 Slow parts run in the background, four at a time, and never hold up a
 snapshot: they show up in the next. Git runs with `GIT_OPTIONAL_LOCKS=0`,
