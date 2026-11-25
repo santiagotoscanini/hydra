@@ -68,6 +68,7 @@ Bare `hydra` in a terminal opens [the dashboard](#the-dashboard):
 | Stop every worktree's stack | `hydra down --worktrees` | anywhere |
 | See what happened, in every checkout | `hydra log` (`--errors`, `-f`, `--since 24h`) | anywhere |
 | Get help with hydra | `hydra report`: one Markdown file to send | anywhere |
+| Give a coding agent tools for its worktree's stack | `hydra mcp` (an MCP server; see [For agents](#for-agents-hydra-mcp)) | registered once with the agent |
 
 Every one of them is safe to run twice: starting a stack that is up, or
 stopping one that is down, says so and exits 0. On a stack that is already
@@ -246,6 +247,39 @@ the stack still running. Whatever stops a stack or moves a branch asks
 first. It needs Node.js 20+; without a terminal (an agent, a script) or
 with any argument, `hydra` is process-compose as before, and process-compose's
 own TUI on a stack is `hydra up` or `hydra attach`.
+
+### For agents: hydra mcp
+
+`hydra mcp` is an MCP server on stdin and stdout (JSON-RPC 2.0, protocol
+`2025-06-18`) for coding agents. An agent's tool starts it once per session,
+in the agent's worktree, and the agent works on that worktree's stack
+through tools, not a shell:
+
+```
+claude mcp add --scope user hydra -- hydra mcp   # Claude Code
+codex mcp add hydra -- hydra mcp                 # Codex
+```
+
+| Tool | Does | In main |
+|---|---|---|
+| `status` | `hydra status` as data: services, ports, URLs, states, problems and fixes | reads |
+| `up` | `hydra up -D` (`services`: also run those here) | refused |
+| `wait` | until the named processes (or all) are ready, one fails, or `timeout_seconds`; the last lines of what isn't ready | reads |
+| `logs` | the last `lines` of one `process`, filtered by `contains`; `main: true` reads main's | reads |
+| `restart` | `hydra process restart NAME` | refused |
+| `down` | `hydra down` | refused |
+| `update_here` | `hydra update --here` (`dry_run`) | refused |
+| `main_status` | main's stack, and which of its services this worktree uses | reads |
+
+Agents with a shell get it wrong: they start process-compose by hand, which
+runs everything on main's ports. They stop main's stack because theirs looks
+broken, or `supabase stop` the database everyone uses. A tool changes only
+the agent's own worktree's stack. In the main checkout it answers
+`refused: … Ask the developer: main's stack is theirs`. Errors come back as
+hydra printed them, and stdout carries nothing but protocol messages. The
+manual suggests deny rules for the shell commands the tools replace
+(`process-compose`, `hydra down`, `hydra update`, `supabase stop`,
+`supabase db reset`).
 
 ### Watching
 
@@ -635,7 +669,10 @@ web-b worktree : web-b(slot 1, :20101) -> api(slot 1, :20110) -> db(slot 0, :200
 the watcher starting and stopping services as files change in them.
 `./examples/demo/routed.sh` shows one frontend serving every worktree, and
 `./examples/demo/tls.sh` a TLS front, and `./examples/demo/dashboard.sh`
-drives the dashboard in tmux. `./examples/demo/update.sh` is the
+drives the dashboard in tmux. `./examples/demo/mcp.sh` plays an agent's
+tool and talks MCP to `hydra mcp`: up, wait, status, logs, restart and down
+in a worktree, and every action refused in main.
+`./examples/demo/update.sh` is the
 end-to-end test: `hydra status`, the checks before `hydra up`,
 `hydra update`, a second start, the order in which an edit's services
 start, a removed worktree, a killed process-compose and

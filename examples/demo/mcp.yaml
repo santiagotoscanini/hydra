@@ -1,0 +1,41 @@
+# The stack behind mcp.sh: a database every worktree shares, an API with a
+# readiness check, a frontend, and a worker that is off until someone starts
+# it and then fails at once. Every service but that one is `mocksvc`.
+version: "0.5"
+
+x-hydra:
+  slot_stride: 100
+  max_slots: 8
+  ignore: [".gitignore", "process-compose.yaml"]
+
+processes:
+  db:
+    command: bin/mocksvc
+    x-hydra: { shared: true, port: 24030, url: "postgres://{host}:{port}/app" }
+
+  api:
+    command: bin/mocksvc
+    depends_on:
+      db: { condition: process_started }
+    readiness_probe:
+      http_get: { host: 127.0.0.1, port: 24010, path: / }
+      period_seconds: 1
+    x-hydra:
+      port: 24010
+      paths: ["apps/api/**"]
+      upstreams: { DATABASE_URL: db }
+
+  web:
+    command: bin/mocksvc
+    depends_on:
+      api: { condition: process_healthy }
+    x-hydra:
+      port: 24000
+      paths: ["apps/web/**"]
+      upstreams: { API_URL: api }
+
+  # Off until someone starts it; then it can't reach its queue and exits.
+  worker:
+    command: "echo connecting to the queue; echo 'fatal: the queue refused the connection' >&2; exit 3"
+    disabled: true
+    x-hydra: { paths: ["apps/worker/**"] }

@@ -13,6 +13,7 @@
 //	hydra log [KIND...]            what hydra did and saw, in every checkout
 //	hydra report                   all of it in one file, to send for help
 //	hydra trust                    trust the CA behind TLS fronts
+//	hydra mcp                      an MCP server for coding agents, on stdio
 //	hydra version                  which hydra, which process-compose
 package main
 
@@ -112,6 +113,12 @@ Hydra's own commands:
   hydra throttle NAME N -- CMD   run CMD once fewer than N commands named NAME
                                  run on this machine (for a service's build step,
                                  so many worktrees starting together take turns)
+  hydra mcp                      an MCP server on stdin/stdout for coding agents:
+                                 tools that start, wait for, read, restart and
+                                 stop this checkout's stack (status, up, wait,
+                                 logs, restart, down, update_here, main_status);
+                                 the ones that change a stack refuse in main.
+                                 Register: claude mcp add hydra -- hydra mcp
   hydra version                  which hydra this is, and which process-compose
 
 Flags for update:
@@ -204,6 +211,8 @@ func run(args []string) error {
 			return throttleCmd(args[1:])
 		case "reap":
 			return reapCmd(args[1:])
+		case "mcp":
+			return mcpCmd(args[1:])
 		}
 	}
 	return wrap(args)
