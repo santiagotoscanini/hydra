@@ -9,7 +9,8 @@ and so do these notes; everything hydra prints says `main`.
 
 ## Usage
 
-`hydra` stands in for `process-compose`; arguments pass through.
+`hydra` stands in for `process-compose`; arguments pass through. The one
+exception is bare `hydra` at a terminal (see [The dashboard](#the-dashboard)).
 
 - In the **main checkout** it runs everything, like plain process-compose
   (the server stays on its TCP port), minus `watch` blocks and with each
@@ -189,31 +190,88 @@ every routed service.
 `--all`, or `hydra status` in the main checkout, prints main's processes and
 one line per worktree without taking a slot for any of them.
 
-### The page
+### The snapshot: `hydra status --json`
 
-`hydra ui` serves the same facts for every checkout at once as a local web
-page (127.0.0.1:4937; one page per repository, a second repository takes
-the next free port, and a second `hydra ui` for the same one opens the
-first). It is one HTML file inside the binary and one JSON endpoint,
-`/api/status`; it only reads.
+`hydra status --json` is every checkout of the repository as one JSON
+object (`cmd/hydra/snapshot.go`): main's processes and problems, and per
+worktree what it runs here and takes from main, its problems with their
+fixes, how far it is behind and ahead of main, the branches it is stacked
+on, and what `hydra update` would do to it (`git merge-tree` tries the
+merge). A problem whose fix is a hydra command carries it as `run`, the
+command to run in that checkout; advice has none. `version` changes only
+when a field changes meaning or goes away.
 
-- Process states, and the memory each process holds with its children
-  (process-compose reports the process alone, which for a wrapped command is
-  the wrapper), are read on every request, at most once a second.
-- A worktree's plan needs git to walk its working tree for untracked files,
-  which is the expensive part with a dozen worktrees. Plans are cached and
-  worked out again in the background: every 10 seconds for a worktree whose
-  stack is up, every 90 otherwise, or all at once from the page's refresh
-  button. The page stops asking while its tab is hidden.
-- A worktree that never ran has no slot, so the page shows what it would
-  run without ports.
-- Links, here and in what `hydra up` prints, name `localhost` where services
-  are wired to each other by `127.0.0.1`. A dev server treats a page opened
-  by IP address as another origin: Next.js then refuses it the hot-reload
-  socket and its dev resources.
+`--watch` prints one per line, every second, and reads `refresh [ROOT]`
+lines on stdin. What it costs to know differs a lot, so each part has its
+own clock:
 
-It isn't part of the generated file. To have it up whenever main is, add it
-to the stack file as an ordinary process (`command: hydra ui --no-open`).
+- Process states: every second, from the process-compose servers. Memory
+  (each process with its children: process-compose reports the process
+  alone, which for a wrapped command is the wrapper): every 5 seconds.
+- A worktree's plan, which walks its working tree for untracked files:
+  every 30 seconds while its stack runs, every 2 minutes otherwise, and at
+  once after a commit in it or in main.
+- Where it stands against main (behind, ahead, the trial merge): when its
+  HEAD, main's or its parent's moves, and otherwise every 2 minutes, for
+  uncommitted work, which keeps an update away.
+- Which worktrees there are: every second (`git worktree list`).
+
+Slow parts run in the background, four at a time, and never hold up a
+snapshot: they show up in the next. Git runs with `GIT_OPTIONAL_LOCKS=0`,
+so polling never takes `index.lock` from someone's commit. With 30
+worktrees, 6 of them up, a watch takes about a tenth of one core. A
+worktree that never ran has no slot (0), so it shows what it would run
+without ports. Nothing in it takes a slot.
+
+Links, in the snapshot's `url` and in what `hydra up` prints, name
+`localhost` where services are wired to each other by `127.0.0.1`. A dev
+server treats a page opened by IP address as another origin: Next.js then
+refuses it the hot-reload socket and its dev resources.
+
+### The dashboard
+
+Bare `hydra`, when stdin and stdout are terminals and the stack file has
+an `x-hydra` block, opens a dashboard of main and every worktree. Anything
+else (an agent's shell, a script, a pipe, any argument) gets what bare
+`hydra` always was, process-compose with no arguments, so nothing that
+scripts hydra changes. process-compose's own TUI on a stack is `hydra up`,
+or `hydra attach` on one that runs.
+
+Three layers, each doing one thing:
+
+- **Go** knows everything: the snapshot above.
+- **The dashboard** only draws `hydra status --json --watch` and runs
+  hydra commands. It is an Ink (React) app in `tui/`, bundled into one file
+  that the binary embeds (`cmd/hydra/dashboard.mjs`, committed, so `go
+  build` needs no npm), written to the user's cache under a name that
+  changes with its contents, and run with node (20+; hydra says so when
+  node is missing or older).
+- **Every key is the command an agent would type**, in the checkout it is
+  about: `u` `hydra up -D`, `d` `hydra down`, `r` `hydra process restart
+  NAME`, `l` `hydra process logs NAME -f`, `f` a problem's `run`, `m`
+  `hydra update --here`, `U` `hydra update`, `⏎` `hydra attach`. So the
+  dashboard can do nothing a person or an agent can't do without it, and a
+  fix to a command reaches both. What stops a stack, runs a fix or moves a
+  branch asks first; `m` and `U` show their dry run as the question. After
+  a command, the dashboard asks the watch to read that checkout again.
+
+Opening a stack hands the terminal to `hydra attach` and takes it back
+when that ends. In process-compose's attach mode, F10 or ctrl-c asks
+"Detach from the remote project?", and Yes ends the attach and leaves the
+stack running: that is the way back, and the help and the title say so.
+(`q` does nothing there.) Commands that only print run in the background,
+with their last line as the result and their output shown when they fail.
+
+Making and removing worktrees is not hydra's job: the tool that runs the
+agents does it, and the dashboard shows a new worktree within a second and
+a removed one goes, cleaned up as any removed worktree is.
+
+It replaced a local web page (`hydra ui`) that served the same facts. The
+page was a second program to keep up with every fact (an HTML file and a
+JSON endpoint), it only read, and it needed a browser beside the terminal
+where the work happens. Acting on what it showed meant copying a command
+into a shell. The dashboard sits where the commands run, and the JSON it
+reads is the contract scripts and agents get too.
 
 ### In step with main
 
@@ -284,7 +342,9 @@ no cron. Fetching is fine (it moves `origin/main` only).
    files are restarted there, in the same way as in main.
 
 `--dry-run` prints all of this without doing it, `--main-only` skips step 3,
-`--no-pull` step 1. One update runs at a time per repository (a lock in the
+`--no-pull` step 1. `--here`, in a worktree, is step 3 for that worktree
+alone: main isn't pulled and its stack is left alone, for when one branch
+needs main's latest without moving anyone else's. One update runs at a time per repository (a lock in the
 shared `.git` directory). Conflicts, generated files and pushing stay with
 the person or agent who owns the branch.
 
@@ -317,9 +377,10 @@ checked out) are not parents: from ancestry alone a sibling looks the same as
 a parent that moved on. A branch made with `git checkout -b b2` while on b1
 records "Created from HEAD"; once b1 gets new commits, b2 needs `parent: b1`.
 
-Commands of its own: `hydra status` (is it all up and in step), `hydra ui`
-(the same as a web page), `hydra update` (move main and bring everything
-along), `hydra plan` (what runs where, and why), `hydra render` (the
+Commands of its own: bare `hydra` (the dashboard), `hydra status` (is it
+all up and in step; `--json` for every checkout as data), `hydra update`
+(move main and bring everything along; `--here` merges main into one
+worktree only), `hydra plan` (what runs where, and why), `hydra render` (the
 generated file), `hydra slots` (which worktree has which slot, and freeing
 one), `hydra throttle` (machine-wide turns for a build step), `hydra trust` (the CA behind TLS fronts) and `hydra version` (the
 commit it was built from, read from the build's VCS stamp).
@@ -1106,8 +1167,8 @@ a JSON-lines file per local day, deleted after 30 days.
   (or a command override in the process-compose file).
 - **Idle stacks.** A worktree's stack runs until someone stops it or the
   worktree is removed. With many worktrees and agents that start stacks and
-  move on, memory fills up. `hydra down --worktrees` and the status page's
-  memory column are what there is; a watcher that stops a stack nobody has
+  move on, memory fills up. `hydra down --worktrees` and the memory the
+  dashboard shows are what there is; a watcher that stops a stack nobody has
   touched for some hours would need a definition of "touched" that doesn't
   stop one a person is clicking through.
 - **Ports are computed.** A slot's port can already be taken by another

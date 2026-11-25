@@ -16,6 +16,9 @@
   --run-bg: #e2f0e6;
   --edit: #9a5b00;
   --edit-bg: #f9eed8;
+  --bad: #b3261e;
+  --sel: #1d6a86;
+  --mag: #8a3f8f;
   --sans: "Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: light;
@@ -34,6 +37,9 @@
     --run-bg: #17271d;
     --edit: #deaa55;
     --edit-bg: #2a2212;
+    --bad: #f08a80;
+    --sel: #7cc4dc;
+    --mag: #d49ce0;
     color-scheme: dark;
   }
 }
@@ -50,6 +56,9 @@
   --run-bg: #17271d;
   --edit: #deaa55;
   --edit-bg: #2a2212;
+  --bad: #f08a80;
+  --sel: #7cc4dc;
+  --mag: #d49ce0;
   color-scheme: dark;
 }
 
@@ -266,6 +275,9 @@ pre.has-xh .ln:not(.xh) .k { color: var(--ink-3); }
 .table td:first-child { white-space: nowrap; }
 /* A table whose first column is prose, not a name: let it wrap. */
 .table.wrap td:first-child { white-space: normal; width: 32%; }
+.doc .table.wrap td:first-child code { white-space: normal; }
+/* A command too long for one line wraps wherever it must. */
+.doc code.long { white-space: normal; overflow-wrap: anywhere; }
 .table td .type { display: block; font-family: var(--mono); font-size: 12px; color: var(--ink-3); margin-top: 3px; }
 .table td.def { font-family: var(--mono); font-size: 13px; color: var(--ink-2); white-space: nowrap; }
 
@@ -311,6 +323,15 @@ pre.has-xh .ln:not(.xh) .k { color: var(--ink-3); }
   * { animation: none !important; transition: none !important; }
 }
 
-/* A screenshot in the docs */
-.shot { margin: 18px 0 22px; }
-.shot img { display: block; width: 100%; max-width: 660px; height: auto; border: 1px solid var(--line-2); border-radius: 6px; }
+/* A terminal screen, copied from a real run: the colors hydra's dashboard uses. */
+.term pre { font-size: 12.5px; line-height: 1.5; }
+.term pre b { font-weight: 500; }
+/* 100 columns fit the manual's text width at desktop; a phone scrolls the box. */
+.doc .term pre { font-size: 11px; padding-left: 12px; padding-right: 12px; }
+.term .c { color: var(--ink-3); }
+.term .x { color: var(--run); }
+.term .r { color: var(--bad); }
+.term .s { color: var(--sel); }
+.term .m { color: var(--mag); }
+
+kbd { font-size: 0.82em; padding: 0 5px; border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 3px; background: var(--panel); white-space: nowrap; }

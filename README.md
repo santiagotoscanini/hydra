@@ -26,6 +26,9 @@ brew upgrade --fetch-HEAD santiagotoscanini/tap/hydra
 hydra version                                      # which build, which process-compose
 ```
 
+The dashboard (bare `hydra` in a terminal) needs Node.js 20 or later; every
+command works without it.
+
 Working on hydra itself: `make link` puts this checkout's build on PATH as
 `hydra` (and unlinks Homebrew's), `make build` refreshes it, `make unlink`
 goes back.
@@ -46,18 +49,20 @@ They mean the same thing.
 
 Hydra wraps process-compose. Add `x-hydra` fields to the existing
 `process-compose.yaml` (which services own which paths, which env vars point
-at which service), then run `hydra` wherever you'd run `process-compose` (a mistyped command is
-refused, where process-compose would start the stack):
+at which service), then run `hydra` wherever you'd run `process-compose` (a
+mistyped command is refused, where process-compose would start the stack).
+Bare `hydra` in a terminal opens [the dashboard](#the-dashboard):
 
 | You want to | Run | Where |
 |---|---|---|
 | Start the full stack | `hydra up -D` | the main checkout |
 | Start a branch's stack | `hydra up -D` | its worktree |
 | Know when it is ready, or what broke | `hydra status --wait` | the checkout you started |
-| See every worktree at once | `hydra ui` (a local web page), `hydra status --all` | anywhere |
+| See every worktree at once, and act on it | `hydra` (the dashboard), `hydra status --all` | anywhere |
 | Look at a process | `hydra attach`, `hydra process logs web` | the checkout |
 | Also run a service the branch didn't change | `hydra up worker` | the worktree |
 | Bring main and the worktrees to the latest commit | `hydra update` (`--dry-run` first) | anywhere |
+| Merge main into one worktree, and move nothing else | `hydra update --here` | the worktree |
 | See what would run, and why | `hydra plan` | the checkout |
 | Stop one stack | `hydra down` | its checkout |
 | Stop every worktree's stack | `hydra down --worktrees` | anywhere |
@@ -142,7 +147,7 @@ If the stack is already up, nothing new starts: `hydra up -D` says so, plain
 `hydra up` opens the running stack's terminal UI, and `hydra up NAME` adds
 NAME to it.
 
-In the main checkout `hydra` runs the whole file, with two differences from
+In the main checkout `hydra up` runs the whole file, with two differences from
 plain process-compose. `watch` blocks are dropped: main's code only changes
 on `hydra update`, which restarts what changed, in order. And a process
 with `baseline_command` runs that instead of its `command`, for a build that
@@ -203,18 +208,40 @@ writes to the worktree's log when main's stack stops answering or the
 branch falls out of step. The manual lists
 [every message](https://hydra.toscanini.me/docs/#messages) with its fix.
 
-`hydra ui` shows all of it in the browser, for the main checkout and every
-worktree at once: which services each one runs and which it takes from main,
-their state, ports (as links), memory, the commit each is on, how far it is
-from main, and the same problems with their fixes. The page keeps itself up
-to date. It listens on localhost:4937 (`--port` changes it; a second
-repository takes the next free port) and only reads. Run it when you want
-it, or keep it up with main's stack as one more process:
+`hydra status --json` prints all of it, for main and every worktree, as
+one JSON object: what each runs and takes from main, its processes, its
+problems with their fixes (and the fix as a command when it is a hydra one),
+how far it is from main and what `hydra update` would do to it.
+`--watch` prints one every second.
 
-```yaml
-hydra-ui:
-  command: hydra ui --no-open
+### The dashboard
+
+Bare `hydra` in a terminal opens a dashboard of main and every worktree,
+built on `hydra status --json --watch`: each checkout's slot, whether its
+stack is up, what it runs here, how it stands against main (behind, a
+conflict, stacked on another branch), and for the chosen one its services
+and the problems with their fixes.
+
 ```
+hydra  main up · 2/4 worktrees up · read now  /Users/me/code/shop
+   CHECKOUT           SLOT STACK     RUNS HERE            VS MAIN
+   main               0    up        4/4 ok
+ * shop-cart          1    up        web                  2↑
+   shop-checkout      -    down      api,web              conflicts(1) 1↓ 1↑
+▸  shop-notes         2    failing   api                  1↓ 1↑
+   shop-search        -    down      web                  1↓ 2↑ on cart
+```
+
+Each key runs the hydra command an agent would type, in the chosen
+checkout: `u` `hydra up -D`, `d` `hydra down`, `r` `hydra process restart`,
+`l` `hydra process logs -f`, `f` a problem's fix, `m` `hydra update --here`,
+`U` `hydra update` (both after their dry run), `R` reads everything again,
+`?` lists the keys, `q` quits and leaves every stack running. `⏎` opens the
+stack in `process-compose attach`; F10 or ctrl-c, then Yes, comes back with
+the stack still running. Whatever stops a stack or moves a branch asks
+first. It needs Node.js 20+; without a terminal (an agent, a script) or
+with any argument, `hydra` is process-compose as before, and process-compose's
+own TUI on a stack is `hydra up` or `hydra attach`.
 
 ### Watching
 
@@ -317,6 +344,9 @@ pulled some other way, `hydra status` says which processes still run the old
 code, and `hydra update` restarts exactly those.
 
 `--main-only` leaves the worktrees alone, `--no-pull` skips the pull.
+`hydra update --here`, in a worktree, does only step 3, for that worktree:
+it merges main (or the branch it is stacked on) and restarts what the merge
+touched there. Main isn't pulled.
 `./examples/demo/update.sh` runs all of this on a throwaway repository.
 
 ### Stopping and cleaning up
@@ -384,7 +414,7 @@ process-compose was started some other way and ran into a leftover,
 main ← b1 (api) ← b2 (worker) ← b3 (web)      each in its own worktree
 ```
 
-Running `hydra` in b3's worktree:
+Running `hydra up` in b3's worktree:
 
 | Layer | Diffed against | Its diff holds | Runs |
 |---|---|---|---|
@@ -397,7 +427,7 @@ Running `hydra` in b3's worktree:
   worktree, so an agent editing b2's worktree reaches the worker through the
   worker's own reload.
 - Everything runs in b3's process-compose project: one slot, one set of logs.
-  b1 and b2 don't need to run `hydra` themselves.
+  b1 and b2 don't need to run `hydra up` themselves.
 - `hydra-watch` polls every worktree in the stack, so an edit in b1's
   worktree starts or stops services in b3's project.
 
@@ -589,7 +619,8 @@ web-b worktree : web-b(slot 1, :20101) -> api(slot 1, :20110) -> db(slot 0, :200
 `./examples/demo/stack.sh` builds a throwaway stack of worktrees and shows
 the watcher starting and stopping services as files change in them.
 `./examples/demo/routed.sh` shows one frontend serving every worktree, and
-`./examples/demo/tls.sh` a TLS front. `./examples/demo/update.sh` is the
+`./examples/demo/tls.sh` a TLS front, and `./examples/demo/dashboard.sh`
+drives the dashboard in tmux. `./examples/demo/update.sh` is the
 end-to-end test: `hydra status`, the checks before `hydra up`,
 `hydra update`, a second start, the order in which an edit's services
 start, a removed worktree, a killed process-compose and
