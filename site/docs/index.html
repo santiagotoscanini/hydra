@@ -42,6 +42,7 @@
   <a href="#updating">Updating main</a>
   <a href="#cleanup">Stopping and cleaning up</a>
   <a href="#agents">With coding agents</a>
+  <a href="#mcp">For agents: hydra mcp</a>
   <a href="#troubleshooting">When something is wrong</a>
   <a href="#journal">The journal</a>
   <h4>How it works</h4>
@@ -905,12 +906,114 @@ $ hydra down             # when the work is done
 - When you are done: `hydra down`.
 </pre>
     </div>
+    <p>An agent whose tool speaks MCP can use <a href="#mcp"><code>hydra mcp</code></a> instead. It gets the same commands as tools, and those refuse to touch main's stack.</p>
     <p><a href="#dashboard">The dashboard</a> is for you; an agent gets the same facts from <code>hydra status</code> (<code>--all</code> for every worktree, <code>--json</code> to parse). Each key of the dashboard runs one of these commands, so whatever an agent can do, you can do from there, and the other way round. Making and removing worktrees is left to git or the tool that manages them: hydra shows a new worktree within a second, and cleans up after a removed one.</p>
     <p>Two things hydra does so that this holds:</p>
     <ul>
       <li>It reads git without taking the index lock, so the watcher never collides with an agent's commits.</li>
       <li>It starts process-compose without the variables that mark an agent's shell, so a stack an agent started behaves like the one you start.</li>
     </ul>
+  </section>
+
+  <section id="mcp">
+    <h2>For agents: hydra mcp</h2>
+    <p><code>hydra mcp</code> is an <a href="https://modelcontextprotocol.io">MCP</a> server for coding agents. The agent gets the commands above as tools: <code>up</code>, <code>wait</code>, <code>status</code>, <code>logs</code>, <code>restart</code>, <code>down</code>. It calls them instead of typing commands into a shell, and it gets typed answers back. With a shell, agents get things wrong in ways that cost you. They run process-compose themselves, which starts everything on main's ports. They stop main's stack because theirs looks broken. They run <code>supabase stop</code> on the database everyone uses. A tool can only start, stop or restart the agent's own worktree. In the main checkout it refuses, and tells the agent to ask you.</p>
+    <p>The agent's tool (Claude Code, Codex, T3) starts <code>hydra mcp</code> once per session, in the directory the session runs in. The server works on the checkout that directory is in, the way every hydra command does. Register it once:</p>
+    <div class="code">
+<pre data-lang="sh">
+$ claude mcp add --scope user hydra -- hydra mcp     # Claude Code, every project
+$ codex mcp add hydra -- hydra mcp                   # Codex
+</pre>
+    </div>
+    <p>To set it up for everyone who works in one repository, commit a <code>.mcp.json</code> at its root. Claude Code reads it:</p>
+    <div class="code">
+      <div class="file">.mcp.json<button class="copy">copy</button></div>
+<pre data-lang="text">
+{
+  "mcpServers": {
+    "hydra": { "command": "hydra", "args": ["mcp"] }
+  }
+}
+</pre>
+    </div>
+    <p>It speaks MCP over stdin and stdout (JSON-RPC 2.0, protocol version <code>2025-06-18</code>, or the client's own if it is an older one hydra knows). Only protocol messages go to stdout. What hydra prints along the way goes to stderr, where the agent's tool logs it. If the first line of <code>status</code> names a checkout other than the agent's, the tool started the server somewhere else. Set the server's working directory in the tool's settings.</p>
+
+    <h3>The tools</h3>
+    <p>Each tool returns a short text to read, then the same answer as JSON (MCP's <code>structuredContent</code>). When a tool fails, the error text is the one hydra printed, unchanged.</p>
+    <div class="table wrap"><table>
+      <tr><th>Tool</th><th>What it does</th><th>In main</th></tr>
+      <tr><td><code>status</code></td><td><code>hydra status</code> as data. In a worktree: each service, where it runs (here or main's copy), its port, URL and state; how far behind main the branch is; and every problem with its fix. These are the texts of <a href="#messages">every message</a>. The JSON has the same fields as a worktree in <a href="#json"><code>hydra status --json</code></a>.</td><td>Reads main's stack</td></tr>
+      <tr><td><code>up</code></td><td><code>hydra up -D</code>. It returns once process-compose holds the processes, or with the error that stopped the start, such as one of the <a href="#status">checks against main</a>. A stack that is already up is fine. <code>services: ["web"]</code> also runs those here, as <code>hydra up web</code> does.</td><td>Refused</td></tr>
+      <tr><td><code>wait</code></td><td>Waits until the named processes (<code>processes</code>, or all of them) are ready, healthy or finished. It stops early when one fails, and otherwise at <code>timeout_seconds</code> (300 by default). It returns each process's state, and the last 30 lines of output of each one that isn't ready.</td><td>Reads main's stack</td></tr>
+      <tr><td><code>logs</code></td><td>The last <code>lines</code> lines (100 by default) of one <code>process</code>. With <code>contains</code>: only the lines that contain that string, out of the last 5000. With <code>main: true</code>: main's copy of the process.</td><td>Reads main's stack</td></tr>
+      <tr><td><code>restart</code></td><td><code>hydra process restart NAME</code>. Call <code>wait</code> after it.</td><td>Refused</td></tr>
+      <tr><td><code>down</code></td><td><code>hydra down</code>: stops this worktree's stack, and nothing else.</td><td>Refused</td></tr>
+      <tr><td><code>update_here</code></td><td><a href="#update-here"><code>hydra update --here</code></a>: merges main into this worktree and restarts what that touched. <code>dry_run: true</code> says what it would do. A conflict or uncommitted work comes back as an error, left to the agent.</td><td>Refused</td></tr>
+      <tr><td><code>main_status</code></td><td>Main's stack, read-only: whether it is up, its commit, each process's state, its problems. From a worktree, also which of main's services this worktree uses, and why.</td><td>Reads main's stack</td></tr>
+    </table></div>
+    <p>What the tools answer that isn't a message of <code>hydra status</code>:</p>
+    <div class="msgs">
+      <div><p class="said">refused: this is the main checkout (/Users/you/shop). Ask the developer: main's stack is theirs. These tools change only a worktree's own stack; main_status, status and logs read main's.</p><p><code>up</code>, <code>down</code>, <code>restart</code> or <code>update_here</code>, called with the server in the main checkout. The agent should pass the request on to you.</p></div>
+      <div><p class="said">this worktree's stack isn't running (/Users/you/shop-orders); start it with the up tool</p><p><code>wait</code>, <code>logs</code> or <code>restart</code> before <code>up</code>. In the main checkout it reads: <code>main's stack isn't running (…). Ask the developer to start it: it is theirs</code>.</p></div>
+      <div><p class="said">no process named nope in this stack; it has: api, db, hydra-watch, worker</p><p><code>wait</code> was given a name the stack doesn't have. A service that runs in main isn't a process of the worktree's stack.</p></div>
+      <div><p class="said">hydra up -D failed (exit status 1):</p><p>Followed by what <code>hydra up -D</code> printed: the ✗ lines of <a href="#messages">the checks</a>, with their fixes. <code>down</code>, <code>restart</code> and <code>update_here</code> fail the same way, with their own command's output.</p></div>
+    </div>
+    <p>One session, from a worktree that changed the API and a worker (<code>examples/demo/mcp.sh</code>):</p>
+    <div class="code">
+<pre data-lang="text">
+status
+  worktree /Users/you/shop-orders (orders), no slot yet, stack not started
+    api  here  not started
+    db  main :24030  running
+    worker  here (off)  not started
+  ok: everything this worktree uses is up and in step with main.
+up
+  hydra: slot 1, running here: api; off until started (`hydra up NAME`): worker
+  this worktree's stack is up; call wait for it to be ready.
+wait {"timeout_seconds": 60}
+  ready after 1s:
+    api  ready
+    db  running
+    hydra-watch  running
+up {"services": ["worker"]}, then wait {"processes": ["worker"]}
+  not ready after 2s: worker failed or stayed off:
+    worker  exited with code 3
+
+  worker's last output:
+    | connecting to the queue
+    | fatal: the queue refused the connection
+</pre>
+    </div>
+
+    <h3>What to tell the agent</h3>
+    <p>The server sends the agent brief instructions when it starts: check <code>status</code> first, then <code>up</code>, then <code>wait</code>; never start process-compose or stop main's stack. In the repository's <code>AGENTS.md</code>, one line is enough:</p>
+    <div class="code">
+      <div class="file">AGENTS.md<button class="copy">copy</button></div>
+<pre data-lang="text">
+- Run the app only through the hydra MCP tools (status, up, wait, logs, restart, down).
+  If main's stack is down or broken, tell me what main_status says; don't fix it yourself.
+</pre>
+    </div>
+
+    <h3>Rules that keep agents off the shell commands</h3>
+    <p>To make sure, deny the commands that do the most damage in the project's agent settings. A shell rule can't see which checkout a command runs in, so it can't allow <code>hydra down</code> in a worktree and block it in main. Deny <code>hydra down</code> everywhere. The <code>down</code> tool can tell the two apart. In Claude Code, in the project's <code>.claude/settings.json</code>:</p>
+    <div class="code">
+      <div class="file">.claude/settings.json<button class="copy">copy</button></div>
+<pre data-lang="text">
+{
+  "permissions": {
+    "deny": [
+      "Bash(process-compose:*)",
+      "Bash(hydra down:*)",
+      "Bash(hydra update:*)",
+      "Bash(supabase stop:*)",
+      "Bash(supabase db reset:*)"
+    ]
+  }
+}
+</pre>
+    </div>
+    <p><code>hydra update</code> pulls main and merges into every worktree. The agent gets <code>update_here</code> for its own. Other tools write rules their own way; the commands to deny are the same.</p>
   </section>
 
   <section id="troubleshooting">
@@ -1477,6 +1580,7 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>hydra slots free [PATH]</code></td><td>Stops a worktree's stack and frees its slot. The default is this worktree.</td></tr>
       <tr><td><code>hydra throttle NAME N -- COMMAND…</code></td><td>Runs <code>COMMAND</code> once fewer than <code>N</code> commands of the same <code>NAME</code> run on this machine, and waits its turn otherwise. For the build step of a service's command. See <a href="#many">many worktrees at once</a>.</td></tr>
       <tr><td><code>hydra trust</code></td><td>Makes this machine trust the local CA behind <a href="#tls">TLS fronts</a>. <code>--remove</code> undoes it; <code>--print</code> prints the CA's file.</td></tr>
+      <tr><td><code>hydra mcp</code></td><td>An MCP server on stdin and stdout, for coding agents: tools that start, wait for, read, restart and stop this checkout's stack, and refuse to change main's. See <a href="#mcp">for agents: hydra mcp</a>.</td></tr>
       <tr><td><code>hydra version</code></td><td>The commit hydra was built from, and the process-compose it found.</td></tr>
       <tr><td><code>hydra help</code></td><td>A summary of all of this.</td></tr>
     </table></div>
@@ -1537,6 +1641,7 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>$TMPDIR/hydra-&lt;hash&gt;.sock</code></td><td>A worktree's process-compose socket. The name comes from the worktree's path.</td></tr>
       <tr><td><code>$TMPDIR/hydra-&lt;hash&gt;.pids</code></td><td>What process-compose runs in that checkout, name and pid, written by its watcher (the router, in main) whenever it changes, and removed when the stack is stopped the regular way. It is how hydra finds what a <a href="#cleanup">killed process-compose</a> left running.</td></tr>
       <tr><td><code>$TMPDIR/hydra-throttle-NAME-I.lock</code></td><td>Empty. One per turn of <a href="#many"><code>hydra throttle NAME</code></a>; a command holds a lock on one while it runs, and the lock goes when the command ends, however it ends.</td></tr>
+      <tr><td><code>$TMPDIR/hydra-mcp-*.out</code></td><td>What a hydra command that a <a href="#mcp"><code>hydra mcp</code></a> tool ran printed, while it runs. It is deleted once the tool has read it.</td></tr>
       <tr><td><code>$TMPDIR/hydra-&lt;hash&gt;.reap</code></td><td>Empty, and there only while hydra cleans up after that worktree, so that one process does it at a time.</td></tr>
       <tr><td><code>.env.local</code>, one block<span class="type">in a worktree</span></td><td>With a Supabase of its own: the stack's settings, between two marker lines, so <code>supabase</code> commands typed there reach it. Removed when the worktree goes back to main's database.</td></tr>
       <tr><td><code>.process-compose/supabase-branch</code><span class="type">in a worktree</span></td><td>With a Supabase of its own: there while the database is started and migrated, which is what the services that read it wait for. It holds the branch the stack was started for.</td></tr>

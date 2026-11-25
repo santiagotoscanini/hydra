@@ -9,10 +9,10 @@ main checkout's copies of the rest. See `README.md` for what it does and
 
 | Path | What |
 |---|---|
-| `cmd/hydra/` | The CLI: the process-compose wrapper (`wrap.go`), `plan`/`render`/`slots`, the checks behind `hydra status` and `hydra up` (`check.go`, `status.go`, and `ports.go`, which names the program holding a port), `hydra status --json` and its `--watch` stream (`snapshot.go`), bare `hydra`, which runs the dashboard (`dashboard.go`, and `dashboard.mjs`, the bundle of `tui/`, which is embedded in the binary), `hydra update` (`update.go`), cleaning up after removed worktrees (`reap.go`) and after a killed process-compose (`leftover.go`), the certificate behind TLS fronts and `hydra trust` (`tls.go`), `hydra version` (`version.go`), and the processes hydra adds (`watch.go`, `router.go`, `prepare.go`, `supabase.go`) |
+| `cmd/hydra/` | The CLI: the process-compose wrapper (`wrap.go`), `plan`/`render`/`slots`, the checks behind `hydra status` and `hydra up` (`check.go`, `status.go`, and `ports.go`, which names the program holding a port), `hydra status --json` and its `--watch` stream (`snapshot.go`), bare `hydra`, which runs the dashboard (`dashboard.go`, and `dashboard.mjs`, the bundle of `tui/`, which is embedded in the binary), `hydra update` (`update.go`), cleaning up after removed worktrees (`reap.go`) and after a killed process-compose (`leftover.go`), the certificate behind TLS fronts and `hydra trust` (`tls.go`), `hydra mcp`, the MCP server for coding agents (`mcp.go`), `hydra version` (`version.go`), and the processes hydra adds (`watch.go`, `router.go`, `prepare.go`, `supabase.go`) |
 | `internal/` | `config` (the `x-hydra` keys), `plan` (what runs where, and what is out of step with main), `render` (the generated file), `stack` (stacked worktrees), `router` + `routes` + `hook` (routed services), `pc` (process-compose's HTTP API), `slots`, `gitx`, `glob`, `changes` |
 | `tui/` | The dashboard: an Ink (React) app in TypeScript. `npm run build` bundles it into `cmd/hydra/dashboard.mjs` and `dashboard.sum` (commit both; `make build` runs it); it reads `hydra status --json --watch` and runs hydra commands, nothing else |
-| `examples/demo/` | Mock stacks and scripts that run hydra end to end (`run.sh`, `stack.sh`, `routed.sh`, `update.sh`, `tls.sh`, and `dashboard.sh`, which drives the dashboard in tmux) |
+| `examples/demo/` | Mock stacks and scripts that run hydra end to end (`run.sh`, `stack.sh`, `routed.sh`, `update.sh`, `tls.sh`, `mcp.sh`, which talks MCP to `hydra mcp`, and `dashboard.sh`, which drives the dashboard in tmux) |
 | `site/` | The site at <https://hydra.toscanini.me>: static HTML, no build step, deployed by `.github/workflows/pages.yml` on push to `main` |
 
 ## Keep the docs in sync with the code
@@ -49,7 +49,7 @@ sample config it mirrors is the quick start in `site/docs/index.html`.
 - The demos: `./examples/demo/run.sh`, `./examples/demo/stack.sh`,
   `./examples/demo/routed.sh`, `./examples/demo/update.sh`,
   `./examples/demo/tls.sh`, `./examples/demo/dashboard.sh` (which needs
-  tmux and node). Each builds hydra into a throwaway directory of its
+  tmux and node), `./examples/demo/mcp.sh` (which needs python3). Each builds hydra into a throwaway directory of its
   own (never `bin/`, which may be the `hydra` on PATH) and cleans up
   after itself. `tls.sh` uses a CA of its own (`HYDRA_TLS_DIR`), never the
   user's. `update.sh` checks what every step printed and exits non-zero
@@ -57,8 +57,10 @@ sample config it mirrors is the quick start in `site/docs/index.html`.
   before `hydra up`, `hydra update`, a second start, the order in which an
   update starts things, a removed worktree, a killed process-compose (alone,
   with its watcher, and then removed) and `hydra down --worktrees`.
+  `mcp.sh` is the end-to-end test of `hydra mcp`: it talks MCP to it the
+  way an agent's tool does, in a worktree and in main.
 - CI (`.github/workflows/test.yml`) runs the tests, the dashboard's
-  checks and all six demos on every push to `main`.
+  checks and all seven demos on every push to `main`.
 - What needs the Supabase CLI isn't covered by either: a worktree's own
   Supabase (`cmd/hydra/supabase.go`, `reap.go`). After a change there, run
   a real stack in a throwaway project under the home directory on ports

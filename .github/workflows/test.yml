@@ -46,7 +46,7 @@ jobs:
       - run: npm run check
 
   # The demos run hydra end to end against process-compose, in throwaway
-  # repositories. update.sh and tls.sh check what every step printed.
+  # repositories. update.sh, tls.sh and mcp.sh check what every step printed.
   demos:
     runs-on: macos-latest
     steps:
@@ -61,3 +61,4 @@ jobs:
       - run: ./examples/demo/update.sh
       - run: ./examples/demo/tls.sh
       - run: ./examples/demo/dashboard.sh
+      - run: ./examples/demo/mcp.sh

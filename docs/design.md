@@ -273,6 +273,52 @@ where the work happens. Acting on what it showed meant copying a command
 into a shell. The dashboard sits where the commands run, and the JSON it
 reads is the contract scripts and agents get too.
 
+### For agents: `hydra mcp`
+
+Agents drive most of the stacks, and given a shell they run the wrong
+command often enough to cost the developer an afternoon. They start
+`process-compose` by hand in a worktree, which runs everything from the
+plain file on main's ports. They `hydra down` in the main checkout because
+their own stack "looks broken". They `supabase stop` or `supabase db reset`
+the database every worktree shares. Each one is a command the agent was
+allowed to type. A rule in an `AGENTS.md` lowers the odds, and it isn't a
+guarantee.
+
+`hydra mcp` gives them the same commands as MCP tools over stdio:
+`status`, `up`, `wait`, `logs`, `restart`, `down`, `update_here`,
+`main_status`. The harness starts it once per session in the agent's
+worktree, and it serves the checkout its working directory is in, as any
+hydra command does. Rules:
+
+- **What changes a stack never changes main's.** `up`, `down`, `restart`
+  and `update_here` refuse in the main checkout and tell the agent to ask
+  the developer. Reading main (`main_status`, `logs` with `main: true`) is
+  allowed: an agent that can say why main is down helps more than one that
+  can't. With the tools in place, a project can deny the shell commands
+  (`process-compose`, `hydra down`, `hydra update`, `supabase stop`,
+  `supabase db reset`). A shell rule can't tell which checkout a command
+  runs in. The tool can.
+- **The actions run hydra itself** (`hydra up -D`, `hydra down`,
+  `hydra process restart`, `hydra update --here`) as a child, so they
+  behave exactly as the commands do, checks before a start included. Their
+  output comes back verbatim, and a failure is the tool's error. The child
+  writes to a file, not a pipe: a process-compose started with `-D` keeps
+  what it inherited open, and the read of a pipe would only end with the
+  stack. One action runs at a time.
+- **The reads call the code behind `hydra status` and its snapshot**, for
+  this checkout only, so the problems and fixes are the texts of every
+  other surface. `wait` uses `hydra status --wait`'s rule: a process that
+  stays failed for three polls in a row has failed. One that is between
+  restarts looks failed for a moment.
+- **stdout is the protocol's.** Much of hydra prints to stdout, so while
+  the server runs `os.Stdout` is stderr and the messages go to the stdout
+  the process started with. The tests and `examples/demo/mcp.sh` check
+  that every line on stdout is a JSON-RPC message.
+- **Hand-written, no SDK.** The part of MCP a tools-only server needs is
+  `initialize`, `tools/list`, `tools/call`, `ping` and a few
+  notifications, one JSON object per line: about 200 lines. An SDK would
+  bring more dependencies than hydra has.
+
 ### In step with main
 
 Let B be the commit where the branch (or the bottom of its stack) left main,
