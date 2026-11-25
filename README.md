@@ -355,6 +355,11 @@ touched there. Main isn't pulled.
 every worktree's stack and leaves main's running: a stack costs memory for
 as long as it is up, and nothing stops an idle one for you.
 
+A stop never hangs in silence: every 10 seconds it says what it waits for
+(`hydra: waiting for redis (40s)`), and a process still stopping after 60
+seconds (or its own `shutdown.timeout_seconds` and 10 more) is killed with
+its process group, said on the screen and written to the journal.
+
 A worktree can be removed without stopping anything first, with
 `git worktree remove` or by the tool that manages your worktrees. Its
 watcher notices within a second, and a few seconds later:

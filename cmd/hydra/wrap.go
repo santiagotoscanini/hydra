@@ -141,7 +141,8 @@ func wrap(args []string) error {
 	if a.sub == "down" && contains(a.rest, "--worktrees") {
 		return downWorktrees(co)
 	}
-	if a.sub == "down" && !ownServer(co, a.rest).Alive() {
+	server := ownServer(co, a.rest)
+	if a.sub == "down" && !server.Alive() {
 		return downStopped(co, a.file)
 	}
 	if a.sub == "process" && len(a.rest) > 1 && (a.rest[0] == "restart" || a.rest[0] == "start") {
@@ -222,6 +223,9 @@ func wrap(args []string) error {
 
 	if err := os.Chdir(co.Root); err != nil { // relative log and watch paths
 		return err
+	}
+	if a.sub == "down" && os.Getenv("HYDRA_DRY_RUN") == "" {
+		return downWatched(pc, final, server, os.Stderr)
 	}
 	return execPC(pc, final)
 }
@@ -537,12 +541,13 @@ func downWorktrees(co gitx.Checkout) error {
 			continue
 		}
 		fmt.Printf("stopping %s ... ", filepath.Base(wco.Root))
-		if err := downSocket(sock, 3*time.Minute); err != nil {
+		kills, err := downSocket(sock, 3*time.Minute)
+		if err != nil {
 			fmt.Println("FAILED:", err)
 			failed++
 			continue
 		}
-		fmt.Println("stopped")
+		fmt.Println("stopped" + killedNote(kills))
 		stopped++
 	}
 	switch {

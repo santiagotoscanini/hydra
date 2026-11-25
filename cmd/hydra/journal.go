@@ -24,6 +24,7 @@ import (
 //	usage    every minute, what each stack's processes hold (memory, CPU),
 //	         and in main the machine's free memory and swap
 //	log      every line the watcher and the router print
+//	killed   a process `hydra down` killed because it didn't stop
 
 // openJournal starts this process's journal for the checkout that holds
 // dir. Outside a repository there is none.

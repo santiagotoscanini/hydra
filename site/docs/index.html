@@ -520,6 +520,8 @@ ok: main's stack is up and runs what main has checked out.
       <div><p class="said">hydra: stopped what an earlier run of this stack left running: api (pid 4820), web (pid 4821)</p><p>Nothing to do. Printed by <code>hydra up</code>, <code>hydra down</code>, <code>hydra process restart</code> and <code>hydra process start</code> when they found what a killed process-compose had left, and stopped it.</p></div>
       <div><p class="said">hydra: stopped this worktree's Supabase stack, which an earlier run of this stack left up</p><p>Nothing to do. Printed by <code>hydra down</code> in a worktree whose process-compose was killed: only its shutdown would have stopped the database. The data is kept.</p></div>
       <div><p class="said">hydra: warning: this worktree's Supabase stack may still be up: …</p><p><code>hydra down</code> couldn't stop it; the reason follows (Docker isn't running, for one). <code>hydra up -D</code> and then <code>hydra down</code> stops it the regular way.</p></div>
+      <div><p class="said">hydra: waiting for redis (40s); then web</p><p>Printed by <code>hydra down</code> every 10 seconds while the stop takes long: the processes asked to stop that haven't exited yet, how long each has been at it, and those whose turn hasn't come. Nothing to do; see the next line.</p></div>
+      <div><p class="said">hydra: redis didn't stop within 60s of being asked to; killed it (pid 4790 and its process group)</p><p>A process took the stop signal and never exited (a Redis that "schedules" its shutdown and hangs, say), which would have held <code>hydra down</code> for good. After 60 seconds hydra sends SIGKILL to it and to what it started, the stop finishes, and the journal gets a <code>killed</code> event. A process that needs longer to stop cleanly gets it from its own <code>shutdown.timeout_seconds</code>: hydra then waits that long plus 10 seconds. <code>hydra down --worktrees</code> says the same on its line: <code>stopped (killed redis, which didn't stop within 60s)</code>.</p></div>
       <div><p class="said">hydra: warning: an earlier run of this stack left web running (node, pid 4821), and it didn't stop: kill -9 4821</p><p>The leftover survived being asked and being killed. Run the command shown, then start the service again.</p></div>
       <div><p class="said">hydra: every slot was taken; took slot 4 from shop-old, whose stack isn't running (it gets a slot again when it starts)</p><p>Nothing to do. Printed by <code>hydra up</code> when all <code>max_slots</code> slots were held. See <a href="#slots">slots</a>.</p></div>
       <div><p class="said">hydra: waited 41s for a turn to run go-build (at most 2 at a time on this machine)</p><p>Nothing to do. In a service's log, when its command uses <a href="#many"><code>hydra throttle</code></a> and other worktrees were building.</p></div>
@@ -790,6 +792,7 @@ stopped 2 worktree stacks; the main checkout's stack is untouched.
 </pre>
     </div>
     <p>Nothing is lost by stopping. <code>hydra up -D</code> in a worktree brings its stack back on the same ports.</p>
+    <p>A stop that takes long says what it waits for, every 10 seconds (<code>hydra: waiting for redis (40s)</code>). A process still stopping after 60 seconds is killed, with what it started, and hydra says so; one with a longer <code>shutdown.timeout_seconds</code> of its own gets that and 10 seconds more. See <a href="#messages">every message</a>.</p>
     <h3>When a worktree is removed</h3>
     <p>Remove a worktree the way you always do: <code>git worktree remove</code>, or the app that manages your worktrees. You don't have to stop anything first, and hydra needs no command. The worktree's watcher notices within a second, and a few seconds later:</p>
     <ol>
@@ -946,6 +949,7 @@ $ hydra down             # when the work is done
       <tr><td><code>usage</code></td><td>Once a minute for each stack that runs: the resident memory and CPU of each process and its children, and of the checkout's native Supabase stack, which runs detached. Main's also records the machine's free memory and swap.</td></tr>
       <tr><td><code>slot</code></td><td>A worktree takes its slot on <code>hydra up</code>, or the slot of a stopped one.</td></tr>
       <tr><td><code>start</code>, <code>log</code></td><td>The watcher, the router or the dashboard starts; every line the watcher and the router print.</td></tr>
+      <tr><td><code>killed</code></td><td><code>hydra down</code> killed a process that didn't stop within 60 seconds of being asked to (or its own <code>shutdown.timeout_seconds</code> and 10 more): its name, pid and how long it was given.</td></tr>
     </table></div>
     <div class="code">
 <pre data-lang="sh">

@@ -45,6 +45,14 @@ exception is bare `hydra` at a terminal (see [The dashboard](#the-dashboard)).
   nothing answers there and the recorded address does, with this checkout's
   file, hydra passes that address on: the stack is reached from any shell,
   whatever environment started it.
+- `hydra down` runs process-compose's `down` and watches the stack over its
+  API while it stops. process-compose waits for ever on a process that
+  takes the signal and never exits, unless it has a `shutdown.timeout_seconds`;
+  so hydra says every 10 s what it is still waiting for, and SIGKILLs the
+  process group of one that has been stopping for 60 s (or its own timeout
+  plus 10 s), says so, and journals a `killed` event. `--worktrees` does
+  the same for each worktree, and names what it killed on that worktree's
+  line.
 - `hydra down` on a stack that isn't running says so and exits 0.
   `hydra down --worktrees` stops every worktree's stack and leaves the main
   checkout's: nothing stops an idle stack by itself.

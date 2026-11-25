@@ -108,6 +108,8 @@ func bad(r journal.Record) bool {
 		return r.Str("level") == "error"
 	case "process":
 		return r.Str("health") == "failed" || r.Raw["output"] != nil
+	case "killed":
+		return true
 	case "log":
 		m := strings.ToLower(r.Str("msg"))
 		return strings.Contains(m, "fail") || strings.Contains(m, "error") || strings.Contains(m, "can't") || strings.Contains(m, "didn't")
@@ -170,6 +172,8 @@ func summary(r journal.Record) string {
 			s += "\n" + logIndent(strings.Join(out, "\n"))
 		}
 		return s
+	case "killed":
+		return fmt.Sprintf("%s (pid %d) killed after %ds: %s", r.Str("name"), int(r.Num("pid")), int(r.Num("waited_s")), r.Str("why"))
 	case "usage":
 		s := fmt.Sprintf("%.0f MB, %.0f%% CPU", r.Num("mb"), r.Num("cpu"))
 		if procs, ok := r.Raw["procs"].(map[string]any); ok {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -164,7 +165,7 @@ func reap(co gitx.Checkout, e slots.Entry, how reaping) (reaped, error) {
 	// with below, by id.
 	sock := socketFor(e.Root)
 	if c := pc.Unix(sock); c.Alive() {
-		if err := downSocket(sock, 2*time.Minute); err != nil {
+		if _, err := downSocket(sock, 2*time.Minute); err != nil {
 			return r, fmt.Errorf("stopping its stack: %w", err)
 		}
 		r.did = append(r.did, "stopped its stack")
@@ -352,24 +353,27 @@ func hasKind(st *config.Stack, kind string) bool {
 }
 
 // downSocket stops the process-compose project behind a worktree's socket
-// and waits until it is gone.
-func downSocket(sock string, timeout time.Duration) error {
+// and waits until it is gone. It returns what it had to kill (see
+// watchStop).
+func downSocket(sock string, timeout time.Duration) ([]killed, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "process-compose", "down", "-U", "-u", sock)
 	cmd.Env = withoutAgentMarks(os.Environ())
-	out, err := cmd.CombinedOutput()
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
 	c := pc.Unix(sock)
+	kills, err := watchStop(cmd, c, io.Discard)
 	for i := 0; i < 50 && c.Alive(); i++ {
 		time.Sleep(200 * time.Millisecond)
 	}
 	if c.Alive() {
 		if err != nil {
-			return fmt.Errorf("process-compose down: %v: %s", err, lastLine(out))
+			return kills, fmt.Errorf("process-compose down: %v: %s", err, lastLine(out.Bytes()))
 		}
-		return fmt.Errorf("process-compose still answers on %s after `down`", sock)
+		return kills, fmt.Errorf("process-compose still answers on %s after `down`", sock)
 	}
-	return nil
+	return kills, nil
 }
 
 func lastLine(out []byte) string {
