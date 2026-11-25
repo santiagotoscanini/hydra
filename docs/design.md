@@ -596,6 +596,14 @@ and data. Rendering adds to the worktree's process:
   <the slot's database>` (a resumed stack doesn't apply new migrations on
   its own). It refuses to run without stack mode, which would reach main's
   database.
+- The main checkout's Supabase isn't wrapped (the stack file's
+  `baseline_command` opens it by `--stack-id`), and a stack-mode start
+  appends to `supabase/.gitignore` there as well: a main with changes stops
+  `hydra update`. So main gets the same tidy at two moments: main's
+  `hydra-router` stats the file every two seconds and tidies when it
+  changed (and once when it starts), and `hydra update` tidies before it
+  checks that main is clean (`--dry-run` only says it would). A main
+  without a router gets the second only.
 - The shutdown command exports the same environment itself (a `supabase
   stop` without it stops the baseline's Supabase). The stack file's command
   runs between `hydra prepare supabase --stopping`, which skips it when the

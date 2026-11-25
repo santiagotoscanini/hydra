@@ -42,7 +42,7 @@ func TestTidySupabaseUndoesOnlyTheCLIsEdit(t *testing.T) {
 	path := filepath.Join(co.Root, "supabase", ".gitignore")
 
 	os.WriteFile(path, []byte(".temp\n.link.json\n..link.json.*.tmp\n.supabase.lock.*.tmp\n.supabase.lock.lease\n"), 0o644)
-	if err := tidySupabase(co); err != nil {
+	if _, err := tidySupabase(co); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(path); string(b) != ".temp\n" {
@@ -52,7 +52,7 @@ func TestTidySupabaseUndoesOnlyTheCLIsEdit(t *testing.T) {
 	if !strings.Contains(string(exclude), "**/supabase/supabase.lock\n") {
 		t.Errorf("exclude = %q", exclude)
 	}
-	if err := tidySupabase(co); err != nil { // idempotent
+	if _, err := tidySupabase(co); err != nil { // idempotent
 		t.Fatal(err)
 	}
 	if again, _ := os.ReadFile(filepath.Join(co.CommonDir, "info", "exclude")); string(again) != string(exclude) {
@@ -62,11 +62,63 @@ func TestTidySupabaseUndoesOnlyTheCLIsEdit(t *testing.T) {
 	// Someone's own edit stays, CLI lines and all.
 	mine := ".temp\nmy-file\n.link.json\n"
 	os.WriteFile(path, []byte(mine), 0o644)
-	if err := tidySupabase(co); err != nil {
+	if _, err := tidySupabase(co); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(path); string(b) != mine {
 		t.Errorf("a user's edit was undone: %q", b)
+	}
+}
+
+// The main checkout's Supabase is started by the stack file's own command,
+// which hydra doesn't wrap, and its start appends to supabase/.gitignore
+// there too: main's router puts the file back when it changes, and
+// `hydra update` does before it checks that main is clean.
+func TestMainGetsSupabaseGitignoreBack(t *testing.T) {
+	co := gitRepo(t)
+	if !co.IsMain() {
+		t.Fatal("gitRepo is meant to be a main checkout")
+	}
+	path := filepath.Join(co.Root, "supabase", ".gitignore")
+	edited := ".temp\n.link.json\n.supabase.lock.lease\n"
+
+	os.WriteFile(path, []byte(edited), 0o644)
+	w := &gitignoreWatch{co: co}
+	w.look()
+	if b, _ := os.ReadFile(path); string(b) != ".temp\n" {
+		t.Errorf("the router left the CLI's lines in main: %q", b)
+	}
+	os.WriteFile(path, []byte(edited), 0o644) // the next start
+	future := time.Now().Add(time.Minute)
+	os.Chtimes(path, future, future)
+	w.look()
+	if b, _ := os.ReadFile(path); string(b) != ".temp\n" {
+		t.Errorf("a second start's lines stayed: %q", b)
+	}
+
+	st, err := config.Parse([]byte("processes:\n  supabase:\n    command: supabase start\n    x-hydra: { kind: supabase, port: 44321 }\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(path, []byte(edited), 0o644)
+	ms := &mainState{target: &target{checkout: co, stack: st}, Dirty: []string{"api/main.go", "supabase/.gitignore"}}
+	if got := withoutCLIEdit(ms, true); strings.Join(got, ",") != "api/main.go" {
+		t.Errorf("dry run: dirty = %v", got)
+	}
+	if b, _ := os.ReadFile(path); string(b) != edited {
+		t.Errorf("a dry run changed the file: %q", b)
+	}
+	if got := withoutCLIEdit(ms, false); strings.Join(got, ",") != "api/main.go" {
+		t.Errorf("dirty = %v", got)
+	}
+	if b, _ := os.ReadFile(path); string(b) != ".temp\n" {
+		t.Errorf("update left the CLI's lines in main: %q", b)
+	}
+
+	// Someone's own edit is a change like any other.
+	os.WriteFile(path, []byte(".temp\nmine\n"), 0o644)
+	if got := withoutCLIEdit(ms, false); len(got) != 2 {
+		t.Errorf("a person's edit was dropped from the uncommitted files: %v", got)
 	}
 }
 

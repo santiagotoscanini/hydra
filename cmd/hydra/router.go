@@ -64,13 +64,20 @@ func routerCmd(args []string) error {
 	journal.Log("start", journal.Fields{"what": "router"})
 	logf("routing for %s", co.Root)
 	mon := newMonitor(mainClient(co.CommonDir), co.Main, true)
-	var killed atomic.Bool // main's process-compose was, as opposed to asking this router to stop
+	var killed atomic.Bool     // main's process-compose was, as opposed to asking this router to stop
+	var ignore *gitignoreWatch // main's Supabase start edits supabase/.gitignore
+	if st, err := config.Load(*file); err == nil && hasKind(st, config.KindSupabase) {
+		ignore = &gitignoreWatch{co: co}
+	}
 	go func(parent int) {
 		var started roster // what main's process-compose runs, as it last said
 		for tick := 0; !orphaned(parent); tick++ {
 			if tick%8 == 0 { // every 2 seconds
 				mon.client = mainClient(co.CommonDir)
 				started = track(co.Main, mon, started)
+				if ignore != nil {
+					ignore.look()
+				}
 			}
 			time.Sleep(goneCheck)
 		}

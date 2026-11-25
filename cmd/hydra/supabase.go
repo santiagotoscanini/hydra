@@ -105,7 +105,7 @@ func prepareSupabase(args []string) error {
 	}
 
 	// After the start. Whatever it did, the checkout is put back first.
-	terr := tidySupabase(co)
+	_, terr := tidySupabase(co)
 	if *started != 0 {
 		return errExit(*started) // the start failed, and said why
 	}
@@ -253,25 +253,69 @@ const excludeHeader = "# hydra: files the Supabase CLI writes for a worktree's o
 // tidySupabase undoes the CLI's edit to the tracked supabase/.gitignore when
 // that edit is all that changed, and ignores the files it writes through
 // info/exclude instead. Agents in the worktree then see no change they
-// didn't make.
-func tidySupabase(co gitx.Checkout) error {
+// didn't make. It reports whether it put the file back.
+//
+// The main checkout gets the same, though hydra doesn't wrap the start of
+// its Supabase (the stack file's own command does it, by --stack-id): a
+// stack-mode start appends there too, and a main checkout with changes
+// stops `hydra update`. Main's hydra-router tidies when the file changes
+// (gitignoreWatch), and `hydra update` before it checks that main is clean.
+func tidySupabase(co gitx.Checkout) (bool, error) {
 	path := filepath.Join(co.Root, "supabase", ".gitignore")
-	work, err := os.ReadFile(path)
+	index, ok, err := cliEdited(co.Root)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			work = nil
-		} else {
-			return err
+		return false, err
+	}
+	if ok {
+		if err := os.WriteFile(path, index, 0o644); err != nil {
+			return false, err
 		}
 	}
-	if index, err := exec.Command("git", "-C", co.Root, "show", ":supabase/.gitignore").Output(); err == nil && work != nil {
-		if rest, ok := bytes.CutPrefix(work, index); ok && onlyCLILines(rest) && len(rest) > 0 {
-			if err := os.WriteFile(path, index, 0o644); err != nil {
-				return err
-			}
+	return ok, ensureExclude(co.CommonDir)
+}
+
+// cliEdited reports whether the CLI's lines are all that changed in the
+// checkout's supabase/.gitignore, and returns the file as git has it.
+func cliEdited(root string) ([]byte, bool, error) {
+	work, err := os.ReadFile(filepath.Join(root, "supabase", ".gitignore"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	index, err := exec.Command("git", "-C", root, "show", ":supabase/.gitignore").Output()
+	if err != nil {
+		return nil, false, nil // not tracked: nobody sees a change
+	}
+	rest, ok := bytes.CutPrefix(work, index)
+	return index, ok && len(rest) > 0 && onlyCLILines(rest), nil
+}
+
+// gitignoreWatch is main's hydra-router looking at supabase/.gitignore: when
+// the file changes (a start of main's Supabase appended to it), it is tidied.
+// A stat every two seconds; git only when the file changed.
+type gitignoreWatch struct {
+	co   gitx.Checkout
+	last time.Time
+}
+
+func (g *gitignoreWatch) look() {
+	info, err := os.Stat(filepath.Join(g.co.Root, "supabase", ".gitignore"))
+	if err != nil || info.ModTime().Equal(g.last) {
+		return
+	}
+	g.last = info.ModTime()
+	restored, err := tidySupabase(g.co)
+	switch {
+	case err != nil:
+		logf("can't put supabase/.gitignore back after the Supabase CLI's edit: %v", err)
+	case restored:
+		logf("put supabase/.gitignore back: the Supabase CLI had appended its lock files to it (they are ignored through .git/info/exclude)")
+		if info, err := os.Stat(filepath.Join(g.co.Root, "supabase", ".gitignore")); err == nil {
+			g.last = info.ModTime()
 		}
 	}
-	return ensureExclude(co.CommonDir)
 }
 
 func onlyCLILines(b []byte) bool {

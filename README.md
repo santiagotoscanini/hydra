@@ -543,6 +543,12 @@ Hydra goes by the directory: the services keep using it, migrations still
 apply, `hydra down` still stops it, and `hydra status` notes it until
 `hydra process restart supabase` starts the current branch's.
 
+Each start of a stack-mode Supabase appends the CLI's lock files to the
+tracked `supabase/.gitignore`. Hydra puts the file back when those lines
+are all that changed, and ignores the files through `.git/info/exclude`:
+in a worktree after each start, in main from its `hydra-router` and in
+`hydra update` before it checks that main is clean.
+
 ### HTTPS in front of a service
 
 Some programs only take `https` addresses: a production build whose security

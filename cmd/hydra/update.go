@@ -104,6 +104,7 @@ func updateCmd(args []string) error {
 		}
 		return fmt.Errorf("the main checkout (%s) is on %s; check out %s there first", main, on, base)
 	}
+	ms.Dirty = withoutCLIEdit(ms, dry)
 	if len(ms.Dirty) > 0 {
 		return fmt.Errorf("the main checkout (%s) has uncommitted changes (%s); commit, stash or discard them first", main, someFiles(ms.Dirty))
 	}
@@ -852,4 +853,32 @@ func restartInWorktree(root, before, after string, timeout time.Duration) string
 		return "its stack did NOT come back after restarting " + strings.Join(names, ", ") + " (run `hydra status` there)"
 	}
 	return "restarted there: " + strings.Join(names, ", ")
+}
+
+// withoutCLIEdit is main's uncommitted files less supabase/.gitignore when
+// the Supabase CLI's lines are all that changed there: an update puts the
+// file back (a dry run only says it would) instead of refusing to pull.
+func withoutCLIEdit(ms *mainState, dry bool) []string {
+	root := ms.target.checkout.Root
+	if !contains(ms.Dirty, "supabase/.gitignore") || !hasKind(ms.target.stack, config.KindSupabase) {
+		return ms.Dirty
+	}
+	if _, ok, err := cliEdited(root); err != nil || !ok {
+		return ms.Dirty
+	}
+	if dry {
+		fmt.Println("supabase/.gitignore in main has only the Supabase CLI's lines added: it would be put back")
+	} else {
+		if _, err := tidySupabase(ms.target.checkout); err != nil {
+			return ms.Dirty
+		}
+		fmt.Println("put supabase/.gitignore in main back: the Supabase CLI had appended its lock files to it")
+	}
+	var rest []string
+	for _, f := range ms.Dirty {
+		if f != "supabase/.gitignore" {
+			rest = append(rest, f)
+		}
+	}
+	return rest
 }
