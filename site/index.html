@@ -31,11 +31,11 @@
 
 <div class="lead">
   <h1>Every worktree gets a running stack. Only the services it changed actually start.</h1>
-  <p>hydra is a small wrapper around <a href="https://github.com/F1bonacc1/process-compose">process-compose</a>. Your main checkout runs the full stack, once. In every other git worktree, <code>hydra</code> starts the services that branch touched, on their own ports, and points them at main's copy of everything else.</p>
+  <p>hydra is a small wrapper around <a href="https://github.com/F1bonacc1/process-compose">process-compose</a>. Your main checkout runs the full stack, once. In every other git worktree, <code>hydra up</code> starts the services that branch touched, on their own ports, and points them at main's copy of everything else.</p>
   <button class="install" data-copy="brew install --HEAD santiagotoscanini/tap/hydra" aria-label="Copy the install command">
     <span class="cmd"><i>$ </i>brew install --HEAD santiagotoscanini/tap/hydra</span><span class="act">copy</span>
   </button>
-  <p class="aside">Needs git and process-compose. Built and used on macOS.</p>
+  <p class="aside">Needs git and process-compose, and Node.js for <a href="#dashboard">the dashboard</a>. Built and used on macOS.</p>
 </div>
 
 <hr>
@@ -195,7 +195,7 @@ worktrees
       <li>It runs the jobs again and restarts the services the pull touched, in order, waiting for each. A migration that fails stops it before the API restarts.</li>
       <li>It merges main into every worktree where the merge is clean. Conflicts and uncommitted work are left alone and listed.</li>
     </ol>
-    <p style="margin-top:14px">Between updates, hydra keeps watch. <code>hydra up</code> won't start a worktree whose branch and main disagree on a service it takes from main, or whose main isn't running. <code>hydra status</code> says what is wrong and which command fixes it, and <code>hydra ui</code> shows the same for every worktree as <a href="docs/#ui">a page in your browser</a>. Everything it does and sees, in every checkout, goes into <a href="docs/#journal">one journal</a>: <code>hydra log</code> reads it, <code>hydra report</code> turns it into one file to send when you need help.</p>
+    <p style="margin-top:14px">Between updates, hydra keeps watch. <code>hydra up</code> won't start a worktree whose branch and main disagree on a service it takes from main, or whose main isn't running. <code>hydra status</code> says what is wrong and which command fixes it. Everything it does and sees, in every checkout, goes into <a href="docs/#journal">one journal</a>: <code>hydra log</code> reads it, <code>hydra report</code> turns it into one file to send when you need help.</p>
     <p><a href="docs/#daily">The commands for every day</a> · <a href="docs/#messages">Every message, and its fix</a> · <a href="docs/#updating">How an update works</a></p>
   </div>
 </section>
@@ -248,12 +248,51 @@ you open  localhost:3400         slot 2's port for web. hydra's router answers,
   <p class="aside">The api's paths exclude <code>**/*_test.go</code>, and <code>db</code> is shared. The config behind this is the one in <a href="docs/#quickstart">set up a repository</a>.</p>
 </section>
 
+<hr>
+
+<section id="dashboard">
+  <div class="measure">
+    <h2>All of it on one screen</h2>
+    <p>Every command so far acts on one checkout. With a few agents at work you want to see all of them at once, so type <code>hydra</code> on its own. It opens a dashboard of main and every worktree: what each runs, whether its stack is up, how it stands against main, and for the one you pick, what is wrong and the fix.</p>
+  </div>
+  <div class="code term measure" style="margin-top:16px">
+    <div class="file">hydra</div>
+<pre><b class="m">hydra</b>  main <span class="x">up</span> · 2/2 worktrees up<span class="c"> · read now  /Users/me/code/shop</span>
+<span class="c">   CHECKOUT         SLOT STACK     RUNS HERE        VS MAIN</span>
+   main             0    <span class="x">up</span>        4/4 ok
+   fix-cart         1    <span class="x">up</span>        web              1↑
+<b class="s">▸</b><span class="m">*</span> <b class="s">api-paging</b>       2    <span class="r">up ✗1</span>     api              <span class="w">behind in web 4↓ 1↑</span>
+<span class="c">────────────────────────────────────────────────────────────────────────────────</span>
+<b>api-paging</b><span class="c">  api-paging · slot 2</span> · <span class="r">stack up</span><span class="c"> · 96M  /Users/me/code/api-paging</span>
+<span class="c">5e2c81a0d api: page the order list</span>
+4 behind main, 1 ahead<span class="c"> · update: main would be merged in (4 commits)</span>
+
+<span class="c">  SERVICE  RUNS          PORT   STATE</span>
+<span class="x">●</span> api      <span class="s">here</span>          8480   ready<span class="c">  96M  changed: services/api/list.go</span>
+<span class="x">●</span> db       <span class="c">main</span>          -      running
+<span class="x">●</span> web      <span class="c">main, routed</span>  3400   ready
+<span class="c">  (1 more of main's services aren't used by anything here)</span>
+
+<span class="r">✗</span> this branch is behind main: main changed these since the branch left it, and
+    this worktree uses main's copy:
+<span class="c">      web (it serves this worktree's api): apps/web/app/orders.tsx</span>
+<span class="c">  fix: </span><span class="s">hydra update   (or, for this worktree alone: git merge main)</span><span class="c">  (f runs it)</span>
+
+<b class="s">⏎</b><span class="c"> open  </span><b class="s">u</b><span class="c"> up  </span><b class="s">d</b><span class="c"> down  </span><b class="s">r</b><span class="c"> restart  </span><b class="s">l</b><span class="c"> logs  </span><b class="s">m</b><span class="c"> merge  </span><b class="s">U</b><span class="c"> update  </span><b class="s">?</b><span class="c"> help  </span><b class="s">q</b><span class="c"> quit</span></pre>
+  </div>
+  <div class="measure">
+    <p style="margin-top:18px">Each key runs the command you would type, in the checkout you picked: <code>u</code> is <code style="white-space:nowrap">hydra up -D</code>, <code>m</code> merges main into that worktree alone (<code>hydra update --here</code>), <code>f</code> runs the fix, and <code>⏎</code> opens the stack in process-compose; F10, then Yes, brings you back with the stack still running. Whatever stops a stack or moves a branch asks first, and <code>q</code> leaves every stack running.</p>
+    <p>Agents don't need it. It reads <code>hydra status --json</code>, which they can read too, so what you see and what they see is the same.</p>
+    <p><a href="docs/#dashboard">The dashboard and its keys</a> · <a href="docs/#json">The JSON behind it</a></p>
+  </div>
+</section>
+
 </main>
 
 <hr>
 
 <footer class="foot">
-  <p>hydra is about 13,000 lines of Go and has no daemon: the watcher, the router and the pool are ordinary processes in your process-compose projects.</p>
+  <p>hydra is about 13,000 lines of Go and has no daemon: the watcher, the router and the pool are ordinary processes in your process-compose projects. The dashboard is about 1,300 lines of TypeScript, built into the binary and run with Node.js.</p>
   <p>This page is static HTML, one stylesheet and one script, with its fonts served from here. No build step, no trackers.</p>
   <p><a href="docs/">docs</a> · <a href="https://github.com/santiagotoscanini/hydra">source</a> · <a href="https://github.com/F1bonacc1/process-compose">process-compose</a></p>
 </footer>
