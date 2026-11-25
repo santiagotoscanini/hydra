@@ -253,6 +253,11 @@ type Service struct {
 	// baseline itself, and a worktree that runs its own copy, connect
 	// directly.
 	Pool *Pool `yaml:"pool"`
+	// SeedFromMain gives a worktree's own Supabase main's data instead of
+	// the seed files: when the stack is created (and on `hydra db reseed`),
+	// hydra applies the migrations main's database has, copies main's rows
+	// in, and only then applies the migrations that are the branch's own.
+	SeedFromMain bool `yaml:"seed_from_main"`
 
 	// DependsOn lists the process names this process waits for, from the
 	// regular process-compose `depends_on`.
@@ -622,6 +627,9 @@ func (st *Stack) validate() error {
 			case s.Shared || s.Follow || s.Routed != NotRouted:
 				return fmt.Errorf("%s: kind %s gives each worktree its own copy; it can't be shared, follow or routed", name, s.Kind)
 			}
+		}
+		if s.SeedFromMain && s.Kind != KindSupabase {
+			return fmt.Errorf("%s: seed_from_main is for kind: supabase, a database each worktree gets a copy of", name)
 		}
 		if s.Routed != NotRouted {
 			switch {

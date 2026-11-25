@@ -63,6 +63,7 @@ Bare `hydra` in a terminal opens [the dashboard](#the-dashboard):
 | Also run a service the branch didn't change | `hydra up worker` | the worktree |
 | Bring main and the worktrees to the latest commit | `hydra update` (`--dry-run` first) | anywhere |
 | Merge main into one worktree, and move nothing else | `hydra update --here` | the worktree |
+| Give a worktree's own database main's data again | `hydra db reseed` (with `seed_from_main`) | the worktree |
 | See what would run, and why | `hydra plan` | the checkout |
 | Stop one stack | `hydra down` | its checkout |
 | Stop every worktree's stack | `hydra down --worktrees` | anywhere |
@@ -520,6 +521,7 @@ supabase:
     ports: { db: 54322 }  # reached as {port.db}; the API is on port (54321)
     worktree_port: 40321  # worktrees' stacks below 49152 (slot N: 40321 + (N-1) × stride)
     paths: ["supabase/migrations/**", "supabase/seed/**", "supabase/config.toml"]
+    seed_from_main: true  # a worktree's stack starts from main's data, not the seeds
 ```
 
 The main checkout runs its Supabase as written. A worktree that changed its
@@ -536,6 +538,16 @@ containers, free of Docker's VM memory cap; it starts in about 20-40 seconds
 and takes about 500-650 MB. An idle stack takes about
 110 MB. It keeps its data across `hydra down` and `hydra up`, and is
 destroyed when the worktree is removed.
+
+With `seed_from_main: true`, a worktree's stack starts from main's data
+instead of the seed files: when hydra creates it, it applies the migrations
+main's database has, copies main's rows in (the app's schemas, auth users,
+storage metadata, sequences; about 2 seconds for a million rows), and only
+then applies the branch's own migrations. One that breaks on real rows fails
+the start, with its name and Postgres's error. The copy happens once;
+restarts keep the worktree's data. `hydra db reseed` in the worktree makes
+the database again from main's data. Main's database has to be up: without
+it the start fails and says so, rather than fall back to the seeds.
 
 The Supabase CLI keeps a stack per directory and branch, so after a branch
 is renamed or switched its own commands no longer find the running stack.
@@ -645,8 +657,9 @@ your PATH.
 
 ## Open questions
 
-- Database: a worktree's own Supabase starts from the seed files, not from
-  main's data. Copying main's data in would need a dump per start.
+- Database: a worktree's own Supabase gets main's data only when it is
+  created (`seed_from_main`), or on `hydra db reseed`; it doesn't follow
+  main's later changes.
 - Ports are per repository: two repositories whose stacks use the same
   ports can't run at once.
 - Deriving `paths` from the nx / Go dependency graph instead of by hand.

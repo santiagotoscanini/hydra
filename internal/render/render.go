@@ -45,6 +45,11 @@ const idle = "while :; do sleep 3600; done"
 // rendered file creates it.
 const WatchAnchor = ".process-compose/watch-anchor"
 
+// SeedPending, under a worktree's root, is there from the start that
+// creates its own Supabase stack, with x-hydra.seed_from_main, until main's
+// data is copied in: that start runs without migrations and seeds.
+const SeedPending = ".process-compose/supabase-seed-from-main"
+
 // ReadyName is the process that ends once a worktree's own database, the
 // service named, is started and migrated. What reads that database waits for
 // it instead of for the service.
@@ -267,13 +272,22 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 			tmp := filepath.Join(root, "supabase", ".temp", "tmp")
 			env = append(env, st.SupabaseEnv(svc, p.Slot)...)
 			env = append(env, "TMPDIR="+tmp)
+			seed := ""
+			if svc.SeedFromMain {
+				// A start that creates the stack makes it empty: hydra then
+				// brings it to main's migrations, copies main's rows in and
+				// applies the branch's own migrations (see seedFromMain).
+				// --before leaves the file when this start creates it.
+				env = append(env, fmt.Sprintf("HYDRA_MAIN_DB=postgresql://supabase_admin:postgres@%s:%d/postgres", st.Hydra.Host, st.SlotPorts(svc, 0)["db"]))
+				seed = "[ ! -e " + shellQuote(filepath.Join(root, SeedPending)) + " ] || export SUPABASE_DB_MIGRATIONS_ENABLED=false SUPABASE_DB_SEED_ENABLED=false\n"
+			}
 			if cmd, ok := proc["command"].(string); ok {
 				// Around the stack file's command: hydra first stops the stack
 				// this directory has for another branch (it would hold the
 				// ports), and afterwards applies new migrations and puts the
 				// checkout back, also when the start failed.
 				hydra := shellQuote(exe) + " prepare supabase"
-				proc["command"] = "mkdir -p " + shellQuote(tmp) + " && " + hydra + " --before || exit 1\n(\n" +
+				proc["command"] = "mkdir -p " + shellQuote(tmp) + " && " + hydra + " --before || exit 1\n" + seed + "(\n" +
 					strings.TrimRight(cmd, "\n") + "\n)\n" + hydra + " --started $?"
 			}
 			// The stop must reach this stack too, never the baseline's: name

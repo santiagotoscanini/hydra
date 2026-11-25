@@ -242,11 +242,6 @@ func removeWorktree(t *testing.T, co gitx.Checkout, root string) {
 	}
 }
 
-func exists(path string) bool {
-	_, err := os.Lstat(path)
-	return err == nil
-}
-
 // A worktree removed with its stack up: git deletes everything, and the
 // stack, still running, writes its files again. Once it is stopped they are
 // all that is in the folder, and they are hydra's to delete.

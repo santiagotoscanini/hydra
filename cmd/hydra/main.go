@@ -12,6 +12,7 @@
 //	hydra update                   pull main and bring everything along
 //	hydra log [KIND...]            what hydra did and saw, in every checkout
 //	hydra report                   all of it in one file, to send for help
+//	hydra db reseed                a worktree's database again from main's data
 //	hydra trust                    trust the CA behind TLS fronts
 //	hydra version                  which hydra, which process-compose
 package main
@@ -101,6 +102,10 @@ Hydra's own commands:
                                  helps: versions, every stack's state now, usage
                                  over time, what went wrong, and the journal
                                  (--since 24h by default); prints its path
+  hydra db reseed                in a worktree with its own Supabase and
+                                 x-hydra.seed_from_main: remove its database and
+                                 make it again from main's data, then apply the
+                                 branch's migrations; waits until it is ready
   hydra trust [--remove|--print] make this machine trust the local CA behind
                                  hydra's TLS fronts (x-hydra.tls on a service)
   hydra plan   [flags]           show what this checkout runs and how it is wired
@@ -200,6 +205,8 @@ func run(args []string) error {
 			return pgbouncerCmd(args[1:])
 		case "prepare":
 			return prepareCmd(args[1:])
+		case "db":
+			return dbCmd(args[1:])
 		case "throttle":
 			return throttleCmd(args[1:])
 		case "reap":
@@ -714,8 +721,12 @@ func printPlan(t *target, p *plan.Plan) {
 		for _, s := range p.Services {
 			if src := t.stack.Services[s.Source]; s.Local && src != nil && src.Kind == config.KindSupabase {
 				ports := t.stack.SlotPorts(src, p.Slot)
-				fmt.Printf("  %s is this worktree's own Supabase stack (API :%d, database :%d), with its migrations applied after each start\n",
-					s.Name, ports[""], ports["db"])
+				from := ""
+				if src.SeedFromMain {
+					from = ", made from main's data when it is created"
+				}
+				fmt.Printf("  %s is this worktree's own Supabase stack (API :%d, database :%d)%s, with its migrations applied after each start\n",
+					s.Name, ports[""], ports["db"], from)
 			}
 			if src := t.stack.Services[s.Source]; s.Prepare != "" && src != nil && src.Kind == config.KindTemporal && src.Prepare == "" {
 				fmt.Printf("  %s first creates Temporal namespace %s, with %s's search attributes\n", s.Name,

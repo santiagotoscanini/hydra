@@ -100,6 +100,7 @@ processes:
 	for src, want := range map[string]string{
 		"x-hydra: { kind: rabbit }":                 "unknown kind \"rabbit\" (known: temporal, supabase)",
 		"x-hydra: { kind: temporal, shared: true }": "can't be shared, follow or routed",
+		"x-hydra: { seed_from_main: true }":         "seed_from_main is for kind: supabase",
 	} {
 		_, err := Parse([]byte("processes:\n  w:\n    command: x\n    " + src + "\n"))
 		if err == nil || !strings.Contains(err.Error(), want) {

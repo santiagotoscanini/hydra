@@ -16,6 +16,7 @@ import (
 	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/gitx"
 	"github.com/santiagotoscanini/hydra/internal/plan"
+	"github.com/santiagotoscanini/hydra/internal/render"
 )
 
 // prepareSupabase is hydra's part in running a worktree's own Supabase
@@ -45,7 +46,9 @@ import (
 //   - after a start, it applies the migrations the stack hasn't seen, through
 //     the database's address rather than the CLI's idea of the current stack
 //     (a new stack applies them all on its first start; a resumed one
-//     doesn't), and puts back the files the CLI touches in the checkout;
+//     doesn't), and puts back the files the CLI touches in the checkout
+//     (with seed_from_main, a stack this start created first gets main's
+//     schema and rows: see seed.go);
 //   - after a stop, it stops whatever stack of this directory still runs.
 //
 // It refuses to run without stack mode: without it, the CLI would reach the
@@ -96,6 +99,9 @@ func prepareSupabase(args []string) error {
 		if n > 0 {
 			fmt.Printf("hydra: stopped the Supabase stack this worktree had for another branch; the one for %s starts now (the other keeps its data until the worktree is removed)\n", strings.TrimPrefix(branch, "refs/heads/"))
 		}
+		if err == nil && os.Getenv("HYDRA_MAIN_DB") != "" {
+			err = markSeed(co.Root, branch, supabaseCLI)
+		}
 		return err
 	case *stopped:
 		os.Remove(supabaseMarker(co.Root))
@@ -108,6 +114,22 @@ func prepareSupabase(args []string) error {
 	_, terr := tidySupabase(co)
 	if *started != 0 {
 		return errExit(*started) // the start failed, and said why
+	}
+	seeded := false
+	if pending := filepath.Join(co.Root, render.SeedPending); exists(pending) {
+		// The stack was just made, empty: main's schema and rows go in
+		// before the branch's own migrations.
+		if main := os.Getenv("HYDRA_MAIN_DB"); main != "" {
+			if err := seedFromMain(co.Root, main, supabaseDBURL()); err != nil {
+				return err
+			}
+			seeded = true
+		} else {
+			fmt.Println("hydra: x-hydra.seed_from_main is off now; this worktree's database gets every migration here, and no seeds (supabase db reset at this worktree's root gives it them)")
+		}
+		if err := os.Remove(pending); err != nil {
+			return err
+		}
 	}
 	var out bytes.Buffer
 	cmd := exec.Command("supabase", "migration", "up", "--include-all", "--db-url", supabaseDBURL())
@@ -122,6 +144,10 @@ func prepareSupabase(args []string) error {
 			"(one was deleted or renamed after it ran). From the worktree's root, which reaches only this " +
 			"worktree's stack: `supabase db reset` rebuilds it from the files (its data is lost), or " +
 			"`supabase migration repair --status reverted <version>` forgets the missing ones")
+	}
+	if err != nil && seeded {
+		// Short: hydra status shows the last lines, cut at 160 characters.
+		return fmt.Errorf("the migration above failed on main's data, which stays in: correct it, then hydra process restart supabase")
 	}
 	if err != nil {
 		return fmt.Errorf("supabase migration up: %w", err)
@@ -176,6 +202,20 @@ func supabaseDBURL() string {
 		port = "54322"
 	}
 	return "postgresql://postgres:postgres@127.0.0.1:" + port + "/postgres"
+}
+
+// adminURL is a local Supabase database's address as supabase_admin, the
+// superuser: postgres may not turn triggers off, nor write every table of
+// auth and storage.
+func adminURL(u string) string {
+	return strings.Replace(u, "://postgres:", "://supabase_admin:", 1)
+}
+
+// exists reports whether something is at path (a symlink counts, even a
+// broken one).
+func exists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
 }
 
 // branchContext is what the Supabase CLI calls the branch of a checkout:
