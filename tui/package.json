@@ -1,0 +1,28 @@
+{
+	"name": "hydra-dashboard",
+	"private": true,
+	"description": "The dashboard bare `hydra` opens in a terminal. Built into one file that the hydra binary embeds (cmd/hydra/dashboard.mjs).",
+	"type": "module",
+	"engines": {
+		"node": ">=20"
+	},
+	"scripts": {
+		"build": "node build.mjs",
+		"check": "node build.mjs --check",
+		"typecheck": "tsc --noEmit",
+		"test": "node --import tsx --test test/*.test.tsx",
+		"dev": "node --import tsx src/cli.tsx"
+	},
+	"dependencies": {
+		"ink": "^6.8.0",
+		"react": "^19.2.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"@types/react": "^19.0.0",
+		"esbuild": "^0.25.0",
+		"ink-testing-library": "^4.0.0",
+		"tsx": "^4.20.0",
+		"typescript": "^5.9.0"
+	}
+}

@@ -15,7 +15,7 @@ import (
 //
 //	command  every hydra command, when it ends: its arguments, where it ran,
 //	         how long it took, how it exited and the error it printed
-//	start    a long-running one (watch, router, ui) starting
+//	start    a long-running one (watch, router, dashboard) starting
 //	problem  each ✗ and ! a check showed someone, with its fix
 //	slot     a worktree taking a slot, or taking a stopped one's
 //	process  a process of a stack changing state (from the watcher in a

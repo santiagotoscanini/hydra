@@ -2,6 +2,7 @@
 // services it changed and points everything else at the baseline (the main
 // checkout).
 //
+//	hydra                          in a terminal: the dashboard of every checkout
 //	hydra [process-compose args]   run process-compose with the rendered file
 //	hydra plan  [flags]            show what this checkout runs and how it is wired
 //	hydra render [flags] [-o FILE] print or write the rendered file
@@ -44,8 +45,16 @@ import (
 
 const usage = `hydra: run only what a worktree changed, and take the rest from main.
 
+  hydra                    the dashboard (in a terminal): main and every
+                           worktree, what each runs here and takes from
+                           main, what is wrong and the fix; keys start,
+                           stop, restart, update and open (attach) a stack.
+                           ? lists the keys. Needs node. Without a terminal
+                           (an agent, a script) it starts this checkout, as
+                           it always did.
+
 Use it in place of process-compose; arguments pass through:
-  hydra                    start this checkout (TUI)
+  hydra up                 start this checkout in process-compose's TUI
   hydra up -D              start it in the background
   hydra up web             also run web here, even if unchanged; on a stack
                            that is already up, it adds web to it
@@ -157,6 +166,9 @@ type errExit int
 func (e errExit) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
 
 func run(args []string) error {
+	if wantsDashboard(args) {
+		return dashboardCmd()
+	}
 	if len(args) > 0 {
 		switch args[0] {
 		case "help", "-h", "--help":

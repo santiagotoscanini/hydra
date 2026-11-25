@@ -26,6 +26,25 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
 
+  # The dashboard (bare `hydra`): its tests, and the committed bundle
+  # (cmd/hydra/dashboard.mjs, which go build embeds) is what tui/ builds to.
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tui/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run check
+
   # The demos run hydra end to end against process-compose, in throwaway
   # repositories. update.sh and tls.sh check what every step printed.
   demos:
@@ -35,9 +54,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: brew install f1bonacc1/tap/process-compose
+      - run: brew install f1bonacc1/tap/process-compose tmux
       - run: ./examples/demo/run.sh
       - run: ./examples/demo/stack.sh
       - run: ./examples/demo/routed.sh
       - run: ./examples/demo/update.sh
       - run: ./examples/demo/tls.sh
+      - run: ./examples/demo/dashboard.sh
