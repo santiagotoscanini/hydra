@@ -446,7 +446,7 @@ web      main, routed  3400  ready
 
 ✗ this branch is behind main: main changed these since the branch left it, and this worktree uses main's copy:
     web (it serves this worktree's api): apps/web/app/cart.tsx, apps/web/lib/totals.ts and 10 more
-  fix: hydra update   (or, for this worktree alone: git merge main)
+  fix: hydra update --here   (or, for every worktree: hydra update)
 </pre>
     </div>
     <ul>
@@ -507,7 +507,7 @@ ok: main's stack is up and runs what main has checked out.
     </div>
     <p><b>About the branch and main.</b> See <a href="#instep">in step with main</a>.</p>
     <div class="msgs">
-      <div><p class="said">✗ this branch is behind main: main changed these since the branch left it, and this worktree uses main's copy: …</p><p>Main moved on in a service this worktree takes from it. <code>hydra update</code> merges main into every worktree it can; <code>git merge main</code> does it for this one alone, and <a href="#update-here"><code>hydra update --here</code></a> does too and restarts what the merge touched.</p></div>
+      <div><p class="said">✗ this branch is behind main: main changed these since the branch left it, and this worktree uses main's copy: …</p><p>Main moved on in a service this worktree takes from it. <code>hydra update</code> merges main into every worktree it can; <a href="#update-here"><code>hydra update --here</code></a> does it for this one alone and restarts what the merge touched.</p></div>
       <div><p class="said">✗ main is older than the commit this branch started from, and this worktree uses main's copy of: …</p><p>The worktree was cut from a newer commit (a freshly fetched <code>origin/main</code>) than the main checkout has. <code>hydra update</code> brings main there.</p></div>
     </div>
     <p><b>About this worktree's stack.</b></p>
@@ -1021,7 +1021,7 @@ note: changed, but in no service's paths, so nothing runs here for them: package
     <p>If one of those files belongs to one of those services, the two sides are out of step.</p>
     <div class="table"><table>
       <tr><th>Which side is older</th><th>How it happens</th><th>Fix</th></tr>
-      <tr><td>The branch is behind main</td><td>Main was updated after the branch was cut.</td><td><code>hydra update</code>, or <code>git merge main</code> for this worktree alone.</td></tr>
+      <tr><td>The branch is behind main</td><td>Main was updated after the branch was cut.</td><td><code>hydra update</code>, or <code>hydra update --here</code> for this worktree alone.</td></tr>
       <tr><td>Main is behind the branch</td><td>The worktree was cut from a freshly fetched <code>origin/main</code> that the main checkout hasn't pulled.</td><td><code>hydra update</code></td></tr>
     </table></div>
     <p>Not counted: services the worktree runs itself, however old the branch, since they run the branch's code. And two services that both run in main are in step with each other whatever the branch did. So a branch that is 300 commits behind, where main only changed other things, is in step.</p>

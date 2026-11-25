@@ -107,7 +107,7 @@ func TestMemoryCountsAProcessAndItsChildren(t *testing.T) {
 func TestAFixIsRunWhenItIsAHydraCommand(t *testing.T) {
 	for fix, want := range map[string]string{
 		"hydra update": "hydra update",
-		"hydra update   (or, for this worktree alone: git merge main)":                               "hydra update",
+		"hydra update --here   (or, for every worktree: hydra update)":                               "hydra update --here",
 		"cd '/repo/main' && hydra up -D":                                                             "cd '/repo/main' && hydra up -D",
 		"hydra up web   (runs a copy here instead)":                                                  "hydra up web",
 		"if a service uses them, add them to its paths (`hydra up SERVICE` runs one here meanwhile)": "",

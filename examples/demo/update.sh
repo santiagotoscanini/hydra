@@ -204,7 +204,7 @@ cd "$repo/conflict"
 run "$H" up -D -L "$repo/conflict.log"; echo "$out" | grep -v '^Starting' | show
 refuse "$out" 'this branch is behind main'
 expect "$out" 'migrate \(api here waits for it\): db/migrations/002.sql'
-expect "$out" 'fix: hydra update +\(or, for this worktree alone: git merge main\)'
+expect "$out" 'fix: hydra update --here +\(or, for every worktree: hydra update\)'
 echo
 echo "the api worktree, after the merge:"
 cd "$repo/api"

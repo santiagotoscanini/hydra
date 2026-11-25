@@ -178,7 +178,7 @@ web      main, routed  3400  ready
 
 ✗ this branch is behind main: main changed these since the branch left it, and this worktree uses main's copy:
     web (it serves this worktree's api): apps/web/app/cart.tsx, apps/web/lib/totals.ts and 10 more
-  fix: hydra update   (or, for this worktree alone: git merge main)
+  fix: hydra update --here   (or, for every worktree: hydra update)
 ```
 
 It exits 1 when something is marked ✗, so a script or an agent can gate on

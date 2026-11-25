@@ -641,7 +641,7 @@ func skewProblem(st *config.Stack, p *plan.Plan) *problem {
 			Text: "main is older than the commit this branch started from, and this worktree uses main's copy of:\n" + strings.Join(lines, "\n")}
 	}
 	return &problem{Blocks: true,
-		Fix:  "hydra update   (or, for this worktree alone: git merge " + st.Hydra.BaseRef + ")",
+		Fix:  "hydra update --here   (or, for every worktree: hydra update)",
 		Text: "this branch is behind main: main changed these since the branch left it, and this worktree uses main's copy:\n" + strings.Join(lines, "\n")}
 }
 
