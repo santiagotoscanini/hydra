@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -52,10 +53,35 @@ type Global struct {
 	// brings its own (from mkcert, say). Left out, hydra makes a local CA
 	// and a certificate signed by it.
 	TLS TLSFiles `yaml:"tls"`
+	// IdleStop stops a worktree's stack once it has gone this long without
+	// activity: a request through hydra's router for it, or a file in it
+	// that changed. The main checkout's never stops. 0 (unset, `0` or
+	// `off`) never stops one.
+	IdleStop Idle `yaml:"idle_stop"`
 
 	// Exe is the hydra binary that generated steps call (a kind's prepare
 	// step). Set by the caller; "hydra" when empty.
 	Exe string `yaml:"-"`
+}
+
+// Idle is a duration written the way Go writes one ("2h", "90m", "30s"),
+// or `0` / `off` for none.
+type Idle time.Duration
+
+// UnmarshalYAML accepts "2h", "0" and "off".
+func (d *Idle) UnmarshalYAML(n *yaml.Node) error {
+	switch v := strings.TrimSpace(n.Value); v {
+	case "", "0", "off", "false":
+		*d = 0
+		return nil
+	default:
+		dur, err := time.ParseDuration(v)
+		if err != nil || dur < 0 {
+			return fmt.Errorf("idle_stop: %q is not a duration (2h, 90m, 30s) or off", n.Value)
+		}
+		*d = Idle(dur)
+		return nil
+	}
 }
 
 // Kinds hydra knows how to give each worktree a copy of.

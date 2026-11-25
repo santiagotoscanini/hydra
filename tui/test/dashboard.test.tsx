@@ -273,3 +273,15 @@ test("keys typed together all count", async () => {
 	assert.match(frame(), /▸  main/);
 	unmount();
 });
+
+test("a worktree hydra stopped for being idle says so", () => {
+	const snap = fixture();
+	snap.worktrees[2]!.idleStopped = { at: new Date().toISOString(), after: "2h" };
+	const e = entries(snap)[3]!;
+	assert.equal(stackState(e).text, "idle-off");
+	const row = plain(render(<ListRow e={e} selected={false} cols={columns(80)} />).lastFrame());
+	noLineWiderThan(row, 80);
+	assert.match(row, /more\s+2\s+idle-off\s+web/);
+	const detail = plain(render(<>{detailLines(e, 80, "main")}</>).lastFrame() ?? "");
+	assert.match(detail, /stopped after 2h idle/);
+});

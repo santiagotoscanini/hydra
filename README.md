@@ -353,7 +353,10 @@ touched there. Main isn't pulled.
 
 `hydra down` stops this checkout's stack. `hydra down --worktrees` stops
 every worktree's stack and leaves main's running: a stack costs memory for
-as long as it is up, and nothing stops an idle one for you.
+as long as it is up. With `idle_stop: 2h` in `x-hydra`, a worktree's stack
+that nobody used for two hours (no request through hydra's router for it, no
+file of it changed) stops by itself; `hydra status` says so, and `hydra up -D`
+starts it again. Main's never stops.
 
 A worktree can be removed without stopping anything first, with
 `git worktree remove` or by the tool that manages your worktrees. Its
@@ -636,5 +639,6 @@ your PATH.
   ports can't run at once.
 - Deriving `paths` from the nx / Go dependency graph instead of by hand.
   Until then, the report of changed files nobody lists is the safety net.
-- Nothing stops an idle worktree's stack: it runs until `hydra down`,
-  `hydra down --worktrees` or the worktree's removal.
+- `idle_stop` only sees requests that pass hydra's router and edits: a
+  worktree used only through a service it runs itself, on its own port,
+  counts as idle.

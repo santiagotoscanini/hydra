@@ -11,6 +11,10 @@
 #  in `docs`, which started with nothing to run, starts an api there; the
 #  edit after that restarts it.
 #
+#  Last, a worktree whose branch sets `idle_stop: 6s`: requests through its
+#  port keep its stack up, and once they stop hydra stops it, says so in
+#  `hydra status` and `hydra status --json`, and `hydra up` starts it again.
+#
 # Everything happens in a throwaway repo under $TMPDIR.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -24,7 +28,7 @@ main="$repo/main"
 (cd "$root" && go build -o "$repo/bin/" ./cmd/...)
 H="$repo/bin/hydra"
 cleanup() {
-  for wt in backend docs; do (cd "$repo/$wt" 2>/dev/null && "$H" down >/dev/null 2>&1) || true; done
+  for wt in backend docs idle; do (cd "$repo/$wt" 2>/dev/null && "$H" down >/dev/null 2>&1) || true; done
   (cd "$main" && "$H" down -p "$pc_port" >/dev/null 2>&1) || true
   rm -rf "$repo"
 }
@@ -114,6 +118,41 @@ echo "--- backend goes down: its port closes"
 (cd "$repo/backend" && "$H" down >/dev/null 2>&1)
 for _ in $(seq 50); do curl -s -m 1 "localhost:$web_b" >/dev/null 2>&1 || break; sleep 0.2; done
 curl -s -m 1 "localhost:$web_b" >/dev/null 2>&1 && echo "still answering on :$web_b" || echo "nothing listens on :$web_b"
+
+echo
+echo "--- idle: a branch with idle_stop: 6s"
+fail() { echo "FAILED: $*" >&2; exit 1; }
+g worktree add -q -b idle "$repo/idle" main
+cd "$repo/idle"
+awk '{print} /^  max_slots: 5$/{print "  idle_stop: 6s"}' process-compose.yaml >pc.tmp && mv pc.tmp process-compose.yaml
+grep -q 'idle_stop: 6s' process-compose.yaml || fail "the sed didn't add idle_stop"
+g commit -qam "idle_stop: 6s" # committed: nothing uncommitted counts as use
+"$H" up -D -L "$repo/idle.log" >/dev/null 2>&1
+i=$("$H" slots | awk '$1=="*"{print $2}')
+web_i=$((21000 + i * 100))
+wait_for "$web_i"
+# Twelve seconds of requests through its port, one a second: twice the idle
+# time, and the stack stays up.
+for _ in $(seq 12); do curl -s -m 2 "localhost:$web_i" >/dev/null; sleep 1; done
+"$H" status >/dev/null 2>&1 || fail "the stack stopped while it was used: $("$H" status 2>&1)"
+echo "used for 12s: still up"
+# Then nothing: within 6s and the watcher's next look, it stops.
+for _ in $(seq 60); do [ -f .process-compose/idle-stopped ] && break; sleep 0.5; done
+set +e; out="$("$H" status 2>&1)"; set -e
+echo "$out" | grep -E '^(worktree|✗)' | sed -E "s#[^ ]*/hydra-routed\.[A-Za-z0-9]+#<repo>#g"
+grep -q 'stopped after 6s idle .*hydra up starts it again' <<<"$out" || fail "hydra status: $out"
+json="$(cd "$main" && "$H" status --json | python3 -c '
+import json, sys
+w = {w["branch"]: w for w in json.load(sys.stdin)["worktrees"]}["idle"]
+print("up:", w["up"], "| idleStopped after:", (w.get("idleStopped") or {}).get("after"))')"
+echo "hydra status --json: $json"
+[ "$json" = "up: False | idleStopped after: 6s" ] || fail "status --json: $json"
+grep -q '"ev":"idle".*"after":"6s"' "$(git rev-parse --git-common-dir)"/hydra-journal/*.jsonl || fail "no idle event in the journal"
+"$H" up -D -L "$repo/idle.log" >/dev/null 2>&1
+wait_for "$web_i"
+[ ! -f .process-compose/idle-stopped ] || fail "hydra up left the idle note"
+echo "hydra up: running again"
+"$H" down >/dev/null 2>&1
 
 echo
 echo "--- what the router logged"

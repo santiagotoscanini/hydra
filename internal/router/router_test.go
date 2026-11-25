@@ -109,6 +109,7 @@ type rig struct {
 	dispatch, e1, e2, e3 int
 	forward              bool
 	logs                 []string
+	active               []string // worktrees Activity was told about
 }
 
 // newRig: main runs web and api. Worktree 1 runs its own api, worktree 2
@@ -134,8 +135,9 @@ func newRig(t *testing.T) *rig {
 		},
 	}
 	g.r = &Router{
-		Load: func() (*State, error) { g.mu.Lock(); defer g.mu.Unlock(); st := g.st; return &st, nil },
-		Logf: func(f string, a ...any) { g.mu.Lock(); g.logs = append(g.logs, fmt.Sprintf(f, a...)); g.mu.Unlock() },
+		Load:     func() (*State, error) { g.mu.Lock(); defer g.mu.Unlock(); st := g.st; return &st, nil },
+		Logf:     func(f string, a ...any) { g.mu.Lock(); g.logs = append(g.logs, fmt.Sprintf(f, a...)); g.mu.Unlock() },
+		Activity: func(wt Worktree) { g.mu.Lock(); g.active = append(g.active, wt.Name); g.mu.Unlock() },
 	}
 	t.Cleanup(g.r.Close)
 	g.r.Reconcile()
@@ -293,5 +295,27 @@ func TestStatusSaysWhetherMainsCopyCanServe(t *testing.T) {
 	g.waitProbed("web")
 	if s := status(); !strings.Contains(s.Reason, "without the worktree tag") {
 		t.Errorf("status after the tag is dropped = %+v", s)
+	}
+}
+
+func TestTellsWhichWorktreesAreUsed(t *testing.T) {
+	g := newRig(t)
+	g.mu.Lock()
+	probed := g.active // the probe's tag is no worktree's
+	g.active = nil
+	g.mu.Unlock()
+	if len(probed) != 0 {
+		t.Errorf("the probe counted as activity for %v", probed)
+	}
+	// hydra's own look at a worktree's port is not someone using it.
+	get(t, strings.TrimSuffix(g.url(g.e2), "/")+StatusPath)
+	get(t, g.url(g.e2))                          // a page of worktree 2: its port, then the web's call to the api
+	get(t, g.url(g.dispatch), TagHeader, "1")    // a call for worktree 1
+	get(t, g.url(g.dispatch))                    // untagged: main's
+	get(t, g.url(g.dispatch), TagHeader, "nope") // no such worktree
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if got := strings.Join(g.active, " "); got != "two two one" {
+		t.Errorf("activity for %q, want %q", got, "two two one")
 	}
 }

@@ -69,7 +69,11 @@ func statusCmd(args []string) error {
 		return err
 	}
 	printMainLine(ms)
-	fmt.Printf("worktree  %s  %s  %s\n", ws.target.checkout.Root, slotText(ws), upText(ws.Up, "stack up", "stack not started"))
+	down := "stack not started"
+	if n := readIdleNote(ws.target.checkout.Root); n != nil {
+		down = "stack stopped after " + n.After + " idle"
+	}
+	fmt.Printf("worktree  %s  %s  %s\n", ws.target.checkout.Root, slotText(ws), upText(ws.Up, "stack up", down))
 	fmt.Println()
 	printWorktreeTable(ms, ws)
 
@@ -374,6 +378,9 @@ func statusAll(co gitx.Checkout, ms *mainState, waited time.Duration) error {
 				vs += "  (" + l.counts + ")"
 			}
 			state := upText(ws.Up, "up", "-")
+			if n := readIdleNote(l.root); n != nil && !ws.Up {
+				state = "idle-stopped"
+			}
 			if ws.Up {
 				if n := len(blocking(l.problems)); n > 0 {
 					state = fmt.Sprintf("up, %d problem%s", n, plural(n))

@@ -70,6 +70,8 @@ export interface WorktreeState {
 	memory: number;
 	problems: Problem[];
 	update?: Update;
+	/** Its stack isn't running because nobody used it for x-hydra idle_stop. */
+	idleStopped?: { at: string; after: string };
 	pending?: boolean;
 	plannedAt: string;
 	gitAt: string;

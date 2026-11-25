@@ -108,6 +108,8 @@ func bad(r journal.Record) bool {
 		return r.Str("level") == "error"
 	case "process":
 		return r.Str("health") == "failed" || r.Raw["output"] != nil
+	case "idle":
+		return r.Str("error") != ""
 	case "log":
 		m := strings.ToLower(r.Str("msg"))
 		return strings.Contains(m, "fail") || strings.Contains(m, "error") || strings.Contains(m, "can't") || strings.Contains(m, "didn't")
@@ -206,6 +208,11 @@ func summary(r journal.Record) string {
 		return fmt.Sprintf("slot %d", int(r.Num("slot")))
 	case "start":
 		return r.Str("what") + " started"
+	case "idle":
+		if e := r.Str("error"); e != "" {
+			return "stopping its stack after " + r.Str("after") + " idle failed: " + e
+		}
+		return "stopped its stack after " + r.Str("after") + " idle (idle_stop)"
 	case "log":
 		return indentAfterFirst(r.Str("msg"))
 	}

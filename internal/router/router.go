@@ -67,6 +67,7 @@ type Entry struct {
 // Worktree is one running worktree.
 type Worktree struct {
 	Name    string
+	Root    string           // its checkout; for Router.Activity
 	Local   map[string]int   // service -> port of the copy it runs
 	Entries map[string]Entry // routed service -> its port in this worktree
 }
@@ -98,6 +99,11 @@ type Router struct {
 	Logf     func(format string, args ...any)
 	Interval time.Duration // between reloads; default 500ms
 	ProbeGap time.Duration // between checks of a routed service; default 10s
+	// Activity, when set, is told about every request for a running
+	// worktree (by its tag), whichever copy answers it: someone uses that
+	// worktree's stack. hydra's own checks (StatusPath, the probe) don't
+	// count.
+	Activity func(Worktree)
 
 	state     atomic.Pointer[State]
 	mu        sync.Mutex
@@ -337,6 +343,17 @@ func (r *Router) logf(format string, args ...any) {
 	}
 }
 
+// active tells Activity about a request for the worktree tagged tag. A tag
+// no running worktree has (the probe's) is nobody's.
+func (r *Router) active(tag string) {
+	if r.Activity == nil || tag == "" {
+		return
+	}
+	if wt, ok := r.state.Load().Worktrees[tag]; ok {
+		r.Activity(wt)
+	}
+}
+
 // entry handles a worktree's port for a routed service: tag the request and
 // pass it to the baseline's copy.
 func (r *Router) entry(tag, name string) http.Handler {
@@ -382,6 +399,7 @@ func (r *Router) entry(tag, name string) http.Handler {
 			})
 			return
 		}
+		r.active(tag)
 		if h, ok := r.health.Load(name); ok && h.(health).reason != "" {
 			fail(w, http.StatusServiceUnavailable,
 				"main's %s can't serve this worktree: %s. Run `hydra up %s` here for a copy of your own.", name, h.(health).reason, name)
@@ -454,6 +472,7 @@ func (r *Router) dispatch(name string) http.Handler {
 			json.NewEncoder(w).Encode(map[string]string{"service": name, "tag": tag, "target": t.label})
 			return
 		}
+		r.active(tag)
 		proxy.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), targetKey{}, t)))
 	})
 }

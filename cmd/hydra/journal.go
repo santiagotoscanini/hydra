@@ -18,6 +18,7 @@ import (
 //	start    a long-running one (watch, router, dashboard) starting
 //	problem  each ✗ and ! a check showed someone, with its fix
 //	slot     a worktree taking a slot, or taking a stopped one's
+//	idle     a worktree's stack stopped after x-hydra idle_stop unused
 //	process  a process of a stack changing state (from the watcher in a
 //	         worktree, the router in main), with its last lines of output
 //	         when it failed or restarted

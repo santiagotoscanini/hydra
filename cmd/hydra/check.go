@@ -609,7 +609,11 @@ func worktreeProblems(ms *mainState, ws *wtState, started bool) []problem {
 	if started {
 		switch {
 		case !ws.Up:
-			out = append(out, problem{Blocks: true, Text: "this worktree's stack isn't running.", Fix: "hydra up -D"})
+			pr := problem{Blocks: true, Text: "this worktree's stack isn't running.", Fix: "hydra up -D"}
+			if n := readIdleNote(ws.target.checkout.Root); n != nil {
+				pr.Text = n.text()
+			}
+			out = append(out, pr)
 		default:
 			out = append(out, localProblems(ms, ws)...)
 		}

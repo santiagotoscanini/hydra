@@ -125,11 +125,19 @@ type snapWorktree struct {
 	Memory     int64         `json:"memory"`
 	Problems   []snapProblem `json:"problems"`
 	Update     *snapUpdate   `json:"update,omitempty"`
+	// IdleStopped: its stack isn't running because nobody used it for
+	// x-hydra idle_stop, and hydra stopped it.
+	IdleStopped *snapIdle `json:"idleStopped,omitempty"`
 	// Pending: not planned yet (the first seconds of a watch).
 	Pending   bool      `json:"pending,omitempty"`
 	PlannedAt time.Time `json:"plannedAt"`
 	GitAt     time.Time `json:"gitAt"`
 	Error     string    `json:"error,omitempty"`
+}
+
+type snapIdle struct {
+	At    time.Time `json:"at"`
+	After string    `json:"after"` // the idle_stop: "2h"
 }
 
 type snapshot struct {
@@ -665,6 +673,9 @@ func snapWorktreeOf(ms *mainState, wt stack.Worktree, p *wtPlan, g *wtGit, mem f
 	}
 	ws := p.ws
 	w.Slot, w.Up, w.MainBehind = ws.Slot, ws.Up, ws.Plan.MainBehind
+	if n := readIdleNote(wt.Root); n != nil && !ws.Up {
+		w.IdleStopped = &snapIdle{At: n.At, After: n.After}
+	}
 	for _, k := range ws.Plan.OutOfStep {
 		w.OutOfStep = append(w.OutOfStep, snapSkew{Service: k.Service, Why: k.Why, Files: k.Files})
 	}

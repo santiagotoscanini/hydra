@@ -425,6 +425,7 @@ without: [web]       # never run these here
       <tr><th>You do</th><th>What happens</th></tr>
       <tr><td><code>hydra down</code></td><td>This worktree's stack stops. Main's and every other worktree's are untouched: a worktree's process-compose listens on a socket of its own.</td></tr>
       <tr><td><code>hydra up -D</code> later</td><td>It starts again on the same slot, so the same ports. A <a href="#supabase">database of its own</a> comes back with its data.</td></tr>
+      <tr><td>Leave it unused</td><td>With <a href="#idle"><code>idle_stop</code></a> set, hydra stops its stack after that long, and <code>hydra up -D</code> brings it back.</td></tr>
       <tr><td>Remove the worktree</td><td>Nothing to run first. If its stack is up, it stops by itself within seconds, and its own database is deleted with it. See <a href="#cleanup">stopping and cleaning up</a>.</td></tr>
     </table></div>
   </section>
@@ -484,7 +485,7 @@ shop-search    search    -     -      api        behind main in web  (4 behind, 
 ok: main's stack is up and runs what main has checked out.
 </pre>
     </div>
-    <p><code>SLOT -</code> is a worktree that never started a stack. <code>STACK</code> is <code>up</code>, <code>up, 1 problem</code> (run <code>hydra status</code> there for it) or <code>-</code>. <code>VS MAIN</code> says whether the branch and main are <a href="#instep">in step</a>, then how many commits each side has that the other lacks.</p>
+    <p><code>SLOT -</code> is a worktree that never started a stack. <code>STACK</code> is <code>up</code>, <code>up, 1 problem</code> (run <code>hydra status</code> there for it), <code>idle-stopped</code> (<a href="#idle">stopped for being unused</a>) or <code>-</code>. <code>VS MAIN</code> says whether the branch and main are <a href="#instep">in step</a>, then how many commits each side has that the other lacks.</p>
 
     <h3 id="messages">Every message, and what to do</h3>
     <p><b>About main's stack.</b> These show in every worktree that uses it.</p>
@@ -513,6 +514,7 @@ ok: main's stack is up and runs what main has checked out.
     <p><b>About this worktree's stack.</b></p>
     <div class="msgs">
       <div><p class="said">✗ this worktree's stack isn't running.</p><p><code>hydra up -D</code>.</p></div>
+      <div><p class="said">✗ this worktree's stack was stopped after 2h idle (at Nov 25 14:02); hydra up starts it again.</p><p>Nobody used it for <a href="#idle"><code>idle_stop</code></a>, so hydra stopped it. Nothing was lost: <code>hydra up -D</code> starts it again, on the same slot. The first line of <code>hydra status</code> says <code>stack stopped after 2h idle</code>, <code>hydra status --all</code> says <code>idle-stopped</code>, and the dashboard <code>idle-off</code>.</p></div>
       <div><p class="said">✗ web here exited with code 1. Its last output: …</p><p>A process of this worktree failed, one of hydra's own steps included (<code>hydra-prepare-worker</code>, say). Fix what the output says, then <code>hydra process restart web</code>.</p></div>
       <div><p class="said">    Port 3200 is held by node (pid 4821), left over from an earlier run of this stack.</p><p>Added under a failed process when its output says its port was taken. A leftover is the service's own earlier copy, which outlived a process-compose that <a href="#cleanup">was killed</a>. The fix line is the restart: <code>hydra process restart web</code> stops the leftover first.</p></div>
       <div><p class="said">    Port 3200 is held by node (pid 4821), which runs in this checkout but not as part of its stack.</p><p>Someone started it by hand here, a dev server in a terminal for instance. Stop it there, or use the fix line: <code>kill 4821 &amp;&amp; hydra process restart web</code>.</p></div>
@@ -577,7 +579,7 @@ ok: main's stack is up and runs what main has checked out.
       <tr><th>Column</th><th>What it says</th></tr>
       <tr><td><code>CHECKOUT</code></td><td>The worktree's folder. <code>▸</code> is the one chosen, <code>*</code> the one you started the dashboard in.</td></tr>
       <tr><td><code>SLOT</code></td><td>Its <a href="#slots">slot</a>, which decides its ports. <code>-</code>: it never ran a stack, so it holds none.</td></tr>
-      <tr><td><code>STACK</code></td><td><code>up</code>; <code>down</code>; <code>starting</code>; <code>failing</code> (a process here failed); <code>up ✗2</code> (up, with two problems marked ✗). Main's reads <code>DOWN</code> when it isn't running.</td></tr>
+      <tr><td><code>STACK</code></td><td><code>up</code>; <code>down</code>; <code>idle-off</code> (hydra stopped it, <a href="#idle">unused</a>); <code>starting</code>; <code>failing</code> (a process here failed); <code>up ✗2</code> (up, with two problems marked ✗). Main's reads <code>DOWN</code> when it isn't running.</td></tr>
       <tr><td><code>RUNS HERE</code></td><td>What runs in the worktree. For main: how many of its processes are fine, <code>4/4 ok</code>.</td></tr>
       <tr><td><code>VS MAIN</code></td><td><code>2↓</code> commits behind main, <code>1↑</code> ahead. <code>behind in api</code>: main changed a service this worktree takes from it (see <a href="#instep">in step with main</a>). <code>conflicts(1)</code>: <code>hydra update</code> would conflict in one file. <code>on cart</code>: stacked on the branch <code>cart</code>. <code>landed</code>: everything on the branch is in main already. For main: commits its upstream has that it doesn't, and uncommitted files.</td></tr>
     </table></div>
@@ -674,6 +676,7 @@ ok: main's stack is up and runs what main has checked out.
       <tr><td><code>stack</code></td><td>The branches it is stacked on, bottom first, when it sits on another worktree's branch.</td></tr>
       <tr><td><code>outOfStep</code></td><td>The services where the branch and main disagree, each with why and the files. <code>mainBehind</code>: main is the older side.</td></tr>
       <tr><td><code>update</code></td><td>What <code>hydra update</code> would do to it now: <code>parent</code> (what is merged in), <code>action</code> (<code>merge</code>, <code>fast-forward</code>, or absent when it is left alone), <code>note</code> (the update's line for it), <code>hand</code> (someone has to step in) and <code>conflicts</code>.</td></tr>
+      <tr><td><code>idleStopped</code></td><td>The stack isn't running because nobody used it for <a href="#idle"><code>idle_stop</code></a>: <code>at</code> (when hydra stopped it) and <code>after</code> (the <code>idle_stop</code>, <code>"2h"</code>). Absent otherwise.</td></tr>
       <tr><td><code>pending</code></td><td>Not planned yet: the first seconds of a watch.</td></tr>
     </table></div>
     <p><code>hydra status --json --watch</code> prints one such object per line, every second, and reads lines on its standard input: <code>refresh</code> reads everything again now, <code>refresh ROOT</code> reads that worktree again. It ends when its input closes.</p>
@@ -790,6 +793,20 @@ stopped 2 worktree stacks; the main checkout's stack is untouched.
 </pre>
     </div>
     <p>Nothing is lost by stopping. <code>hydra up -D</code> in a worktree brings its stack back on the same ports.</p>
+    <h3 id="idle">When nobody uses a worktree</h3>
+    <p>An agent that is done with a worktree leaves its stack running, and each holds a gigabyte or two. Set <code>idle_stop</code> in <code>x-hydra</code> and hydra stops a worktree's stack once nobody has used it for that long:</p>
+    <div class="code">
+<pre data-lang="yaml">
+x-hydra:
+  idle_stop: 2h
+</pre>
+    </div>
+    <p>Using it means either of:</p>
+    <ul>
+      <li><b>A request through hydra's router</b> for that worktree: a page on its port for a <a href="#routed">routed</a> service, or a call a routed service makes on its behalf. The router writes the time into the worktree's <code>.process-compose/hydra-activity</code>. hydra's own checks don't count.</li>
+      <li><b>A change to its files</b>: what <code>git status</code> lists changes (a new file, a commit), or a file it lists is saved again.</li>
+    </ul>
+    <p>The worktree's watcher keeps the clock, from when the stack started. When it runs out, it stops the stack the way <code>hydra down</code> there would, writes an <code>idle</code> event to <a href="#journal">the journal</a>, and leaves a note that <code>hydra status</code>, <code>hydra status --json</code> and <a href="#dashboard">the dashboard</a> show. <code>hydra up -D</code> starts it again on the same slot and clears the note. Requests that go straight to a service the worktree runs itself (its own api on its own port) don't pass the router and aren't seen, so a worktree used only that way counts as idle unless its files change. The main checkout's stack never stops.</p>
     <h3>When a worktree is removed</h3>
     <p>Remove a worktree the way you always do: <code>git worktree remove</code>, or the app that manages your worktrees. You don't have to stop anything first, and hydra needs no command. The worktree's watcher notices within a second, and a few seconds later:</p>
     <ol>
@@ -944,6 +961,7 @@ $ hydra down             # when the work is done
       <tr><td><code>problem</code></td><td>A check shows a ✗ or a ! (<code>hydra status</code>, <code>hydra up</code>): its text and its fix.</td></tr>
       <tr><td><code>process</code></td><td>A process of a stack changes state: started, ready, exited, restarted, failed. With the last 30 lines of its output when it failed or restarted. Seen by the watcher in a worktree and by <code>hydra-router</code> in main, within two seconds.</td></tr>
       <tr><td><code>usage</code></td><td>Once a minute for each stack that runs: the resident memory and CPU of each process and its children, and of the checkout's native Supabase stack, which runs detached. Main's also records the machine's free memory and swap.</td></tr>
+      <tr><td><code>idle</code></td><td>hydra stopped a worktree's stack that nobody used for <a href="#idle"><code>idle_stop</code></a> (<code>after</code>), or failed to (<code>error</code>).</td></tr>
       <tr><td><code>slot</code></td><td>A worktree takes its slot on <code>hydra up</code>, or the slot of a stopped one.</td></tr>
       <tr><td><code>start</code>, <code>log</code></td><td>The watcher, the router or the dashboard starts; every line the watcher and the router print.</td></tr>
     </table></div>
@@ -1352,6 +1370,7 @@ supabase:
       <tr><td><code>slot_stride</code><span class="type">integer</span></td><td class="def">1000</td><td>Port offset per slot. Slot N listens on <code>port</code> + N × <code>slot_stride</code>.</td></tr>
       <tr><td><code>max_slots</code><span class="type">integer</span></td><td class="def">20</td><td>How many worktrees can hold a slot. Port collisions are checked for all of them. Slots where a browser would refuse a port, or where another program already answers on one (macOS's AirPlay Receiver holds 5000 and 7000), aren't handed out, so a few fewer may be usable. With routed services, run <code>hydra update</code> in main after changing it: the router's own ports sit one stride past the last slot, and main's services only learn the new ones on that reload.</td></tr>
       <tr><td><code>reserved_ports</code><span class="type">list of integers</span></td><td class="def">[]</td><td>Ports used by shared services or anything else on the machine. No slot may land on one.</td></tr>
+      <tr><td><code>idle_stop</code><span class="type">duration</span></td><td class="def">off</td><td>Stops a worktree's stack once nobody has used it for this long (<code>2h</code>, <code>90m</code>, <code>30s</code>): no request through hydra's router for it, and no file in it changed. <code>0</code> or <code>off</code> never stops one. Main's stack never stops. See <a href="#idle">when nobody uses a worktree</a>.</td></tr>
       <tr><td><code>host</code><span class="type">string</span></td><td class="def">127.0.0.1</td><td>The host used to build upstream addresses.</td></tr>
       <tr><td><code>port_env</code><span class="type">string</span></td><td class="def">PORT</td><td>The variable a service reads its port from, unless the process sets its own.</td></tr>
       <tr><td><code>global_paths</code><span class="type">list of globs</span></td><td class="def">[]</td><td>Files that count as a change to every service that declares <code>paths</code>, such as a lockfile.</td></tr>
@@ -1525,6 +1544,8 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>.process-compose/hydra-source.yaml</code><span class="type">in the main checkout</span></td><td>A copy of the <code>process-compose.yaml</code> main's running stack was started from, written by <code>hydra up</code> and <code>hydra update</code>. hydra-router reads it, so its ports stay the ones main's services were given until <code>hydra update</code> applies a changed file. Don't edit it; ignore it in git.</td></tr>
       <tr><td><code>.process-compose/pgbouncer/</code><span class="type">in the main checkout</span></td><td>With a <a href="#pool">pool</a>: <code>pgbouncer.ini</code> and <code>userlist.txt</code>, written by <code>hydra-pgbouncer</code> each time it starts, from the stack main was started from. Don't edit them; ignore them in git.</td></tr>
       <tr><td><code>.process-compose/watch-anchor/</code><span class="type">in a worktree</span></td><td>An empty directory. <code>hydra-watch</code>'s own <code>watch</code> points at it, so that process-compose restarts your services on edits (see <a href="#generated">the generated file</a>). Nothing is ever written there.</td></tr>
+      <tr><td><code>.process-compose/hydra-activity</code><span class="type">in a worktree</span></td><td>Empty. Its modification time is the last request for the worktree through main's router, at most once a second; with <a href="#idle"><code>idle_stop</code></a>, its watcher reads it.</td></tr>
+      <tr><td><code>.process-compose/idle-stopped</code><span class="type">in a worktree</span></td><td>When hydra stopped the stack for being <a href="#idle">idle</a>, and after how long. There until the stack starts again.</td></tr>
       <tr><td><code>.hydra.local.yaml</code><span class="type">in a worktree</span></td><td>Yours, and optional: <a href="#local">per-worktree settings</a>. hydra only reads it.</td></tr>
       <tr><td><code>hydra-slots.json</code><span class="type">shared .git</span></td><td>Which worktree holds which slot.</td></tr>
       <tr><td><code>hydra-baseline.json</code><span class="type">shared .git</span></td><td>The commit main's stack was last brought to, and where its process-compose listens. Written when main's stack starts and after a successful <code>hydra update</code>.</td></tr>
@@ -1560,7 +1581,8 @@ $ hydra plan --route web.api=local       # also starts api here
       <li><b>Paths are written by hand.</b> They aren't derived from a dependency graph yet, so a shared package has to be listed on each service that imports it. The report of <a href="#changes">changed files that no service lists</a> is the safety net.</li>
       <li><b>Ports are per repository.</b> Two repositories whose stacks use the same ports can't run at once.</li>
       <li><b>Ports are computed, not probed.</b> If another program already listens on one of a slot's ports, the service there fails to start, and <code>hydra status</code> names the program.</li>
-      <li><b>Stacks stop when you stop them.</b> A worktree's stack runs until <code>hydra down</code>, <code>hydra down --worktrees</code>, or the worktree's removal. Nothing stops an idle one for you. A stack whose process-compose is killed is the exception: hydra stops the rest of it.</li>
+      <li><b>Stacks stop when you stop them.</b> A worktree's stack runs until <code>hydra down</code>, <code>hydra down --worktrees</code>, the worktree's removal, or, with <a href="#idle"><code>idle_stop</code></a>, until nobody used it for that long. A stack whose process-compose is killed is the exception: hydra stops the rest of it.</li>
+      <li><b><code>idle_stop</code> sees the router and the files.</b> Requests straight to a service a worktree runs itself, on its own port, don't pass the router: a worktree used only that way, with no edits, counts as idle.</li>
       <li><b>Merged branches.</b> <code>hydra update</code> recognises a branch whose changes are all in main when the merge is clean. One that was squash-merged and then conflicts with later commits shows up as a conflict.</li>
       <li><b>Tested with process-compose v1.124</b> on macOS.</li>
     </ul>

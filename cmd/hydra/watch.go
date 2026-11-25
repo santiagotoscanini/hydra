@@ -114,6 +114,8 @@ func watchCmd(args []string) error {
 	forgetOnStop(t.checkout.Root)
 	openJournalFor(t.checkout)
 	journal.Log("start", journal.Fields{"what": "watch"})
+	os.Remove(idleNoteFile(t.checkout.Root)) // the stack runs again
+	idle := newIdleClock(time.Now())
 	logf("watching %s every %s", describeStack(t), *interval)
 	mon := newMonitor(pc.Unix(sock), t.checkout.Root, false)
 	parent := os.Getppid()
@@ -141,7 +143,8 @@ func watchCmd(args []string) error {
 		// watchers doing it every two seconds keep the machine busy for
 		// nothing. So a tick plans only when what a plan reads has changed,
 		// and at least every fullEvery whatever it says.
-		if key := watchKey(t); key == "" || key != lastKey || time.Since(lastFull) >= fullEvery {
+		key, status := watchKeyAnd(t)
+		if key == "" || key != lastKey || time.Since(lastFull) >= fullEvery {
 			p, err := step(t, o, cmd, out, sock)
 			if err != nil {
 				logf("%v", err) // a failed git call (mid-rebase, say) shouldn't end the watch
@@ -158,6 +161,14 @@ func watchCmd(args []string) error {
 		}
 		if *once {
 			return nil
+		}
+		if limit := time.Duration(t.stack.Hydra.IdleStop); limit > 0 && key != "" {
+			now := time.Now()
+			idle.see(now, string(status), usedAt(t.checkout.Root, status))
+			if idle.idle(now) >= limit {
+				stopIdle(t, limit)
+				idle = newIdleClock(now) // the stop ends this watcher; if it fails, wait as long again
+			}
 		}
 		started = track(t.checkout.Root, mon, started)
 		// Look for the removal more often than for changes: every file this
@@ -213,15 +224,25 @@ const fullEvery = 30 * time.Second
 // files hydra reads.
 // Equal keys mean an equal plan. "" means it couldn't tell.
 func watchKey(t *target) string {
+	key, _ := watchKeyAnd(t)
+	return key
+}
+
+// watchKeyAnd is watchKey, and what `git status` said (its -z output),
+// which the idle clock reads too.
+func watchKeyAnd(t *target) (key string, status []byte) {
 	h := sha256.New()
-	for _, args := range [][]string{
+	for i, args := range [][]string{
 		{"status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"},
 		{"worktree", "list", "--porcelain"},
 		{"for-each-ref", "--format=%(objectname) %(refname)", "refs/heads", "refs/remotes"},
 	} {
 		out, err := gitx.WorkTree(t.checkout.Root, args...).Output()
 		if err != nil {
-			return ""
+			return "", nil
+		}
+		if i == 0 {
+			status = out
 		}
 		h.Write(out)
 		h.Write([]byte{0})
@@ -239,7 +260,7 @@ func watchKey(t *target) string {
 			fmt.Fprintf(h, "%s -\n", f)
 		}
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	return hex.EncodeToString(h.Sum(nil)), status
 }
 
 func step(t *target, o options, cmd, out, sock string) (*plan.Plan, error) {

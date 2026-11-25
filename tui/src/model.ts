@@ -22,6 +22,8 @@ export interface Entry {
 	update?: Update;
 	outOfStep: string[];
 	mainBehind: boolean;
+	/** hydra stopped its stack after this long unused ("2h"). */
+	idleStopped?: string;
 	memory: number;
 	pending: boolean;
 	error?: string;
@@ -73,6 +75,7 @@ export function entries(s: Snapshot): Entry[] {
 			update: w.update,
 			outOfStep: w.outOfStep.map((k) => k.service),
 			mainBehind: !!w.mainBehind,
+			idleStopped: w.idleStopped?.after,
 			memory: w.memory,
 			pending: !!w.pending,
 			error: w.error,
@@ -94,6 +97,7 @@ export function stackState(e: Entry): { text: string; color?: string } {
 	const blocking = e.problems.filter((p) => p.blocks).length;
 	if (!e.up) {
 		if (e.kind === "main") return { text: "DOWN", color: "red" };
+		if (e.idleStopped) return { text: "idle-off", color: "blue" };
 		return { text: "down", color: "gray" };
 	}
 	const svcs = runsHere(e);
