@@ -896,7 +896,7 @@ $ hydra down             # when the work is done
 - Start: `hydra up -D`, then `hydra status --wait`. Run both from this worktree's root.
 - `hydra status` prints this worktree's ports. Don't assume 3000: every worktree has its own.
 - If `hydra status` or `hydra up` prints a line marked ✗, run the command on its `fix:` line
-  when it acts on this worktree (`hydra process restart NAME`, `hydra up NAME`, `git merge main`).
+  when it acts on this worktree (`hydra process restart NAME`, `hydra up NAME`, `hydra update --here`).
 - Stop and ask before any fix that reaches further: `hydra update` moves the main checkout
   and merges into every worktree; anything starting with `cd` into the main checkout changes
   the stack everyone shares; `--force` skips the checks.
