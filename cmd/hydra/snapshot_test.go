@@ -2,42 +2,17 @@ package main
 
 import (
 	"encoding/json"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/santiagotoscanini/hydra/internal/gitx"
 	"github.com/santiagotoscanini/hydra/internal/pc"
 	"github.com/santiagotoscanini/hydra/internal/plan"
+	"github.com/santiagotoscanini/hydra/internal/stack"
 )
 
-func TestStatusPageIsServed(t *testing.T) {
-	u := newUI(gitx.Checkout{Root: "/repo/main", Main: "/repo/main"})
-	srv := httptest.NewServer(u.handler())
-	defer srv.Close()
-
-	resp, err := srv.Client().Get(srv.URL + "/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := make([]byte, 1<<20)
-	n, _ := resp.Body.Read(body)
-	resp.Body.Close()
-	if !strings.Contains(string(body[:n]), "<title>hydra</title>") {
-		t.Errorf("/ isn't the page: %.80q", body[:n])
-	}
-	// Another hydra finds out here whose page this is.
-	if got := uiRepoAt(strings.TrimPrefix(srv.URL, "http://")); got != "/repo/main" {
-		t.Errorf("uiRepoAt = %q", got)
-	}
-	if resp, _ := srv.Client().Get(srv.URL + "/nope"); resp.StatusCode != 404 {
-		t.Errorf("/nope = %d", resp.StatusCode)
-	}
-}
-
-func TestWhatThePageSaysAboutAWorktree(t *testing.T) {
+func TestWhatTheSnapshotSaysAboutAWorktree(t *testing.T) {
 	st := checkSt(t)
 	mainT := &target{stack: st}
 	mainT.checkout.Root, mainT.checkout.Main = "/repo/main", "/repo/main"
@@ -48,7 +23,7 @@ func TestWhatThePageSaysAboutAWorktree(t *testing.T) {
 		}}
 	wtT := &target{stack: st}
 	wtT.checkout.Root, wtT.checkout.Main = "/repo/wt", "/repo/main"
-	build := func(slot int, up bool) uiWorktree {
+	build := func(slot int, up bool) snapWorktree {
 		t.Helper()
 		p, err := plan.Build(st, plan.Request{Slot: 1, Changed: []string{"api/users.go"}, MainChanged: []string{"web/page.tsx"}})
 		if err != nil {
@@ -62,10 +37,10 @@ func TestWhatThePageSaysAboutAWorktree(t *testing.T) {
 			}
 		}
 		mem := func(pid int) int64 { return int64(pid) * 1000 }
-		return uiWorktreeOf(ms, "/repo/wt", &uiPlan{ws: ws, commit: "def", behind: 3, ahead: 1, at: time.Now()}, mem)
+		return snapWorktreeOf(ms, stack.Worktree{Root: "/repo/wt", Branch: "cart"}, &wtPlan{ws: ws, at: time.Now()}, &wtGit{commit: "def", behind: 3, ahead: 1, at: time.Now()}, mem)
 	}
-	byName := func(w uiWorktree) map[string]uiService {
-		m := map[string]uiService{}
+	byName := func(w snapWorktree) map[string]snapService {
+		m := map[string]snapService{}
 		for _, s := range w.Services {
 			m[s.Name] = s
 		}
@@ -113,8 +88,8 @@ func TestWhatThePageSaysAboutAWorktree(t *testing.T) {
 		t.Errorf("main's db keeps its port: %+v", db)
 	}
 
-	// The whole thing is what the page reads.
-	data, err := json.Marshal(uiSnapshot{Repo: "/repo/main", Main: uiMainOf(ms, func(int) int64 { return 0 }), Worktrees: []uiWorktree{w}})
+	// The whole thing is what the dashboard reads.
+	data, err := json.Marshal(snapshot{Version: snapshotVersion, Repo: "/repo/main", Main: snapMainOf(ms, func(int) int64 { return 0 }), Worktrees: []snapWorktree{w}})
 	if err != nil || !strings.Contains(string(data), `"outOfStep":[{"service":"web"`) {
 		t.Errorf("json: %v %s", err, data)
 	}
@@ -126,5 +101,21 @@ func TestMemoryCountsAProcessAndItsChildren(t *testing.T) {
 	}
 	if got := processTrees()(0); got != 0 {
 		t.Errorf("pid 0 = %d", got)
+	}
+}
+
+func TestAFixIsRunWhenItIsAHydraCommand(t *testing.T) {
+	for fix, want := range map[string]string{
+		"hydra update": "hydra update",
+		"hydra update   (or, for this worktree alone: git merge main)":                               "hydra update",
+		"cd '/repo/main' && hydra up -D":                                                             "cd '/repo/main' && hydra up -D",
+		"hydra up web   (runs a copy here instead)":                                                  "hydra up web",
+		"if a service uses them, add them to its paths (`hydra up SERVICE` runs one here meanwhile)": "",
+		"psql postgresql://x -c 'ALTER' && hydra process restart supabase   (in the main checkout)":  "",
+		"": "",
+	} {
+		if got := runnableFix(fix); got != want {
+			t.Errorf("runnableFix(%q) = %q, want %q", fix, got, want)
+		}
 	}
 }

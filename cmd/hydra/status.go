@@ -28,18 +28,24 @@ func (errProblems) Error() string { return "" }
 //
 //	hydra status         this worktree (in the main checkout: everything)
 //	hydra status --all   the main checkout and every worktree
+//	hydra status --json  all of it as JSON (--watch: again every second)
 func statusCmd(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	all := fs.Bool("all", false, "")
 	wait := fs.Bool("wait", false, "")
 	timeout := fs.Duration("timeout", 10*time.Minute, "")
+	asJSON := fs.Bool("json", false, "")
+	watch := fs.Bool("watch", false, "")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	co, err := gitx.Find(".")
 	if err != nil {
 		return err
+	}
+	if *asJSON {
+		return statusJSON(co, *watch)
 	}
 	waited := time.Duration(0) // how long --wait waited before it gave up
 	if *wait {

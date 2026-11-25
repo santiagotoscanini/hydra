@@ -7,11 +7,10 @@
 //	hydra render [flags] [-o FILE] print or write the rendered file
 //	hydra slots [free [PATH]]      list worktree slots, or free one
 //	hydra throttle NAME N -- CMD   run CMD when fewer than N named NAME run
-//	hydra status [--all]           check this checkout against main's stack
+//	hydra status [--all|--json]    check this checkout against main's stack
 //	hydra update                   pull main and bring everything along
 //	hydra log [KIND...]            what hydra did and saw, in every checkout
 //	hydra report                   all of it in one file, to send for help
-//	hydra ui                       the same as a local web page
 //	hydra trust                    trust the CA behind TLS fronts
 //	hydra version                  which hydra, which process-compose
 package main
@@ -76,6 +75,10 @@ Hydra's own commands:
                                  --wait: first wait for what is still starting,
                                  for at most --timeout D, 10m by default; what is
                                  still starting then is an error)
+  hydra status --json [--watch]  main and every worktree as one JSON object: what
+                                 each runs, its processes, problems and fixes, how
+                                 far behind main, what an update would do (--watch:
+                                 one line every second; what the dashboard reads)
   hydra update [flags]           pull main, restart what the new commits touched
                                  in its stack, merge main into the worktrees
   hydra log [KIND...] [flags]    what hydra did and saw in main and every worktree:
@@ -87,9 +90,6 @@ Hydra's own commands:
                                  helps: versions, every stack's state now, usage
                                  over time, what went wrong, and the journal
                                  (--since 24h by default); prints its path
-  hydra ui [--port N] [--no-open]  a local web page of all of it: main, every
-                                 worktree, what each runs and takes from main,
-                                 commits, memory (default port 4937)
   hydra trust [--remove|--print] make this machine trust the local CA behind
                                  hydra's TLS fronts (x-hydra.tls on a service)
   hydra plan   [flags]           show what this checkout runs and how it is wired
@@ -176,8 +176,6 @@ func run(args []string) error {
 			return reportCmd(args[1:])
 		case "update":
 			return updateCmd(args[1:])
-		case "ui":
-			return uiCmd(args[1:])
 		case "trust":
 			return trustCmd(args[1:])
 		case "watch":
