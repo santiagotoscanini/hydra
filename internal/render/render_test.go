@@ -228,6 +228,27 @@ processes:
 	if sb.ReadinessProbe.HTTPGet.Port != 54521 {
 		t.Errorf("probe port = %d", sb.ReadinessProbe.HTTPGet.Port)
 	}
+	if strings.Contains(sb.Command, "MIGRATIONS_ENABLED") || strings.Contains(env, "HYDRA_MAIN_DB") {
+		t.Errorf("without seed_from_main, the start is the stack file's: %q %s", sb.Command, env)
+	}
+
+	// With seed_from_main, a start that creates the stack runs without
+	// migrations and seeds, and hydra's steps know where main's database is.
+	st.Services["supabase"].SeedFromMain = true
+	out, err = Render(st, p, Options{Dir: "/wt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatal(err)
+	}
+	sb = doc.Processes["supabase"]
+	if want := "--before || exit 1\n[ ! -e '/wt/.process-compose/supabase-seed-from-main' ] || export SUPABASE_DB_MIGRATIONS_ENABLED=false SUPABASE_DB_SEED_ENABLED=false\n(\nsupabase start\n)"; !strings.Contains(sb.Command, want) {
+		t.Errorf("command = %q, want it to contain %q", sb.Command, want)
+	}
+	if env := strings.Join(sb.Environment, " "); !strings.Contains(env, "HYDRA_MAIN_DB=postgresql://supabase_admin:postgres@127.0.0.1:54322/postgres") {
+		t.Errorf("environment lacks main's database: %s", env)
+	}
 
 	// The baseline runs the command as written.
 	base, err := Render(st, plan.BaselinePlan(st), Options{Dir: "/main"})

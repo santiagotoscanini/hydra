@@ -716,6 +716,65 @@ idle stack is about 110 MB (Postgres only; the rest start on demand). Its
 keys and JWT signing key are the CLI's local defaults, the same as the
 baseline's, so only URLs differ.
 
+**Main's data, with `seed_from_main: true`.** Seeds are a few rows, so
+agents in a worktree test against an almost empty app, and a migration that
+breaks on real rows (a `NOT NULL` column without a default, a unique index
+over duplicates) passes there and fails after the merge, on main. With the
+key, a worktree's database is main's state plus the branch's new
+migrations:
+
+- `--before` decides whether this start creates the stack: no stack of this
+  directory has the current branch (`supabase stack list`), or `hydra db
+  reseed` left `.process-compose/supabase-reseed`, in which case it first
+  destroys the branch's stack by id. Then it leaves
+  `.process-compose/supabase-seed-from-main`, and the rendered command
+  exports `SUPABASE_DB_MIGRATIONS_ENABLED=false SUPABASE_DB_SEED_ENABLED=false`
+  for that start: the CLI makes the stack with Supabase's own schemas and
+  nothing of the app's.
+- `--started` (the start worked, the file is there) reads main's applied
+  versions from `supabase_migrations.schema_migrations`, applies those files
+  from the worktree with `supabase migration up --include-all --workdir
+  <temp dir holding only them>` (as `postgres`, who has to own what the
+  branch's migrations alter), copies the rows, removes the file, and then
+  runs the usual `migration up`, which now applies only the branch's own
+  migrations, on main's rows. A failure there fails the start, with the
+  CLI's `Applying migration …` and Postgres's error as its last output, and
+  the data stays: the corrected file applies on the next restart.
+- The copy is pgx `COPY … TO STDOUT` from main piped into `COPY … FROM
+  STDIN`, table by table, in the text format (the binary one carries type
+  ids that differ between servers), inside one repeatable-read transaction
+  on main and one transaction on the worktree, as `supabase_admin` with
+  `session_replication_role = replica` (no triggers, no foreign key checks:
+  the rows were consistent in main; a trigger on `auth.users` that inserts a
+  profile would otherwise double them). It truncates the target tables
+  first (migrations insert rows too), skips generated columns, partitioned
+  parents, unlogged tables and tables an extension owns, and sets every
+  sequence to main's value. Supabase's own schemas (`realtime`, `vault`,
+  `cron`, `net`, `supabase_functions`, `extensions`, …) and the services'
+  migration records (`auth.schema_migrations`, `storage.migrations`) are
+  left out: the worktree's stack has its own, and what migrations put there
+  they put there again. Auth and storage are copied: users, identities,
+  buckets and objects' metadata (the files themselves aren't).
+- Measured on CLI 2.122.1, native stacks, Postgres 17: 1,001,010 rows in
+  37 tables (91 MB as text) in 2 s, main's migrations included; `pg_dump
+  --data-only | psql` with the CLI's own 17.11 binaries takes 1.8 s for the
+  one large table. COPY needs no `pg_dump` that matches the server's
+  version (the CLI's cache holds 15 and 17, a PATH may hold anything) and
+  writes nothing to disk. A whole reseed, destroy and create included,
+  takes about 10 s.
+- It refuses rather than guesses: main's database not answering, main
+  having migrations the branch lacks (its rows wouldn't fit; merge main
+  first), the worktree's database having migrations main hasn't, and both
+  addresses reaching one server (`system_identifier`), which a stack file
+  that exports main's ports in the shared `command` does. Each fails the
+  start with one line saying why, and the file stays, so the next start
+  copies. No fallback to the seeds: an empty database where main's data was
+  asked for is the surprise this exists to remove.
+- Once only. A resumed stack keeps its data, and `hydra db reseed` is the
+  way to copy again: it leaves the request, restarts the process through
+  process-compose's API and waits for `.process-compose/supabase-branch`,
+  printing what the copy did (`.process-compose/supabase-seeded`).
+
 New kinds (SQS queues, Redis key prefixes) go in the same table.
 
 The runtime is the stack file's choice, not hydra's: `command: supabase
