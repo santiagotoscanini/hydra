@@ -73,3 +73,31 @@ func TestFarBehind(t *testing.T) {
 		t.Errorf("an unknown commit: %+v", f)
 	}
 }
+
+// git merge-tree exits 1 on a conflict, and also on a commit it can't read.
+// hydra update must call the second a failure, never a conflict in no files.
+func TestUpdateSaysAnUnreadableCommitIsNoConflict(t *testing.T) {
+	co := gitRepo(t)
+	dir := co.Root
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	os.WriteFile(filepath.Join(dir, "a.go"), []byte("one\n"), 0o644)
+	git("add", "-A")
+	git("commit", "-q", "-m", "a")
+
+	missing := "0123456789012345678901234567890123456789"
+	u := &wtUpdate{root: dir, name: "feature", parent: missing}
+	u.decide(dir, "main", missing, false)
+	if u.action != "" || !u.hand || strings.Contains(u.note, "CONFLICTS") || !strings.HasPrefix(u.note, "left alone: git merge-tree") {
+		t.Errorf("decide on a commit git can't read: action %q, hand %v, note %q", u.action, u.hand, u.note)
+	}
+	if _, _, err := mergeTree(dir, "HEAD", missing); err == nil {
+		t.Error("mergeTree on a commit git can't read: no error")
+	}
+}

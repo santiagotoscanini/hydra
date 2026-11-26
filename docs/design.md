@@ -425,7 +425,10 @@ no cron. Fetching is fine (it moves `origin/main` only).
    it conflicts (files and command are printed), when tracked files have
    uncommitted changes, when a merge or rebase is in progress, when no
    branch is checked out, or when the merged tree equals the parent's (the
-   branch is already in main, squash-merged for instance). After a merge in
+   branch is already in main, squash-merged for instance). merge-tree exits
+   1 on a conflict and also on a commit it can't read, so only output that
+   starts with a tree is a conflict; anything else leaves the worktree alone
+   with git's error, never as "CONFLICTS in 0 files". After a merge in
    a worktree whose stack runs, the processes whose `paths` match the merged
    files are restarted there, in the same way as in main.
 

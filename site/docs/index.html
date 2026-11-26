@@ -741,7 +741,7 @@ main is up to date. 2 worktrees need a hand (above); `hydra status --all` shows 
       <tr><td><code>fast-forwarded to main</code></td><td>The branch had no commits of its own, so it was moved to main's commit.</td></tr>
       <tr><td><code>main merged in</code></td><td>A merge commit was made on the branch. It isn't pushed.</td></tr>
       <tr><td><code>CONFLICTS with main in N files</code></td><td>Nothing was touched. The files and the command to run are listed below the table. Resolving is yours, or the agent's who owns the branch.</td></tr>
-      <tr><td><code>left alone: …</code></td><td>Tracked files have uncommitted changes; a merge or rebase is in progress; no branch is checked out; or everything on the branch is already in main (it was merged upstream, and the worktree can be removed).</td></tr>
+      <tr><td><code>left alone: …</code></td><td>Tracked files have uncommitted changes; a merge or rebase is in progress; no branch is checked out; everything on the branch is already in main (it was merged upstream, and the worktree can be removed); or <code>git merge-tree</code> failed, with git's error (a commit it can't read, say: <code>git fetch</code> brings a missing one).</td></tr>
       <tr><td><code>restarted there: api</code></td><td>The worktree's stack was running, and the merge changed files of services it runs.</td></tr>
     </table></div>
     <p>The exit code is 0 when main is up to date, also when some worktrees need a hand. It is 1 when a process of main's stack failed to come back: then the worktrees are left alone, <code>hydra status</code> keeps saying what is stale, and the next <code>hydra update</code> starts from the same place.</p>
