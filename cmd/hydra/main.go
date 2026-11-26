@@ -138,6 +138,9 @@ Hydra's own commands:
                                  stop this checkout's stack (status, up, wait,
                                  logs, restart, down, update_here, main_status);
                                  the ones that change a stack refuse in main.
+                                 worktrees, update_main and update_worktree, and
+                                 the update_all prompt, bring main and every
+                                 worktree up to date, the agent resolving conflicts
                                  Register: claude mcp add --scope user hydra -- hydra mcp
   hydra version                  which hydra this is, and which process-compose
 

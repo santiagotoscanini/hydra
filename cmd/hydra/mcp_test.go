@@ -72,8 +72,17 @@ func mcpRepo(t *testing.T) (main, wt string) {
 // and everything it wrote.
 func session(t *testing.T, dir string, lines ...string) (map[string]map[string]any, string) {
 	t.Helper()
+	return sessionWith(t, dir, "", lines...)
+}
+
+// sessionWith is session with the actions run by the hydra at exe.
+func sessionWith(t *testing.T, dir, exe string, lines ...string) (map[string]map[string]any, string) {
+	t.Helper()
 	var out bytes.Buffer
 	s := newMCPServer(dir, &out)
+	if exe != "" {
+		s.exe = exe
+	}
 	if err := s.serve(strings.NewReader(strings.Join(lines, "\n") + "\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +160,7 @@ func TestMCPProtocol(t *testing.T) {
 			t.Errorf("%s: inputSchema %v", tl["name"], tl["inputSchema"])
 		}
 	}
-	if got := strings.Join(names, " "); got != "status up wait down restart logs update_here main_status" {
+	if got := strings.Join(names, " "); got != "status up wait down restart logs update_here main_status worktrees update_main update_worktree" {
 		t.Errorf("tools: %s", got)
 	}
 	code := func(id string) any { return r[id]["error"].(map[string]any)["code"] }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +35,12 @@ import (
 // out again when the worktree's HEAD, main's or the branch it is stacked on
 // moves, and otherwise every two minutes (for uncommitted work, which keeps
 // an update away). A commit in the worktree or in main plans it again too.
+// Each second it also looks at each worktree's index file and MERGE_HEAD
+// (two stats): when either changed (files staged, a merge begun, resolved
+// or aborted), where the worktree stands is worked out again, at most every
+// few seconds. The slow parts due for the worktrees that moved go first,
+// ahead of the ones only due because main moved or time passed: after an
+// update of main, all of them are due at once.
 // None of the slow parts ever holds up a snapshot: they run in the
 // background and show up in the next. With 30 worktrees, 6 of them up, a
 // watch takes about a tenth of one core.
@@ -46,6 +53,7 @@ const (
 	planAgeRunning = 30 * time.Second
 	planAgeStopped = 2 * time.Minute
 	gitAge         = 2 * time.Minute
+	gitIndexGap    = 3 * time.Second // the least time between two looks for a changed index
 	mainAge        = 10 * time.Second
 	memoryAge      = 5 * time.Second
 	strayAge       = 15 * time.Second // lsof and ps of the machine
@@ -192,8 +200,9 @@ type snapshotter struct {
 	wts      []stack.Worktree // as git lists them, the main checkout left out
 	plans    map[string]*wtPlan
 	gits     map[string]*wtGit
-	busy     map[string]bool // a slow refresh of this worktree is under way
-	changed  chan struct{}   // a slow refresh finished
+	busy     map[string]bool   // a slow refresh of this worktree is under way
+	gitDirs  map[string]string // by worktree root: its git directory, read once
+	changed  chan struct{}     // a slow refresh finished
 	mem      func(pid int) int64
 	memAt    time.Time
 	// What holds the stacks' ports without being part of one, by checkout,
@@ -223,6 +232,72 @@ type wtGit struct {
 	// The commits it was worked out at: the worktree's, main's, and the
 	// one of the branch it is stacked on.
 	head, mainHead, parentHead string
+	index                      indexMark // the worktree's index and merge, as they were
+}
+
+// indexMark is what changes, without a commit, when someone stages files,
+// begins a merge, resolves it or aborts it: the index file and MERGE_HEAD.
+// Two stats, cheap enough for every worktree every second.
+type indexMark struct {
+	index time.Time
+	size  int64
+	merge bool
+}
+
+func markOf(gitDir string) indexMark {
+	var m indexMark
+	if gitDir == "" {
+		return m
+	}
+	if fi, err := os.Stat(filepath.Join(gitDir, "index")); err == nil {
+		m.index, m.size = fi.ModTime(), fi.Size()
+	}
+	_, err := os.Stat(filepath.Join(gitDir, "MERGE_HEAD"))
+	m.merge = err == nil
+	return m
+}
+
+// gitDirOf is a worktree's own git directory: .git in the main checkout,
+// and for a linked worktree the directory its .git file points to. "" when
+// it can't be told.
+func gitDirOf(root string) string {
+	dotGit := filepath.Join(root, ".git")
+	fi, err := os.Stat(dotGit)
+	switch {
+	case err != nil:
+		return ""
+	case fi.IsDir():
+		return dotGit
+	}
+	data, err := os.ReadFile(dotGit)
+	if err != nil {
+		return ""
+	}
+	dir, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir: ")
+	if !ok {
+		return ""
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(root, dir)
+	}
+	return dir
+}
+
+// gitDue says whether where a worktree stands has to be worked out again,
+// and whether it is urgent: the worktree itself moved (a commit, a merge
+// begun or aborted), as opposed to main moving or time passing.
+func gitDue(g *wtGit, head, mainHead, parentHead string, mark indexMark, now time.Time) (due, urgent bool) {
+	switch {
+	case g == nil:
+		return true, false
+	case g.head != head || g.parentHead != parentHead && g.update != nil:
+		return true, true
+	case g.index != mark && now.Sub(g.at) >= gitIndexGap:
+		return true, true
+	case g.mainHead != mainHead:
+		return true, false
+	}
+	return now.Sub(g.at) > gitAge, false
 }
 
 func newSnapshotter(here gitx.Checkout) (*snapshotter, error) {
@@ -232,7 +307,7 @@ func newSnapshotter(here gitx.Checkout) (*snapshotter, error) {
 	}
 	return &snapshotter{
 		here: here, main: mainCo,
-		plans: map[string]*wtPlan{}, gits: map[string]*wtGit{}, busy: map[string]bool{},
+		plans: map[string]*wtPlan{}, gits: map[string]*wtGit{}, busy: map[string]bool{}, gitDirs: map[string]string{},
 		changed: make(chan struct{}, 1),
 	}, nil
 }
@@ -339,8 +414,9 @@ func (s *snapshotter) refresh(wait, force bool, only string) {
 	s.wts = mine
 	live := map[string]bool{}
 	type job struct {
-		wt        stack.Worktree
-		plan, git bool
+		wt                stack.Worktree
+		plan, git, urgent bool
+		mark              indexMark
 	}
 	var jobs []job
 	now := time.Now()
@@ -355,10 +431,20 @@ func (s *snapshotter) refresh(wait, force bool, only string) {
 		if p != nil && p.ws != nil && p.ws.Up {
 			age = planAgeRunning
 		}
-		j := job{wt: wt}
+		gitDir, ok := s.gitDirs[wt.Root]
+		if !ok {
+			gitDir = gitDirOf(wt.Root)
+			s.gitDirs[wt.Root] = gitDir
+		}
+		j := job{wt: wt, mark: markOf(gitDir)}
+		parentHead := ""
+		if g != nil && g.update != nil {
+			parentHead = heads[g.update.Parent]
+		}
+		j.git, j.urgent = gitDue(g, wt.Head, mainHead, parentHead, j.mark, now)
+		j.git = j.git || forced
 		j.plan = forced || p == nil || p.head != wt.Head || p.mainHead != mainHead || now.Sub(p.at) > age
-		j.git = forced || g == nil || g.head != wt.Head || g.mainHead != mainHead || now.Sub(g.at) > gitAge ||
-			(g.update != nil && g.parentHead != heads[g.update.Parent])
+		j.urgent = j.urgent || forced || p != nil && p.head != wt.Head
 		if j.plan || j.git {
 			s.busy[wt.Root] = true
 			jobs = append(jobs, j)
@@ -368,6 +454,7 @@ func (s *snapshotter) refresh(wait, force bool, only string) {
 		if !live[root] {
 			delete(s.plans, root) // the worktree was removed
 			delete(s.gits, root)
+			delete(s.gitDirs, root)
 		}
 	}
 	var base, mainRoot string
@@ -381,41 +468,51 @@ func (s *snapshotter) refresh(wait, force bool, only string) {
 	if len(jobs) == 0 {
 		return
 	}
+	// The worktrees that moved first: they are the ones someone is looking at.
+	sort.SliceStable(jobs, func(a, b int) bool { return jobs[a].urgent && !jobs[b].urgent })
 	var wg sync.WaitGroup
+	wg.Add(len(jobs))
 	sem := make(chan struct{}, slowAtOnce)
-	for _, j := range jobs {
-		wg.Add(1)
-		go func(j job) {
-			defer wg.Done()
+	run := func(j job) {
+		defer wg.Done()
+		defer func() { <-sem }()
+		var p *wtPlan
+		var g *wtGit
+		if j.plan {
+			p = planWorktree(j.wt, mainHead)
+		}
+		if j.git && base != "" {
+			g = gitState(j.wt, mainRoot, base, mainHead, limit)
+			g.parentHead = heads[g.update.Parent]
+			g.index = j.mark
+		}
+		s.mu.Lock()
+		if p != nil {
+			s.plans[j.wt.Root] = p
+		}
+		if g != nil {
+			s.gits[j.wt.Root] = g
+		}
+		delete(s.busy, j.wt.Root)
+		s.mu.Unlock()
+		select {
+		case s.changed <- struct{}{}:
+		default:
+		}
+	}
+	// In order: a slot goes to the next job only when one is free.
+	dispatch := func() {
+		for _, j := range jobs {
 			sem <- struct{}{}
-			defer func() { <-sem }()
-			var p *wtPlan
-			var g *wtGit
-			if j.plan {
-				p = planWorktree(j.wt, mainHead)
-			}
-			if j.git && base != "" {
-				g = gitState(j.wt, mainRoot, base, mainHead, limit)
-				g.parentHead = heads[g.update.Parent]
-			}
-			s.mu.Lock()
-			if p != nil {
-				s.plans[j.wt.Root] = p
-			}
-			if g != nil {
-				s.gits[j.wt.Root] = g
-			}
-			delete(s.busy, j.wt.Root)
-			s.mu.Unlock()
-			select {
-			case s.changed <- struct{}{}:
-			default:
-			}
-		}(j)
+			go run(j)
+		}
 	}
 	if wait {
+		dispatch()
 		wg.Wait()
+		return
 	}
+	go dispatch()
 }
 
 // refreshMain reads the main checkout again: all of it when that is due
