@@ -292,6 +292,9 @@ In a project without an `x-hydra` block it lists no tools, so registering it for
 | `down` | `hydra down` | refused |
 | `update_here` | `hydra update --here` (`dry_run`) | refused |
 | `main_status` | main's stack, and which of its services this worktree uses | reads |
+| `worktrees` | main and every worktree in the order to update them (a branch after the one it is stacked on): parent, behind/ahead, every conflicting file, uncommitted changes, what an update would do, stack, slot | reads |
+| `update_main` | `hydra update --main-only` (`dry_run`): pull main, bring its stack along; only when the developer asked | allowed |
+| `update_worktree` | `hydra update --here` in the named `worktree` (`dry_run`; `since`: after a merge by hand, restart what it touched) | allowed |
 
 Agents with a shell get it wrong: they start process-compose by hand, which
 runs everything on main's ports. They stop main's stack because theirs looks
@@ -301,7 +304,18 @@ the agent's own worktree's stack. In the main checkout it answers
 hydra printed them, and stdout carries nothing but protocol messages. The
 manual suggests deny rules for the shell commands the tools replace
 (`process-compose`, `hydra down`, `hydra update`, `supabase stop`,
-`supabase db reset`).
+`supabase db reset`), and an ask rule for `mcp__hydra__update_main`.
+
+The server also ships a prompt, `update_all` (`/mcp__hydra__update_all` in
+Claude Code): the workflow for bringing main and every worktree up to date.
+The agent calls `worktrees` and shows the plan, waits for your yes, runs
+`update_main`, then each worktree in order: `update_worktree` for a clean
+merge; for a conflict, `git merge` in that worktree, resolves each file
+keeping both sides' intent, runs the project's checks, commits with git's
+message and calls `update_worktree` again with `since`. An ambiguous
+conflict is aborted and comes back as a question. It never pushes, rebases
+or forces, and skips worktrees with uncommitted work. It ends with a table
+of what happened to each.
 
 ### Watching
 
@@ -740,7 +754,9 @@ the watcher starting and stopping services as files change in them.
 `./examples/demo/tls.sh` a TLS front, and `./examples/demo/dashboard.sh`
 drives the dashboard in tmux. `./examples/demo/mcp.sh` plays an agent's
 tool and talks MCP to `hydra mcp`: up, wait, status, logs, restart and down
-in a worktree, and every action refused in main.
+in a worktree, every action refused in main, and main and four worktrees
+(two stacked, one conflicting) brought up to date with `worktrees`,
+`update_main` and `update_worktree`.
 `./examples/demo/update.sh` is the
 end-to-end test: `hydra status`, the checks before `hydra up`,
 `hydra update`, a second start, the order in which an edit's services

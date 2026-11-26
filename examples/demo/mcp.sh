@@ -15,7 +15,13 @@
 #  7. update_here (dry run), down.
 #  8. In the main checkout, every action is refused, and main's stack is
 #     still up afterwards; status and logs read it.
-#  9. Nothing but protocol messages ever reached stdout.
+#  9. Updating main and every worktree, as the update_all prompt does it:
+#     worktrees lists them in order (a branch after the one it is stacked
+#     on), update_main pulls main from origin and restarts what changed in
+#     its stack, update_worktree merges each worktree in order; one
+#     conflicts, is resolved with git here, and updated again. prompts/get
+#     returns the workflow.
+# 10. Nothing but protocol messages ever reached stdout.
 #
 # Everything happens in a throwaway repo under $TMPDIR. Each step checks what
 # it got back, so this doubles as a test: it exits non-zero when one is off.
@@ -36,8 +42,10 @@ srv=""
 cleanup() {
   cd /
   stop_server
-  (cd "$repo/feature" 2>/dev/null && "$H" down >/dev/null 2>&1) || true
-  (cd "$main" 2>/dev/null && "$H" slots free "$repo/feature" >/dev/null 2>&1) || true
+  for wt in feature ind; do
+    (cd "$repo/$wt" 2>/dev/null && "$H" down >/dev/null 2>&1) || true
+    (cd "$main" 2>/dev/null && "$H" slots free "$repo/$wt" >/dev/null 2>&1) || true
+  done
   (cd "$main" 2>/dev/null && "$H" down -p "$pc_port" >/dev/null 2>&1) || true
   rm -rf "$repo"
 }
@@ -134,7 +142,7 @@ notify notifications/initialized
 rpc tools/list '{}'; out="$reply"
 tools="$(python3 -c 'import json,sys; print(" ".join(t["name"] for t in json.loads(sys.argv[1])["result"]["tools"]))' "$out")"
 echo "tools: $tools"
-expect "$tools" '^status up wait down restart logs update_here main_status$'
+expect "$tools" '^status up wait down restart logs update_here main_status worktrees update_main update_worktree$'
 
 echo "--- 3. status, up, wait"
 call status; echo "$out" | show
@@ -201,5 +209,74 @@ stop_server
 curl -sf localhost:24010 >/dev/null || fail "main's api stopped"
 echo "main's stack is still up"
 
-echo "--- 9. stdout carried protocol messages only"
+echo "--- 9. update main and every worktree"
+# origin, which main pulls from, and a teammate who pushes to it.
+g init -q --bare -b main "$repo/origin.git"
+g -C "$main" remote add origin "$repo/origin.git"
+g -C "$main" push -q -u origin main
+g clone -q "$repo/origin.git" "$repo/team" 2>/dev/null
+# Worktrees: s1, s2 stacked on it, and ind, whose change to the API
+# conflicts with the teammate's. ind's stack runs.
+g -C "$main" worktree add -q -b s1 "$repo/s1" main
+(cd "$repo/s1" && put apps/web/s1.tsx && g add -A && g commit -qm s1)
+g -C "$main" worktree add -q -b s2 "$repo/s2" s1
+(cd "$repo/s2" && put apps/web/s2.tsx && g add -A && g commit -qm s2)
+g -C "$main" worktree add -q -b ind "$repo/ind" main
+(cd "$repo/ind" && put apps/api/users.go "ind's users" && g add -A && g commit -qm ind && "$H" up -D >/dev/null)
+(cd "$repo/team" && put apps/api/users.go "users v2" && g add -A && g commit -qm "api: users v2" && g push -q origin main)
+
+start_server "$main" # the update tools work from main too
+rpc initialize '{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"demo","version":"1"}}'
+expect "$reply" '"prompts":'
+notify notifications/initialized
+rpc prompts/list '{}'
+expect "$reply" '"name":"update_all"'
+rpc prompts/get '{"name":"update_all"}'
+expect "$reply" 'Call worktrees'
+expect "$reply" 'update_main with dry_run: true'
+call worktrees; echo "$out" | show
+expect "$out" '1\. main +on main at .* · stack up'
+expect "$out" '2\. feature +on main · 1 ahead · nothing to do'
+expect "$out" '3\. ind +on main · 1 ahead · nothing to do · stack up \(slot [0-9]\)'
+expect "$out" '4\. s1 +on main · 1 ahead'
+expect "$out" '5\. └ s2 +on s1 · 1 ahead'
+call update_main '{"dry_run":true}'; echo "$out" | show
+expect "$out" 'would move .* \(1 commit\)'
+expect "$out" 'api +would be restarted'
+call update_main; echo "$out" | show
+expect "$out" 'main  .*moved .* \(1 commit\)'
+expect "$out" 'api +restarted'
+expect "$out" 'ok: main is up to date. The worktrees were left alone'
+curl -sf localhost:24010 >/dev/null || fail "main's api isn't back after the update"
+call worktrees; echo "$out" | show
+expect "$out" 'ind +on main · 1 behind, 1 ahead · CONFLICTS in 1 file: apps/api/users.go'
+for wt in feature ind s1 s2; do
+  call update_worktree "{\"worktree\":\"$wt\"}"; echo "$out" | show
+  case $wt in
+  ind)
+    expect "$out" '^ERROR: hydra update --here failed'
+    expect "$out" 'ind  ind  CONFLICTS with main in 1 file'
+    expect "$out" 'The worktree was left as it was'
+    [ -z "$(g -C "$repo/ind" status --porcelain)" ] || fail "ind was left changed"
+    # The agent's part: merge by hand, resolve, commit, update again.
+    before="$(g -C "$repo/ind" rev-parse HEAD)"
+    g -C "$repo/ind" merge -q main >/dev/null 2>&1 && fail "the merge didn't conflict"
+    echo "users v2, and ind's" >"$repo/ind/apps/api/users.go"
+    g -C "$repo/ind" add apps/api/users.go
+    g -C "$repo/ind" commit -q --no-edit >/dev/null 2>&1 # (rerere, if on, would say so)
+    call update_worktree "{\"worktree\":\"ind\",\"since\":\"$before\"}"; echo "$out" | show
+    expect "$out" 'up to date'
+    expect "$out" 'restarted there: api'
+    ;;
+  s2) expect "$out" 's1 merged in' ;;
+  *) expect "$out" 'main merged in' ;;
+  esac
+done
+call worktrees; echo "$out" | show
+for wt in feature ind s1 s2; do
+  expect "$out" " $wt +on (main|s1) · [0-9]+ ahead · nothing to do"
+done
+stop_server
+
+echo "--- 10. stdout carried protocol messages only"
 echo ok

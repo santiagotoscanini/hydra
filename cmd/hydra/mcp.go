@@ -60,7 +60,8 @@ Use these tools, never a shell, to start, stop or restart the stack: never run p
 - up, then wait: start this worktree's stack, and wait until it is ready.
 - logs and restart for a process that fails; down when you are done.
 - When status says this worktree is behind main, update_here merges main in.
-Main's stack belongs to the developer: the tools read it (main_status) but refuse to change it. When main's stack is down or broken, tell the developer what main_status says and let them fix it.`
+Main's stack belongs to the developer: the tools read it (main_status) but refuse to change it. When main's stack is down or broken, tell the developer what main_status says and let them fix it.
+Only when the developer asks to update main and every worktree: the update_all prompt is the workflow (worktrees, update_main, update_worktree).`
 
 func mcpCmd(args []string) error {
 	if len(args) > 0 {
@@ -200,9 +201,12 @@ func (s *mcpServer) handle(line []byte) {
 		}
 		s.reply(msg.ID, map[string]any{
 			"protocolVersion": version,
-			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
-			"serverInfo":      map[string]any{"name": "hydra", "version": shortVersion()},
-			"instructions":    s.instructions(),
+			"capabilities": map[string]any{
+				"tools":   map[string]any{"listChanged": false},
+				"prompts": map[string]any{"listChanged": false},
+			},
+			"serverInfo":   map[string]any{"name": "hydra", "version": shortVersion()},
+			"instructions": s.instructions(),
 		})
 	case "ping":
 		s.reply(msg.ID, map[string]any{})
@@ -214,6 +218,29 @@ func (s *mcpServer) handle(line []byte) {
 			}
 		}
 		s.reply(msg.ID, map[string]any{"tools": list})
+	case "prompts/list":
+		list := make([]map[string]any, 0, len(mcpPrompts))
+		if s.servesHydra() {
+			for _, p := range mcpPrompts {
+				list = append(list, p.describe())
+			}
+		}
+		s.reply(msg.ID, map[string]any{"prompts": list})
+	case "prompts/get":
+		var p struct {
+			Name      string            `json:"name"`
+			Arguments map[string]string `json:"arguments"`
+		}
+		if err := json.Unmarshal(msg.Params, &p); err != nil {
+			s.fail(msg.ID, rpcInvalidParams, "prompts/get: "+err.Error())
+			return
+		}
+		prompt := findPrompt(p.Name)
+		if prompt == nil || !s.servesHydra() {
+			s.fail(msg.ID, rpcInvalidParams, fmt.Sprintf("there is no prompt named %q here (prompts/list lists them)", p.Name))
+			return
+		}
+		s.reply(msg.ID, prompt.get(p.Arguments))
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -292,7 +319,7 @@ func (s *mcpServer) run(ctx context.Context, tool *mcpTool, raw json.RawMessage)
 	if err != nil {
 		return toolResult{}, fmt.Errorf("hydra mcp serves the checkout its working directory is in, and %s isn't in a git checkout: %w", s.dir, err)
 	}
-	if tool.changes && co.IsMain() {
+	if tool.changes && !tool.inMain && co.IsMain() {
 		return toolResult{}, errRefused(fmt.Sprintf(
 			"refused: this is the main checkout (%s). Ask the developer: main's stack is theirs. "+
 				"These tools change only a worktree's own stack; main_status, status and logs read main's.", co.Root))
@@ -351,6 +378,11 @@ func (c *mcpCall) decode(v any) error {
 // process-compose started with -D keeps what it inherited open, and the
 // read of a pipe would only end when the stack stops.
 func (c *mcpCall) hydra(args ...string) (string, error) {
+	return c.hydraIn(c.co.Root, args...)
+}
+
+// hydraIn is hydra run in another checkout of the repository.
+func (c *mcpCall) hydraIn(dir string, args ...string) (string, error) {
 	f, err := os.CreateTemp("", "hydra-mcp-*.out")
 	if err != nil {
 		return "", err
@@ -358,7 +390,7 @@ func (c *mcpCall) hydra(args ...string) (string, error) {
 	defer os.Remove(f.Name())
 	defer f.Close()
 	cmd := exec.Command(c.server.exe, args...)
-	cmd.Dir = c.co.Root
+	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = f, f // stdin: /dev/null, so nothing takes a terminal
 	runErr := cmd.Run()
 	data, err := os.ReadFile(f.Name())
@@ -396,13 +428,14 @@ func (c *mcpCall) notUp(main bool) error {
 	return fmt.Errorf("this worktree's stack isn't running (%s); start it with the up tool", c.co.Root)
 }
 
-// mcpTool is one tool. changes: it changes a stack, so it is refused in
-// the main checkout.
+// mcpTool is one tool. changes: it changes a checkout or a stack, so it is
+// refused in the main checkout, unless inMain: the update tools, which
+// work on other checkouts than the server's and are the same from any.
 type mcpTool struct {
-	name, title, description string
-	schema                   map[string]any
-	changes, destructive     bool
-	run                      func(ctx context.Context, c *mcpCall) (toolResult, error)
+	name, title, description     string
+	schema                       map[string]any
+	changes, inMain, destructive bool
+	run                          func(ctx context.Context, c *mcpCall) (toolResult, error)
 }
 
 func (t *mcpTool) describe() map[string]any {
@@ -506,6 +539,38 @@ func init() {
 			description: "The main checkout's stack, read-only: whether it is up, the commit it runs, every process's state, its problems, " +
 				"and, from a worktree, which of main's services this worktree uses. Main's stack is the developer's: report what is wrong to them.",
 			schema: noArgs, run: mcpMainStatus,
+		},
+		{
+			name: "worktrees", title: "Every worktree, in the order to update them",
+			description: "Main and every worktree of the repository, in the order to bring them up to date: each worktree right before the branches stacked on it. " +
+				"For each: its branch, its parent (main, or the branch it is stacked on), commits behind and ahead of it, every file merging the parent in conflicts in, " +
+				"uncommitted changes, what update_worktree would do (next: merge, resolve, skip or nothing), its stack (up, down, idle-stopped) and slot. " +
+				"For main: how far behind its upstream it is (as of the last fetch), uncommitted changes, and whether its stack is up. Read-only.",
+			schema: noArgs, run: mcpWorktrees,
+		},
+		{
+			name: "update_main", title: "Pull main and bring its stack along",
+			description: "`hydra update --main-only`: pull main (fast-forward only) and bring main's running stack to the new commit (reload, rerun the jobs and restart what changed). " +
+				"No worktree is merged. It changes the developer's main checkout and stack: call it only when the developer asked for it in this conversation, " +
+				"and with dry_run first, which fetches and says how far main would move and what would restart. Returns what the update printed, failures included.",
+			schema: object(map[string]any{
+				"dry_run": map[string]any{"type": "boolean", "description": "Only say what would happen (it fetches)."},
+			}),
+			changes: true, inMain: true, run: mcpUpdateMain,
+		},
+		{
+			name: "update_worktree", title: "Bring a worktree up to its parent",
+			description: "`hydra update --here`, run in the named worktree: merge its parent (main, or the branch it is stacked on) into it and restart what that touched in its stack. " +
+				"Main and its stack are left alone, so it works from any checkout. It never resolves a conflict and never touches uncommitted work: it says so, " +
+				"names every conflicting file and leaves the worktree as it was. Update a worktree only after the one it is stacked on (the worktrees tool's order). " +
+				"dry_run says what it would do.",
+			schema: object(map[string]any{
+				"worktree": map[string]any{"type": "string", "description": "The worktree: its name (folder), branch or path, as the worktrees tool lists it."},
+				"dry_run":  map[string]any{"type": "boolean", "description": "Only say what would happen."},
+				"since": map[string]any{"type": "string", "description": "After a merge you made by hand (to resolve conflicts): the commit the worktree was at before it. " +
+					"What the merge touched is then restarted in its running stack, which an update that finds nothing to merge wouldn't do."},
+			}, "worktree"),
+			changes: true, inMain: true, run: mcpUpdateWorktree,
 		},
 	}
 }

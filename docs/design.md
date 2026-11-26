@@ -236,8 +236,13 @@ own clock:
   every 30 seconds while its stack runs, every 2 minutes otherwise, and at
   once after a commit in it or in main.
 - Where it stands against main (behind, ahead, the trial merge): when its
-  HEAD, main's or its parent's moves, and otherwise every 2 minutes, for
-  uncommitted work, which keeps an update away.
+  HEAD, main's or its parent's moves; when its index file or MERGE_HEAD
+  changed (files staged, a merge begun, resolved or aborted: two stats per
+  worktree a second), at most every 3 seconds; and otherwise every 2
+  minutes, for uncommitted work, which keeps an update away.
+- The slow parts due for worktrees that moved run first. After main moves,
+  every worktree is due at once, and the one an agent just merged must not
+  wait behind twenty that only need a look.
 - Which worktrees there are: every second (`git worktree list`).
 - Programs outside any stack holding a stack's ports (`strays`, with a
   problem each): every 15 seconds, one `lsof` and one `ps` for all
@@ -327,7 +332,8 @@ guarantee.
 
 `hydra mcp` gives them the same commands as MCP tools over stdio:
 `status`, `up`, `wait`, `logs`, `restart`, `down`, `update_here`,
-`main_status`. The harness starts it once per session in the agent's
+`main_status`, and for updating everything `worktrees`, `update_main`,
+`update_worktree`. The harness starts it once per session in the agent's
 worktree, and it serves the checkout its working directory is in, as any
 hydra command does. Rules:
 
@@ -351,6 +357,27 @@ hydra command does. Rules:
   other surface. `wait` uses `hydra status --wait`'s rule: a process that
   stays failed for three polls in a row has failed. One that is between
   restarts looks failed for a moment.
+- **Updating everything is a prompt, not a tool.** Bringing main and
+  every worktree up to date means resolving the conflicts `hydra update`
+  leaves alone, which takes judgement: read both sides, run the checks,
+  ask when it is ambiguous. hydra can't do that and shouldn't try. It
+  gives the agent the facts (`worktrees`: every worktree in the order to
+  update it, a branch after the one it is stacked on, with every file a
+  merge would conflict in, worked out with `git merge-tree` in memory) and
+  the two steps it can do safely (`update_main`, which is
+  `hydra update --main-only`, and `update_worktree`, which is
+  `hydra update --here` run in another worktree). The workflow that ties
+  them together and says how to resolve a conflict is an MCP prompt,
+  `update_all`, shipped in the binary: registered once at user scope, it
+  is there in every repository with no files to copy, and it always
+  matches the tools it calls. These two tools work from the main checkout
+  too: they change other checkouts than the server's, and `update_main`
+  changes main's only when the developer asked, which the description
+  says and an ask rule in the agent's settings can enforce. After a merge
+  made by hand, `hydra update --here` has nothing to merge and so
+  restarts nothing; `update_worktree` takes `since`, the commit before
+  the merge, and restarts what changed since, with the code `hydra
+  update` uses.
 - **stdout is the protocol's.** Much of hydra prints to stdout, so while
   the server runs `os.Stdout` is stderr and the messages go to the stdout
   the process started with. The tests and `examples/demo/mcp.sh` check

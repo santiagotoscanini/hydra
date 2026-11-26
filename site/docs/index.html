@@ -645,7 +645,7 @@ ok: main's stack is up and runs what main has checked out.
     <p><kbd>⏎</kbd> hands the terminal to <code>process-compose attach</code> on the chosen checkout's stack: every process, its state and its log, the same as <code>hydra attach</code> there. To come back, press <b>F10</b> or <b>ctrl-c</b>. process-compose asks <code>Detach from the remote project?</code>; choose <b>Yes</b>. You are back in the dashboard, and the stack is still running. <kbd>q</kbd> does nothing on that screen.</p>
 
     <h3>How fresh it is</h3>
-    <p>A spinner in the header shows while it reads everything again (<kbd>R</kbd>) or works out a new worktree. Process states are read every second, memory every 5 seconds. What a worktree would run takes git a walk of its working tree, so it is worked out again every 30 seconds while its stack runs and every 2 minutes otherwise. Where a worktree stands against main is worked out again when its branch, main or the branch it is stacked on moves, and at least every 2 minutes. After a key's command, that checkout is read again at once; <kbd>R</kbd> reads everything. With 30 worktrees it costs about a tenth of one core, and it never takes git's index lock.</p>
+    <p>A spinner in the header shows while it reads everything again (<kbd>R</kbd>) or works out a new worktree. Process states are read every second, memory every 5 seconds. What a worktree would run takes git a walk of its working tree, so it is worked out again every 30 seconds while its stack runs and every 2 minutes otherwise. Where a worktree stands against main is worked out again when its branch, main or the branch it is stacked on moves, when files are staged or a merge is begun, resolved or aborted there, and at least every 2 minutes. What moved goes first: after main moves, the worktree you just merged doesn't wait behind the rest. After a key's command, that checkout is read again at once; <kbd>R</kbd> reads everything. With 30 worktrees it costs about a tenth of one core, and it never takes git's index lock.</p>
     <p>New worktrees show up within a second, and removed ones go. Making and removing worktrees isn't the dashboard's job: <code>git worktree add</code>, or whatever makes them for you.</p>
 
     <h3>What it needs</h3>
@@ -763,7 +763,7 @@ main is up to date. 2 worktrees need a hand (above); `hydra status --all` shows 
       <tr><td><code>up to date</code></td><td>It already has main's commits.</td></tr>
       <tr><td><code>fast-forwarded to main</code></td><td>The branch had no commits of its own, so it was moved to main's commit.</td></tr>
       <tr><td><code>main merged in</code></td><td>A merge commit was made on the branch. It isn't pushed.</td></tr>
-      <tr><td><code>CONFLICTS with main in N files</code></td><td>Nothing was touched. The files and the command to run are listed below the table. Resolving is yours, or the agent's who owns the branch.</td></tr>
+      <tr><td><code>CONFLICTS with main in N files</code></td><td>Nothing was touched. The files and the command to run are listed below the table. Resolving is yours, or the agent's who owns the branch. An agent can also do the whole update, conflicts included: <a href="#mcp-update-all">updating main and every worktree</a>.</td></tr>
       <tr><td><code>left alone: …</code></td><td>Tracked files have uncommitted changes; a merge or rebase is in progress; no branch is checked out; everything on the branch is already in main (it was merged upstream, and the worktree can be removed); or <code>git merge-tree</code> failed, with git's error (a commit it can't read, say: <code>git fetch</code> brings a missing one).</td></tr>
       <tr><td><code>restarted there: api</code></td><td>The worktree's stack was running, and the merge changed files of services it runs.</td></tr>
     </table></div>
@@ -974,7 +974,7 @@ $ hydra down             # when the work is done
 
   <section id="mcp">
     <h2>For agents: hydra mcp</h2>
-    <p><code>hydra mcp</code> is an <a href="https://modelcontextprotocol.io">MCP</a> server for coding agents. The agent gets the commands above as tools: <code>up</code>, <code>wait</code>, <code>status</code>, <code>logs</code>, <code>restart</code>, <code>down</code>. It calls them instead of typing commands into a shell, and it gets typed answers back. With a shell, agents get things wrong in ways that cost you. They run process-compose themselves, which starts everything on main's ports. They stop main's stack because theirs looks broken. They run <code>supabase stop</code> on the database everyone uses. A tool can only start, stop or restart the agent's own worktree. In the main checkout it refuses, and tells the agent to ask you.</p>
+    <p><code>hydra mcp</code> is an <a href="https://modelcontextprotocol.io">MCP</a> server for coding agents. The agent gets the commands above as tools: <code>up</code>, <code>wait</code>, <code>status</code>, <code>logs</code>, <code>restart</code>, <code>down</code>. It calls them instead of typing commands into a shell, and it gets typed answers back. Three more, and a prompt, <a href="#mcp-update-all">bring main and every worktree up to date</a>, with the agent resolving the conflicts. With a shell, agents get things wrong in ways that cost you. They run process-compose themselves, which starts everything on main's ports. They stop main's stack because theirs looks broken. They run <code>supabase stop</code> on the database everyone uses. A tool can only start, stop or restart the agent's own worktree. In the main checkout it refuses, and tells the agent to ask you.</p>
     <p>The agent's tool (Claude Code, Codex, T3) starts <code>hydra mcp</code> once per session, in the directory the session runs in. The server works on the checkout that directory is in, the way every hydra command does. Register it once:</p>
     <div class="code">
 <pre data-lang="sh">
@@ -1008,13 +1008,20 @@ $ codex mcp add hydra -- hydra mcp                   # Codex
       <tr><td><code>down</code></td><td><code>hydra down</code>: stops this worktree's stack, and nothing else.</td><td>Refused</td></tr>
       <tr><td><code>update_here</code></td><td><a href="#update-here"><code>hydra update --here</code></a>: merges main into this worktree and restarts what that touched. <code>dry_run: true</code> says what it would do. A conflict or uncommitted work comes back as an error, left to the agent.</td><td>Refused</td></tr>
       <tr><td><code>main_status</code></td><td>Main's stack, read-only: whether it is up, its commit, each process's state, its problems. From a worktree, also which of main's services this worktree uses, and why.</td><td>Reads main's stack</td></tr>
+      <tr><td><code>worktrees</code></td><td>Main and every worktree of the repository, in the order to update them: each worktree right before the branches stacked on it. For each worktree: its branch, its parent (main, or the branch it is stacked on), commits behind and ahead of it, every file merging the parent in conflicts in, uncommitted changes, what <code>update_worktree</code> would do (<code>next</code>: <code>merge</code>, <code>resolve</code>, <code>skip</code> or <code>nothing</code>), its stack (<code>up</code>, <code>down</code>, <code>idle-stopped</code>) and slot. For main: how far behind its upstream it is as of the last fetch, uncommitted changes, whether its stack is up.</td><td>Reads</td></tr>
+      <tr><td><code>update_main</code></td><td><a href="#updating"><code>hydra update --main-only</code></a>: pulls main (fast-forward only) and brings its stack to the new commit. No worktree is merged. <code>dry_run: true</code> fetches and says how far main would move and what would restart. Its description tells the agent to call it only when you asked; an <a href="#mcp-rules">ask rule</a> makes sure.</td><td>Allowed</td></tr>
+      <tr><td><code>update_worktree</code></td><td><a href="#update-here"><code>hydra update --here</code></a>, run in the <code>worktree</code> named (its folder, branch or path): merges its parent in and restarts what that touched in its stack. Main is left alone. A conflict comes back as an error naming every file, with the worktree as it was. <code>since</code>: after a merge made by hand, the commit before it; what the merge touched is restarted too. <code>dry_run: true</code> says what it would do.</td><td>Allowed</td></tr>
     </table></div>
     <p>What the tools answer that isn't a message of <code>hydra status</code>:</p>
     <div class="msgs">
       <div><p class="said">refused: this is the main checkout (/Users/you/shop). Ask the developer: main's stack is theirs. These tools change only a worktree's own stack; main_status, status and logs read main's.</p><p><code>up</code>, <code>down</code>, <code>restart</code> or <code>update_here</code>, called with the server in the main checkout. The agent should pass the request on to you.</p></div>
       <div><p class="said">this worktree's stack isn't running (/Users/you/shop-orders); start it with the up tool</p><p><code>wait</code>, <code>logs</code> or <code>restart</code> before <code>up</code>. In the main checkout it reads: <code>main's stack isn't running (…). Ask the developer to start it: it is theirs</code>.</p></div>
       <div><p class="said">no process named nope in this stack; it has: api, db, hydra-watch, worker</p><p><code>wait</code> was given a name the stack doesn't have. A service that runs in main isn't a process of the worktree's stack.</p></div>
-      <div><p class="said">hydra up -D failed (exit status 1):</p><p>Followed by what <code>hydra up -D</code> printed: the ✗ lines of <a href="#messages">the checks</a>, with their fixes. <code>down</code>, <code>restart</code> and <code>update_here</code> fail the same way, with their own command's output.</p></div>
+      <div><p class="said">hydra up -D failed (exit status 1):</p><p>Followed by what <code>hydra up -D</code> printed: the ✗ lines of <a href="#messages">the checks</a>, with their fixes. <code>down</code>, <code>restart</code>, <code>update_here</code>, <code>update_main</code> and <code>update_worktree</code> fail the same way, with their own command's output.</p></div>
+      <div><p class="said">The worktree was left as it was. Merging main conflicts in 2 files: …</p><p>After <code>update_worktree</code>'s output, when the merge conflicts: every file, and the way on (<code>git merge</code> in that worktree, resolve, commit, then <code>update_worktree</code> again with <code>since</code>).</p></div>
+      <div><p class="said">/Users/you/shop is the main checkout; update_main updates it</p><p><code>update_worktree</code> was given the main checkout.</p></div>
+      <div><p class="said">no worktree named "nope"; the worktrees are: orders, search</p><p><code>update_worktree</code> was given a name that is no worktree's folder, branch or path. <code>"…" names 2 worktrees</code>: pass its path.</p></div>
+      <div><p class="said">since: "abc123" isn't a commit that orders's HEAD descends from; pass the commit it was at before you merged</p><p><code>update_worktree</code>'s <code>since</code> must be the worktree's commit from before the merge.</p></div>
     </div>
     <p>One session, from a worktree that changed the API and a worker (<code>examples/demo/mcp.sh</code>):</p>
     <div class="code">
@@ -1043,6 +1050,34 @@ up {"services": ["worker"]}, then wait {"processes": ["worker"]}
 </pre>
     </div>
 
+    <h3 id="mcp-update-all">Updating main and every worktree</h3>
+    <p>The server ships a prompt, <code>update_all</code>: the workflow for bringing main and every worktree up to date, with the agent resolving the conflicts <code>hydra update</code> leaves alone. Claude Code shows it as a command, in any repository where <code>hydra mcp</code> is registered:</p>
+    <div class="code">
+<pre data-lang="text">
+/mcp__hydra__update_all
+/mcp__hydra__update_all leave search out; stash uncommitted work first
+</pre>
+    </div>
+    <p>What you type after it is added to the workflow and wins where they disagree. The agent then:</p>
+    <ol>
+      <li>Calls <code>worktrees</code> and shows you the plan, one row per worktree in order: a clean merge, conflicts to resolve (which files), skipped (uncommitted work, a merge already under way), or nothing to do. It waits for your yes.</li>
+      <li>Calls <code>update_main</code> with <code>dry_run</code>, then without. If it fails, it stops and tells you what it printed. When main moved, it calls <code>worktrees</code> again, since pulling main can add conflicts, and says what changed.</li>
+      <li>Goes through the worktrees in order, a branch only after the one it is stacked on. A clean merge is <code>update_worktree</code>. A conflict it resolves in that worktree with git: <code>git merge</code> the parent, read both sides, the merge base and the commits on each side, keep both sides' intent, run the checks the project's <code>AGENTS.md</code> names, commit with git's own message, then <code>update_worktree</code> again with <code>since</code>, which restarts what the merge touched. When a conflict is ambiguous (behaviour changed on both sides, migrations clash, it can't tell what one side meant) it runs <code>git merge --abort</code> and keeps the question for you, and goes on with the worktrees that don't sit on that one.</li>
+      <li>Ends with a table: merged cleanly, resolved (files, checks run), skipped (why), stopped (the question), failed (the error), and what runs.</li>
+    </ol>
+    <p>It never pushes, rebases, resets or forces anything, never skips hooks, and leaves a worktree with uncommitted work alone. <code>update_worktree</code> runs one at a time per repository; an agent with subagents may resolve independent chains in parallel. The <a href="#dashboard">dashboard</a> follows along: a merge, a merge begun or aborted, or main moving shows within a second or two.</p>
+    <p>What <code>worktrees</code> answers, for main, two stacked worktrees and two of their own:</p>
+    <div class="code">
+<pre data-lang="text">
+ 1. main       on main at 4f2a91c03 · behind its upstream by 12 (as of the last fetch) · stack up
+ 2. orders     on main · 69 behind, 4 ahead · CONFLICTS in 5 files: apps/api/orders.go, apps/web/cart.tsx, … and 3 more · stack up (slot 2)
+ 3. └ refunds  on orders · 13 ahead · nothing to do · stack down (slot 3)
+ 4. search     on main · 10 behind, 2 ahead · SKIP: left alone, 10 commits behind main: 3 files with uncommitted changes · stack idle-stopped (slot 1)
+ 5. typos      on main · 10 behind, 1 ahead · merges cleanly · stack down
+Update in this order: a worktree after the one it is stacked on (└).
+</pre>
+    </div>
+
     <h3>What to tell the agent</h3>
     <p>The server sends the agent brief instructions when it starts: check <code>status</code> first, then <code>up</code>, then <code>wait</code>; never start process-compose or stop main's stack. In the repository's <code>AGENTS.md</code>, one line is enough:</p>
     <div class="code">
@@ -1053,7 +1088,7 @@ up {"services": ["worker"]}, then wait {"processes": ["worker"]}
 </pre>
     </div>
 
-    <h3>Rules that keep agents off the shell commands</h3>
+    <h3 id="mcp-rules">Rules that keep agents off the shell commands</h3>
     <p>To make sure, deny the commands that do the most damage in the project's agent settings. A shell rule can't see which checkout a command runs in, so it can't allow <code>hydra down</code> in a worktree and block it in main. Deny <code>hydra down</code> everywhere. The <code>down</code> tool can tell the two apart. In Claude Code, in the project's <code>.claude/settings.json</code>:</p>
     <div class="code">
       <div class="file">.claude/settings.json<button class="copy">copy</button></div>
@@ -1066,12 +1101,15 @@ up {"services": ["worker"]}, then wait {"processes": ["worker"]}
       "Bash(hydra update:*)",
       "Bash(supabase stop:*)",
       "Bash(supabase db reset:*)"
+    ],
+    "ask": [
+      "mcp__hydra__update_main"
     ]
   }
 }
 </pre>
     </div>
-    <p><code>hydra update</code> pulls main and merges into every worktree. The agent gets <code>update_here</code> for its own. Other tools write rules their own way; the commands to deny are the same.</p>
+    <p><code>hydra update</code> pulls main and merges into every worktree. The agent gets <code>update_here</code> for its own, and <code>update_main</code> and <code>update_worktree</code> for <a href="#mcp-update-all">updating everything</a>. <code>update_main</code> changes your main checkout and stack: the ask rule has Claude Code ask you each time the agent calls it. Other tools write rules their own way; the commands to deny are the same.</p>
   </section>
 
   <section id="troubleshooting">
@@ -1721,7 +1759,7 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>hydra throttle NAME N -- COMMAND…</code></td><td>Runs <code>COMMAND</code> once fewer than <code>N</code> commands of the same <code>NAME</code> run on this machine, and waits its turn otherwise. For the build step of a service's command. See <a href="#many">many worktrees at once</a>.</td></tr>
       <tr><td><code>hydra db reseed</code></td><td>In a worktree with its own Supabase and <code>seed_from_main</code>: removes its database, makes it again from main's data, applies the branch's migrations, and waits until it is ready. See <a href="#supabase-data">main's data in a worktree</a>.</td></tr>
       <tr><td><code>hydra trust</code></td><td>Makes this machine trust the local CA behind <a href="#tls">TLS fronts</a>. <code>--remove</code> undoes it; <code>--print</code> prints the CA's file.</td></tr>
-      <tr><td><code>hydra mcp</code></td><td>An MCP server on stdin and stdout, for coding agents: tools that start, wait for, read, restart and stop this checkout's stack, and refuse to change main's. See <a href="#mcp">for agents: hydra mcp</a>.</td></tr>
+      <tr><td><code>hydra mcp</code></td><td>An MCP server on stdin and stdout, for coding agents: tools that start, wait for, read, restart and stop this checkout's stack, and refuse to change main's; tools and a prompt (<code>update_all</code>) that bring main and every worktree up to date. See <a href="#mcp">for agents: hydra mcp</a>.</td></tr>
       <tr><td><code>hydra version</code></td><td>The commit hydra was built from, and the process-compose it found.</td></tr>
       <tr><td><code>hydra help</code></td><td>A summary of all of this.</td></tr>
     </table></div>
