@@ -56,8 +56,9 @@ func routerCmd(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	r := &router.Router{
-		Load: func() (*router.State, error) { return routerState(co.CommonDir, *file, startedFromPath(co.Root)) },
-		Logf: logf,
+		Load:     func() (*router.State, error) { return routerState(co.CommonDir, *file, startedFromPath(co.Root)) },
+		Logf:     logf,
+		Activity: func(wt router.Worktree) { noteActivity(wt.Root, time.Now()) },
 	}
 	outliveOutput()
 	openJournalFor(co)
@@ -145,7 +146,7 @@ func routerState(commonDir, file, startedFrom string) (*router.State, error) {
 		if !f.Live() {
 			continue
 		}
-		wt := router.Worktree{Name: f.Name, Local: f.Local, Entries: map[string]router.Entry{}}
+		wt := router.Worktree{Name: f.Name, Root: f.Root, Local: f.Local, Entries: map[string]router.Entry{}}
 		for name, e := range f.Entries {
 			// The stack file may have changed since the worktree wrote this.
 			if s := st.Services[name]; s != nil && s.Routed != config.NotRouted {

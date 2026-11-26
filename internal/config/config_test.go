@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 const routed = `
@@ -327,5 +328,44 @@ processes:
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s\ngot %v, want %q", in, err, want)
 		}
+	}
+}
+
+func TestIdleStop(t *testing.T) {
+	for in, want := range map[string]time.Duration{
+		"":                   0,
+		"idle_stop: 2h":      2 * time.Hour,
+		"idle_stop: 90s":     90 * time.Second,
+		"idle_stop: 0":       0,
+		"idle_stop: off":     0,
+		`idle_stop: "1h30m"`: 90 * time.Minute,
+	} {
+		st, err := Parse([]byte("x-hydra: {" + in + "}\nprocesses: {}\n"))
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if got := time.Duration(st.Hydra.IdleStop); got != want {
+			t.Errorf("%q: idle_stop %v, want %v", in, got, want)
+		}
+	}
+	for _, bad := range []string{"idle_stop: soon", "idle_stop: -1h", "idle_stop: 5"} {
+		if _, err := Parse([]byte("x-hydra: {" + bad + "}\nprocesses: {}\n")); err == nil || !strings.Contains(err.Error(), "idle_stop") {
+			t.Errorf("%q: got %v, want an idle_stop error", bad, err)
+		}
+	}
+}
+
+func TestBehindWarn(t *testing.T) {
+	for in, want := range map[string]int{"": 100, "behind_warn: 30": 30} {
+		st, err := Parse([]byte("x-hydra: {" + in + "}\nprocesses: {}\n"))
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if st.Hydra.BehindWarn != want {
+			t.Errorf("%q: behind_warn %d, want %d", in, st.Hydra.BehindWarn, want)
+		}
+	}
+	if _, err := Parse([]byte("x-hydra: { behind_warn: -1 }\nprocesses: {}\n")); err == nil {
+		t.Error("behind_warn: -1 was accepted")
 	}
 }

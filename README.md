@@ -327,6 +327,11 @@ started from a newer commit than main is on (a worktree cut from
 fixes it. Either way `hydra up` refuses to start and `hydra status` says
 which services and files.
 
+Past `behind_warn` commits behind main (100), or as soon as merging main
+would conflict (git tries it in memory, `git merge-tree`), `hydra status`
+and the dashboard warn too, and name the conflicting files: a `!` that
+refuses nothing, since the merge only gets harder.
+
 Services the worktree runs itself don't count, however old the branch:
 they run the branch's code. Neither do two services that both run in main.
 
@@ -392,7 +397,10 @@ touched there. Main isn't pulled.
 
 `hydra down` stops this checkout's stack. `hydra down --worktrees` stops
 every worktree's stack and leaves main's running: a stack costs memory for
-as long as it is up, and nothing stops an idle one for you.
+as long as it is up. With `idle_stop: 2h` in `x-hydra`, a worktree's stack
+that nobody used for two hours (no request through hydra's router for it, no
+file of it changed) stops by itself; `hydra status` says so, and `hydra up -D`
+starts it again. Main's never stops.
 
 A stop never hangs in silence: every 10 seconds it says what it waits for
 (`hydra: waiting for redis (40s)`), and a process still stopping after 60
@@ -701,5 +709,6 @@ your PATH.
   ports can't run at once.
 - Deriving `paths` from the nx / Go dependency graph instead of by hand.
   Until then, the report of changed files nobody lists is the safety net.
-- Nothing stops an idle worktree's stack: it runs until `hydra down`,
-  `hydra down --worktrees` or the worktree's removal.
+- `idle_stop` only sees requests that pass hydra's router and edits: a
+  worktree used only through a service it runs itself, on its own port,
+  counts as idle.

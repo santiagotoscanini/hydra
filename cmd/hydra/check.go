@@ -285,6 +285,9 @@ type wtState struct {
 	Client *pc.Client
 	Up     bool
 	Procs  map[string]pc.Process
+	// Far is set, by the callers that look (status, the snapshot), when the
+	// branch is far behind main or merging main conflicts.
+	Far *farBehind
 }
 
 // loadWorktree plans a worktree and asks its process-compose what runs. It
@@ -605,11 +608,18 @@ func worktreeProblems(ms *mainState, ws *wtState, started bool) []problem {
 	if pr := skewProblem(st, p); pr != nil {
 		out = append(out, *pr)
 	}
+	if ws.Far != nil {
+		out = append(out, ws.Far.problem(st.Hydra.BaseRef))
+	}
 
 	if started {
 		switch {
 		case !ws.Up:
-			out = append(out, problem{Blocks: true, Text: "this worktree's stack isn't running.", Fix: "hydra up -D"})
+			pr := problem{Blocks: true, Text: "this worktree's stack isn't running.", Fix: "hydra up -D"}
+			if n := readIdleNote(ws.target.checkout.Root); n != nil {
+				pr.Text = n.text()
+			}
+			out = append(out, pr)
 		default:
 			out = append(out, localProblems(ms, ws)...)
 		}

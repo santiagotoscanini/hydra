@@ -55,7 +55,8 @@ exception is bare `hydra` at a terminal (see [The dashboard](#the-dashboard)).
   line.
 - `hydra down` on a stack that isn't running says so and exits 0.
   `hydra down --worktrees` stops every worktree's stack and leaves the main
-  checkout's: nothing stops an idle stack by itself.
+  checkout's. An idle stack stops by itself only with `idle_stop` (see
+  [Idle worktrees](#idle-worktrees)).
 - A file without an `x-hydra` block runs unchanged.
 - A worktree without its own `process-compose.yaml` uses the main checkout's.
 - process-compose is started without the variables that mark an AI agent's
@@ -363,6 +364,21 @@ stopped because of this check. It used to be that a worktree behind main's
 migrations got a database of its own; one update of main would then have
 started a database, an API and a frontend in every running worktree.
 
+**Far behind.** In step or not, a branch that stays behind gets harder to
+merge. Past `behind_warn` commits behind M (100), or as soon as merging M
+would conflict, `hydra status` warns, naming the files. The conflict comes
+from `git merge-tree --write-tree --name-only HEAD M` (git 2.38), which
+merges in memory and touches neither the worktree nor its index; it exits 1
+on a conflict, but also on a commit it can't read, so only output that
+starts with a tree counts as an answer. On a large repository it takes
+seconds, so its answer is cached by the pair of commits, which it can never
+change for: the snapshot works it out on its slow git tier and keeps it
+while neither commit moves (its two-minute look for uncommitted work reuses
+it). `hydra update`'s own merge-tree is skipped for a worktree with
+uncommitted work, which every agent's has, so this one is separate. It is a
+warning, not a refusal: the stack runs fine on a branch that is merely old,
+and `hydra up` doesn't pay for the merge.
+
 ## Updating main
 
 Worktrees take the baseline's running services, so main moves only through
@@ -471,6 +487,8 @@ x-hydra:
   reserved_ports: [6379, 7233]  # shared infra; no slot may land here
   global_paths: [go.work] # affect every service that declares paths
   ignore: ["docs/**", ".github/**"]  # belong to no service; other unlisted changes are reported
+  idle_stop: 2h           # stop a worktree's stack nobody used for 2h (default off; see Idle worktrees)
+  behind_warn: 100        # warn past this many commits behind main (default 100)
 
 processes:
   api:
@@ -1142,6 +1160,47 @@ Now:
   that state has no watcher to notice; the reap then stops what the stack
   left running before it frees the slot.
 
+## Idle worktrees
+
+Agents finish and leave their stacks running, a gigabyte or two each. With
+`idle_stop: 2h` in `x-hydra`, a worktree's stack that nobody used for that
+long stops, the way `hydra down` there would. Unset, `0` or `off`: never.
+The main checkout's never stops; everything leans on it.
+
+- **What counts as use.** A request for the worktree through the router, and
+  a change to its files. Both are already seen by something hydra runs, so
+  neither costs a new watcher. A process restart doesn't count: a service
+  that crashes in a loop isn't someone using it.
+- **The router tells the worktree.** It is one process for every worktree,
+  in main's stack, and knows each request's worktree by its tag. It touches
+  `.process-compose/hydra-activity` in that worktree, at most once a second
+  per worktree, and only when the folder is there (a worktree being removed
+  gets nothing written into it). hydra's own requests (the status path that
+  `hydra status` asks, the router's probe, whose tag is nobody's) don't
+  count, or a dashboard would keep every stack up.
+- **The watcher keeps the clock.** It looks at `git status` every two
+  seconds anyway (`watchKey`); the clock reads the same output. A change in
+  what it lists is use from that moment; a file it lists that is saved again
+  is use at its modification time; so is the router's file. The clock starts
+  when the stack does. Only this worktree's status counts: `watchKey` also
+  covers every branch of the repository, which moves whenever any agent
+  commits, and would keep everything up.
+- **Stopping from inside.** The watcher is one of the processes the stop
+  ends, so, as for a removed worktree, it starts `hydra stop-idle ROOT AFTER`
+  in a session of its own. That stops the stack through its socket, writes
+  `.process-compose/idle-stopped` (when, and after how long) and an `idle`
+  event to the journal, or the event with the error when the stop failed.
+  The note is written only once the stack is down, so it never describes a
+  stack that runs. The watcher's next start removes it.
+- **Where it shows.** `hydra status` in the worktree says "stopped after 2h
+  idle; hydra up starts it again" in place of "isn't running",
+  `hydra status --all` says `idle-stopped`, `hydra status --json` has
+  `idleStopped`, and the dashboard's STACK column `idle-off`.
+- **What it misses.** Requests straight to a service the worktree runs
+  itself (its own api on its own port) don't pass the router. Edits go with
+  them, usually; a worktree only browsed that way for longer than
+  `idle_stop` stops, and `hydra up -D` brings it back with its data.
+
 ## What a killed process-compose leaves
 
 process-compose starts each process in a group of its own, so killing it
@@ -1254,7 +1313,8 @@ a JSON-lines file per local day, deleted after 30 days.
 
 - **What.** Every command when it ends (arguments, directory, duration, exit
   status, the error it printed); each problem a check showed someone, from
-  the one place problems are printed; a worktree taking a slot; every line
+  the one place problems are printed; a worktree taking a slot; a stack
+  stopped for being idle; every line
   the watcher and the router print; and the state of the stacks.
 - **Process changes cost nothing extra.** The watcher (a worktree) and the
   router (main) already ask their process-compose what runs every two

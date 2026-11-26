@@ -82,6 +82,15 @@ process-compose is killed is stopped by its watcher (main's by its router);
 where that was killed too, the next hydra up or hydra down there stops what
 was left running.
 
+With x-hydra idle_stop: 2h, a worktree's stack that nobody used for that
+long (no request through hydra's router for it, no file of it changed) is
+stopped as hydra down would; hydra status says so, and hydra up starts it
+again. The main checkout's never stops.
+
+hydra status warns about a worktree more than x-hydra behind_warn (100)
+commits behind main, or whose merge of main would conflict (it names the
+files; git merge-tree tries it, and touches nothing).
+
 Hydra's own commands:
   hydra status [--all] [--wait]  is everything this checkout uses up and in step
                                  with main? (exit 1 if not; --all: every worktree;
@@ -98,7 +107,8 @@ Hydra's own commands:
                                  commands, problems, process changes, usage once a
                                  minute (--since D, 1h by default; --here: this
                                  checkout only; --errors; -f: follow; --json).
-                                 KIND: command problem process usage slot start log
+                                 KIND: command problem process usage slot idle
+                                 start log
   hydra report [--since D] [-o FILE]  write one Markdown file to send to whoever
                                  helps: versions, every stack's state now, usage
                                  over time, what went wrong, and the journal
@@ -220,6 +230,8 @@ func run(args []string) error {
 			return reapCmd(args[1:])
 		case "mcp":
 			return mcpCmd(args[1:])
+		case "stop-idle":
+			return stopIdleCmd(args[1:])
 		}
 	}
 	return wrap(args)

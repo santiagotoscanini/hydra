@@ -22,6 +22,10 @@ export interface Entry {
 	update?: Update;
 	outOfStep: string[];
 	mainBehind: boolean;
+	/** hydra stopped its stack after this long unused ("2h"). */
+	idleStopped?: string;
+	/** Far behind main: past behind_warn, or merging main conflicts (the files). */
+	farBehind?: { behind: number; conflicts: string[] };
 	memory: number;
 	pending: boolean;
 	error?: string;
@@ -73,6 +77,8 @@ export function entries(s: Snapshot): Entry[] {
 			update: w.update,
 			outOfStep: w.outOfStep.map((k) => k.service),
 			mainBehind: !!w.mainBehind,
+			idleStopped: w.idleStopped?.after,
+			farBehind: w.farBehind && { behind: w.farBehind.behind, conflicts: w.farBehind.conflicts ?? [] },
 			memory: w.memory,
 			pending: !!w.pending,
 			error: w.error,
@@ -94,6 +100,7 @@ export function stackState(e: Entry): { text: string; color?: string } {
 	const blocking = e.problems.filter((p) => p.blocks).length;
 	if (!e.up) {
 		if (e.kind === "main") return { text: "DOWN", color: "red" };
+		if (e.idleStopped) return { text: "idle-off", color: "blue" };
 		return { text: "down", color: "gray" };
 	}
 	const svcs = runsHere(e);
@@ -113,11 +120,18 @@ export function vsMain(e: Entry): { text: string; color?: string } {
 	}
 	const parts: string[] = [];
 	let color: string | undefined;
-	if (e.update?.conflicts?.length) {
-		parts.push(`conflicts(${e.update.conflicts.length})`);
+	// Far behind main: a "!" up front, where it shows however narrow the
+	// column, and the conflicts merging main would bring.
+	const far = e.farBehind;
+	if (far) parts.push("!");
+	const conflicts = e.update?.conflicts?.length || far?.conflicts.length || 0;
+	if (conflicts) {
+		parts.push(`conflicts(${conflicts})`);
 		color = "red";
 	} else if (e.outOfStep.length > 0) {
 		parts.push(e.mainBehind ? `main older: ${e.outOfStep.join(",")}` : `behind in ${e.outOfStep.join(",")}`);
+		color = "yellow";
+	} else if (far) {
 		color = "yellow";
 	}
 	if (e.behind > 0) parts.push(`${e.behind}↓`);

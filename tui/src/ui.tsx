@@ -118,7 +118,13 @@ export function detailLines(e: Entry, width: number, baseRef: string): React.Rea
 			<Text dimColor>{e.kind === "main" ? "  main checkout" : `  ${e.branch}`}</Text>
 			<Text dimColor>{e.kind === "worktree" ? (e.slot ? ` · slot ${e.slot}` : " · no slot yet") : ""}</Text>
 			<Text> · </Text>
-			<Text color={st.color}>{e.up ? "stack up" : e.kind === "main" ? "stack DOWN" : "stack not running"}</Text>
+			<Text color={st.color}>{e.up
+					? "stack up"
+					: e.kind === "main"
+						? "stack DOWN"
+						: e.idleStopped
+							? `stopped after ${e.idleStopped} idle`
+							: "stack not running"}</Text>
 			<Text dimColor>{e.memory ? ` · ${bytes(e.memory)}` : ""}</Text>
 			<Text dimColor>{`  ${e.root}`}</Text>
 		</>,
@@ -151,6 +157,17 @@ export function detailLines(e: Entry, width: number, baseRef: string): React.Rea
 		);
 		if (u?.conflicts?.length) {
 			add("conflicts", <Text color="red">{`  conflicting: ${u.conflicts.join(", ")}`}</Text>);
+		}
+		const far = e.farBehind;
+		if (far) {
+			add(
+				"far",
+				<Text color={far.conflicts.length ? "red" : "yellow"}>
+					{far.conflicts.length
+						? `! far behind main: merging it conflicts in ${far.conflicts.join(", ")}`
+						: `! far behind main: ${far.behind} commits, and the merge only gets harder`}
+				</Text>,
+			);
 		}
 	}
 
@@ -324,6 +341,8 @@ export const KEYS: Array<[string, string]> = [
 	["U", "update all: hydra update, which pulls main (dry run, then asks)"],
 	["R", "read everything again now"],
 	["", "  VS MAIN: ↓ commits behind main, ↑ ahead; \"on X\": stacked on branch X"],
+	["", "  ! in VS MAIN: far behind main (past x-hydra behind_warn), or merging it conflicts"],
+	["", "  STACK idle-off: hydra stopped it, unused for x-hydra idle_stop; u starts it"],
 	["pgup pgdn", "scroll the detail"],
 	["?", "this help"],
 	["q", "quit; every stack keeps running"],

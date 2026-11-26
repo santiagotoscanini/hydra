@@ -70,6 +70,10 @@ export interface WorktreeState {
 	memory: number;
 	problems: Problem[];
 	update?: Update;
+	/** Its stack isn't running because nobody used it for x-hydra idle_stop. */
+	idleStopped?: { at: string; after: string };
+	/** More than behind_warn commits behind main, or merging main conflicts. */
+	farBehind?: { behind: number; limit: number; conflicts?: string[] };
 	pending?: boolean;
 	plannedAt: string;
 	gitAt: string;

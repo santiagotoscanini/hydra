@@ -529,7 +529,7 @@ func worktreeSnap(co gitx.Checkout, ms *mainState, mem func(int) int64) (*snapWo
 	if p.err != nil {
 		return nil, p.err
 	}
-	g := gitState(wt, ms.target.checkout.Root, ms.target.stack.Hydra.BaseRef, ms.Head)
+	g := gitState(wt, ms.target.checkout.Root, ms.target.stack.Hydra.BaseRef, ms.Head, ms.target.stack.Hydra.BehindWarn)
 	w := snapWorktreeOf(ms, wt, p, g, mem)
 	return &w, nil
 }
