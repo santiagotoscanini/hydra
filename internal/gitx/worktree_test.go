@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -61,5 +62,13 @@ func TestWorkTreeSeesEveryChange(t *testing.T) {
 	}
 	if got := status(); !strings.Contains(got, " D a/deleted.txt") {
 		t.Fatalf("after a deletion: %q", got)
+	}
+}
+
+// The watcher runs git status in a worktree every few seconds; it must
+// never hold the index lock someone's git add or commit there needs.
+func TestWorkTreeTakesNoOptionalLocks(t *testing.T) {
+	if !slices.Contains(WorkTree(".", "status").Env, "GIT_OPTIONAL_LOCKS=0") {
+		t.Fatal("WorkTree's git may take the index lock")
 	}
 }
