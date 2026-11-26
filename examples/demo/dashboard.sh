@@ -6,6 +6,8 @@
 #     stands against its parent (behind, a conflict, in step but on a
 #     branch that is behind), with the checkout it was started in chosen,
 #     and the chosen one's services and problems in a panel beside or below.
+#     A PR stack whose lower branches have no worktree shows them in their
+#     place, hollow and muted, with only m to offer.
 #  2. u starts a worktree's stack, ⏎ opens it (process-compose attach), and
 #     F10 or ctrl-c, then Yes, comes back to the dashboard with the stack
 #     still running. d stops it, after asking.
@@ -34,8 +36,8 @@ H="$repo/bin/hydra"
 cleanup() {
   cd /
   T kill-server 2>/dev/null || true
-  for wt in api web clash stacked deeper; do (cd "$repo/$wt" 2>/dev/null && "$H" down >/dev/null 2>&1) || true; done
-  for wt in api web clash stacked deeper; do (cd "$main" 2>/dev/null && "$H" slots free "$repo/$wt" >/dev/null 2>&1) || true; done
+  for wt in api web clash stacked deeper ring; do (cd "$repo/$wt" 2>/dev/null && "$H" down >/dev/null 2>&1) || true; done
+  for wt in api web clash stacked deeper ring; do (cd "$main" 2>/dev/null && "$H" slots free "$repo/$wt" >/dev/null 2>&1) || true; done
   (cd "$main" 2>/dev/null && "$H" down >/dev/null 2>&1) || true
   rm -rf "$repo"
 }
@@ -83,7 +85,14 @@ g worktree add -q -b web "$repo/web" main
 (cd "$repo/web" && put apps/web/cart.tsx && g add -A && g commit -qm "web: cart")
 g worktree add -q -b clash "$repo/clash" main
 (cd "$repo/clash" && put apps/api/users.go "the branch's" && g add -A && g commit -qm "api: users")
+# ring-schema <- ring-core <- ring-web, only ring-web checked out.
+g worktree add -q -b ring-schema "$repo/ringtmp" main
+(cd "$repo/ringtmp" && put db/ring.sql && g add -A && g commit -qm "ring: schema" && g checkout -q -b ring-core && put apps/api/ring.go && g add -A && g commit -qm "ring: core")
+g worktree remove "$repo/ringtmp"
+g worktree add -q -b ring-web "$repo/ring" ring-core
+(cd "$repo/ring" && put apps/web/ring.tsx && g add -A && g commit -qm "ring: web")
 put apps/api/users.go "main's"; g add -A; g commit -qm "api: users on main"
+g -C "$repo/ring" merge -q --no-edit main # straight into the top: its stack stays behind
 g worktree add -q -b stacked "$repo/stacked" web
 (cd "$repo/stacked" && put apps/web/more.tsx && g add -A && g commit -qm "web: more")
 g worktree add -q -b deeper "$repo/deeper" stacked
@@ -100,7 +109,7 @@ start() { # cols rows
 }
 
 echo "--- 1. bare hydra in the api worktree"
-start 80 24
+start 80 34
 screen "80 columns"
 T capture-pane -p -t d | grep -qE '▌├─○ api +down +1 behind main' || fail "the api worktree isn't chosen"
 T capture-pane -p -t d | grep -qE '● main +up +up to date' || fail "main isn't up"
@@ -108,9 +117,20 @@ T capture-pane -p -t d | grep -qE '├─○ clash +down +1 behind main · 1 con
 T capture-pane -p -t d | grep -qE '└─○ web +down +1 behind main' || fail "web, last on main, isn't drawn so"
 T capture-pane -p -t d | grep -qE '│ {3}└─○ stacked +down +↑ web is behind' || fail "the stack isn't under web, out of date through it"
 T capture-pane -p -t d | grep -qE '│ {5}└─○ deeper +down +↑ web is behind' || fail "the second level isn't under stacked, out of date through web"
-T capture-pane -p -t d | grep -qE '0 of 5 worktrees up · 5 out of date' || fail "the header doesn't count what is out of date"
+T capture-pane -p -t d | grep -qE '├─◇ ring-schema +no checkout +1 behind main' || fail "the stack's bottom branch, with no checkout, isn't shown behind main"
+T capture-pane -p -t d | grep -qE '│ └─◇ ring-core +no checkout +↑ ring-schema is behind' || fail "the middle branch, with no checkout, isn't under ring-schema"
+T capture-pane -p -t d | grep -qE '│ {3}└─○ ring-web +down +↑ ring-schema is behind' || fail "ring-web merged main, but its stack didn't: it isn't out of date"
+T capture-pane -p -t d | grep -qE '0 of 6 worktrees up · 8 out of date' || fail "the header doesn't count what is out of date"
 T capture-pane -p -t d | grep -qE '◆ Runs here' || fail "the chosen worktree's services aren't shown"
 T capture-pane -p -t d | python3 -c 'import sys; sys.exit(any(len(l.rstrip("\n")) > 80 for l in sys.stdin))' || fail "a line is wider than 80 columns"
+T send-keys -t d j j
+waitfor '▌├─◇ ring-schema'
+screen "a branch with no checkout, chosen"
+T capture-pane -p -t d | grep -qE 'ring-schema · no checkout' || fail "the detail doesn't say it has no checkout"
+T capture-pane -p -t d | grep -qE 'No worktree has it checked out' || fail "the detail doesn't say nothing runs it"
+T capture-pane -p -t d | grep -qE '^ m merge main +U update all' || fail "the footer doesn't offer m alone"
+T send-keys -t d u
+waitfor 'ring-schema has no checkout: nothing runs it'
 start 150 24
 screen "150 columns"
 T capture-pane -p -t d | grep -qE '╭─ Checkouts.*╭─ api' || fail "a wide terminal shows the detail beside the list"

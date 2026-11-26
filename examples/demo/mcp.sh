@@ -19,8 +19,9 @@
 #     worktrees lists them in order (a branch after the one it is stacked
 #     on), update_main pulls main from origin and restarts what changed in
 #     its stack, update_worktree merges each worktree in order; one
-#     conflicts, is resolved with git here, and updated again. prompts/get
-#     returns the workflow.
+#     conflicts, is resolved with git here, and updated again. A stack whose
+#     middle branch has no worktree is listed and updated in its place, that
+#     branch merged without a checkout. prompts/get returns the workflow.
 # 10. Nothing but protocol messages ever reached stdout.
 #
 # Everything happens in a throwaway repo under $TMPDIR. Each step checks what
@@ -221,6 +222,14 @@ g -C "$main" worktree add -q -b s1 "$repo/s1" main
 (cd "$repo/s1" && put apps/web/s1.tsx && g add -A && g commit -qm s1)
 g -C "$main" worktree add -q -b s2 "$repo/s2" s1
 (cd "$repo/s2" && put apps/web/s2.tsx && g add -A && g commit -qm s2)
+# m1 <- m2 <- m3, with no worktree for m2.
+g -C "$main" worktree add -q -b m1 "$repo/m1" main
+(cd "$repo/m1" && put apps/web/m1.tsx && g add -A && g commit -qm m1)
+g -C "$main" worktree add -q -b m2 "$repo/m2" m1
+(cd "$repo/m2" && put apps/web/m2.tsx && g add -A && g commit -qm m2)
+g -C "$main" worktree add -q -b m3 "$repo/m3" m2
+(cd "$repo/m3" && put apps/web/m3.tsx && g add -A && g commit -qm m3)
+g -C "$main" worktree remove "$repo/m2"
 g -C "$main" worktree add -q -b ind "$repo/ind" main
 (cd "$repo/ind" && put apps/api/users.go "ind's users" && g add -A && g commit -qm ind && "$H" up -D >/dev/null)
 (cd "$repo/team" && put apps/api/users.go "users v2" && g add -A && g commit -qm "api: users v2" && g push -q origin main)
@@ -238,8 +247,13 @@ call worktrees; echo "$out" | show
 expect "$out" '1\. main +on main at .* · stack up'
 expect "$out" '2\. feature +on main · 1 ahead · nothing to do'
 expect "$out" '3\. ind +on main · 1 ahead · nothing to do · stack up \(slot [0-9]\)'
-expect "$out" '4\. s1 +on main · 1 ahead'
-expect "$out" '5\. └ s2 +on s1 · 1 ahead'
+expect "$out" '4\. m1 +on main · 1 ahead'
+expect "$out" '5\. └ m2 +no checkout · on m1 · 1 ahead · nothing to do$'
+expect "$out" '6\.   └ m3 +on m2 · 1 ahead · nothing to do · stack down'
+expect "$out" '7\. s1 +on main · 1 ahead'
+expect "$out" '8\. └ s2 +on s1 · 1 ahead'
+checkout="$(python3 -c 'import json,sys; print(" ".join(w["name"]+"="+str(w["checkout"]) for w in json.loads(sys.argv[1])["result"]["structuredContent"]["worktrees"]))' "$reply")"
+expect "$checkout" 'm1=True m2=False m3=True'
 call update_main '{"dry_run":true}'; echo "$out" | show
 expect "$out" 'would move .* \(1 commit\)'
 expect "$out" 'api +would be restarted'
@@ -250,7 +264,7 @@ expect "$out" 'ok: main is up to date. The worktrees were left alone'
 curl -sf localhost:24010 >/dev/null || fail "main's api isn't back after the update"
 call worktrees; echo "$out" | show
 expect "$out" 'ind +on main · 1 behind, 1 ahead · CONFLICTS in 1 file: apps/api/users.go'
-for wt in feature ind s1 s2; do
+for wt in feature ind m1 m2 m3 s1 s2; do
   call update_worktree "{\"worktree\":\"$wt\"}"; echo "$out" | show
   case $wt in
   ind)
@@ -269,12 +283,18 @@ for wt in feature ind s1 s2; do
     expect "$out" 'restarted there: api'
     ;;
   s2) expect "$out" 's1 merged in' ;;
+  m2)
+    expect "$out" '\(no checkout\) +m2 +m1 merged in \([0-9]+ commits\), without a checkout'
+    [ "$(g -C "$main" log -1 --format=%s m2)" = "Merge branch 'm1' into m2" ] || fail "m2's merge: $(g -C "$main" log -1 --format=%s m2)"
+    g -C "$main" worktree list | grep -q '\[m2\]' && fail "m2 got a worktree"
+    ;;
+  m3) expect "$out" 'm2 merged in' ;;
   *) expect "$out" 'main merged in' ;;
   esac
 done
 call worktrees; echo "$out" | show
-for wt in feature ind s1 s2; do
-  expect "$out" " $wt +on (main|s1) · [0-9]+ ahead · nothing to do"
+for wt in feature ind m1 m2 m3 s1 s2; do
+  expect "$out" " $wt +(no checkout · )?on (main|s1|m1|m2) · [0-9]+ ahead · nothing to do"
 done
 stop_server
 

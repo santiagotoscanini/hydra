@@ -545,6 +545,7 @@ func init() {
 			description: "Main and every worktree of the repository, in the order to bring them up to date: each worktree right before the branches stacked on it. " +
 				"For each: its branch, its parent (main, or the branch it is stacked on), commits behind and ahead of it, every file merging the parent in conflicts in, " +
 				"uncommitted changes, what update_worktree would do (next: merge, resolve, skip or nothing), its stack (up, down, idle-stopped) and slot. " +
+				"Also the branches of a PR stack that no worktree has checked out but a worktree sits on (checkout: false, no path, stack none): they are updated in their place in the chain too. " +
 				"For main: how far behind its upstream it is (as of the last fetch), uncommitted changes, and whether its stack is up. Read-only.",
 			schema: noArgs, run: mcpWorktrees,
 		},
@@ -563,9 +564,10 @@ func init() {
 			description: "`hydra update --here`, run in the named worktree: merge its parent (main, or the branch it is stacked on) into it and restart what that touched in its stack. " +
 				"Main and its stack are left alone, so it works from any checkout. It never resolves a conflict and never touches uncommitted work: it says so, " +
 				"names every conflicting file and leaves the worktree as it was. Update a worktree only after the one it is stacked on (the worktrees tool's order). " +
-				"dry_run says what it would do.",
+				"For a stack branch with no checkout (checkout: false in worktrees), name its branch: it runs `hydra update --branch`, which merges a clean merge without a checkout; " +
+				"a conflict needs a temporary worktree, and the error says how. dry_run says what it would do.",
 			schema: object(map[string]any{
-				"worktree": map[string]any{"type": "string", "description": "The worktree: its name (folder), branch or path, as the worktrees tool lists it."},
+				"worktree": map[string]any{"type": "string", "description": "The worktree: its name (folder), branch or path, as the worktrees tool lists it; or a branch with no checkout."},
 				"dry_run":  map[string]any{"type": "boolean", "description": "Only say what would happen."},
 				"since": map[string]any{"type": "string", "description": "After a merge you made by hand (to resolve conflicts): the commit the worktree was at before it. " +
 					"What the merge touched is then restarted in its running stack, which an update that finds nothing to merge wouldn't do."},
@@ -616,7 +618,16 @@ func worktreeSnap(co gitx.Checkout, ms *mainState, mem func(int) int64) (*snapWo
 	if p.err != nil {
 		return nil, p.err
 	}
-	g := gitState(wt, ms.target.checkout.Root, ms.target.stack.Hydra.BaseRef, ms.Head, ms.target.stack.Hydra.BehindWarn)
+	mainRoot, base := ms.target.checkout.Root, ms.target.stack.Hydra.BaseRef
+	wts, err := stack.List(mainRoot)
+	if err != nil {
+		return nil, err
+	}
+	view, err := loadStacks(mainRoot, base, wts)
+	if err != nil {
+		return nil, err
+	}
+	g := gitState(wt, mainRoot, base, ms.Head, ms.target.stack.Hydra.BehindWarn, view)
 	w := snapWorktreeOf(ms, wt, p, g, mem)
 	return &w, nil
 }

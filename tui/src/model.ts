@@ -2,9 +2,12 @@
 
 import type { Health, Problem, Service, Snapshot, Update } from "./types.js";
 
-/** One row of the list: the main checkout or a worktree. */
+/** One row of the list: the main checkout, a worktree, or a branch of a PR
+ *  stack that no worktree has checked out (kind "branch": nothing runs it,
+ *  but the worktrees stacked on it run its code). */
 export interface Entry {
-	kind: "main" | "worktree";
+	kind: "main" | "worktree" | "branch";
+	/** A checkout's path; for a branch with no checkout, "branch:" and its name. */
 	root: string;
 	name: string;
 	branch: string;
@@ -93,8 +96,37 @@ export function entries(s: Snapshot): Entry[] {
 			current: s.current === w.root,
 		});
 	}
+	for (const b of s.branches ?? []) {
+		out.push({
+			kind: "branch",
+			root: branchRoot(b.branch),
+			name: b.branch,
+			branch: b.branch,
+			slot: 0,
+			up: false,
+			commit: b.commit,
+			subject: b.subject,
+			behind: b.behind,
+			parent: b.update?.parent,
+			behindParent: b.update?.behind ?? 0,
+			ahead: b.ahead,
+			dirty: 0,
+			stack: b.stack,
+			services: [],
+			problems: [],
+			update: b.update,
+			outOfStep: [],
+			mainBehind: false,
+			memory: 0,
+			pending: !!b.pending,
+			current: false,
+		});
+	}
 	return out;
 }
+
+/** The key a branch with no checkout goes by, in the place of a path. */
+export const branchRoot = (branch: string) => "branch:" + branch;
 
 /** The services a checkout runs itself and that aren't off until started. */
 export function runsHere(e: Entry): Service[] {
@@ -115,6 +147,32 @@ export function branchName(branch: string): { id?: string; title: string } {
 export function shortBranch(branch: string): string {
 	const n = branchName(branch);
 	return n.id ?? n.title;
+}
+
+/** Names for branches said together: each its shortest name, except that
+ *  branches sharing a ticket id (a PR stack: scrm-264-app-ring-schema,
+ *  -core, -web) are told apart by what follows the words their titles
+ *  share: schema, core, web. */
+export function labels(branches: string[]): Map<string, string> {
+	const out = new Map<string, string>();
+	const groups = new Map<string, string[]>();
+	for (const b of new Set(branches)) groups.set(shortBranch(b), [...(groups.get(shortBranch(b)) ?? []), b]);
+	for (const [short, group] of groups) {
+		if (group.length === 1) {
+			out.set(group[0]!, short);
+			continue;
+		}
+		const words = group.map((b) => branchName(b).title.split(" "));
+		let common = 0;
+		while (words.every((w) => w.length > common + 1 && w[common] === words[0]![common])) common++;
+		for (const [i, b] of group.entries()) out.set(b, words[i]!.slice(common).join(" ") || branchName(b).title || short);
+	}
+	return out;
+}
+
+/** branch's name said next to other's: "schema" beside scrm-264-app-ring-web. */
+export function labelBeside(branch: string, other: string): string {
+	return labels([branch, other]).get(branch)!;
 }
 
 /** What a checkout is called in the list and the panel. */
@@ -141,6 +199,10 @@ export interface StateView {
 /** Where a checkout's stack stands, in a glyph and a word or two. busy is
  *  the action the dashboard is running in it ("starting", "stopping"). */
 export function stateOf(e: Entry, busy?: string): StateView {
+	if (e.kind === "branch") {
+		if (busy) return { glyph: "", spin: true, word: `${busy}…`, color: "yellow" };
+		return { glyph: "◇", spin: false, word: "no checkout", color: "gray" };
+	}
 	if (e.error) return { glyph: "✗", spin: false, word: "can't plan", color: "red" };
 	if (e.pending) return { glyph: "…", spin: true, word: "planning", color: "gray" };
 	const p = progress(e);
@@ -182,7 +244,7 @@ export function landed(e: Entry): boolean {
 /** Behind the branch it is updated from, so what runs there isn't what its
  *  parent has. */
 function ownStale(e: Entry): boolean {
-	return e.kind === "worktree" && !e.error && !e.pending && !landed(e) && (e.behindParent > 0 || parentConflicts(e) > 0);
+	return e.kind !== "main" && !e.error && !e.pending && !landed(e) && (e.behindParent > 0 || parentConflicts(e) > 0);
 }
 
 /**
@@ -223,12 +285,13 @@ function sortKey(e: Entry): string {
 /**
  * The checkouts as a tree, in the order drawn: main, then each branch
  * right above the branches stacked on it, siblings by name. A worktree's
- * parent is the worktree whose branch it is updated from; the rest (main,
- * or not worked out yet) hang off main.
+ * parent is the worktree, or the stack branch with no checkout, whose
+ * branch it is updated from; the rest (main, or not worked out yet) hang
+ * off main.
  */
 export function tree(list: Entry[]): Node[] {
 	const main = list.find((e) => e.kind === "main");
-	const byBranch = new Map(list.filter((e) => e.kind === "worktree").map((e) => [e.branch, e]));
+	const byBranch = new Map(list.filter((e) => e.kind !== "main").map((e) => [e.branch, e]));
 	const parentOf = new Map<Entry, Entry | undefined>();
 	for (const e of list) {
 		if (e.kind === "main") continue;
@@ -299,7 +362,7 @@ export function badgeOf(n: Node): Badge {
 		return parts.length ? { texts: [parts.join(" · ")], color: "yellow" } : { texts: ["up to date"], dim: true };
 	}
 	const s = n.stale;
-	const parent = e.parent ? shortBranch(e.parent) : "main";
+	const parent = e.parent ? labelBeside(e.parent, e.branch) : "main";
 	switch (s.kind) {
 		case "none":
 			return { texts: [""] };
@@ -313,7 +376,7 @@ export function badgeOf(n: Node): Badge {
 			return { texts, color: s.conflicts ? "red" : "yellow", bold: !s.from };
 		}
 		case "inherits": {
-			const from = shortBranch(s.from.branch);
+			const from = labelBeside(s.from.branch, e.branch);
 			return { texts: [`${from} is behind`, `${from} behind`, "parent behind"], dim: true, mark: "↑ " };
 		}
 		case "current":
@@ -325,9 +388,11 @@ export function badgeOf(n: Node): Badge {
 /** The chain from main to a checkout, each stale branch with how far
  *  behind: "main → fla-709 (69 behind) → fla-710". */
 export function chainText(n: Node, staleOf: (e: Entry) => Staleness): string {
-	return [...n.chain, n.e]
+	const all = [...n.chain, n.e];
+	const names = labels(all.filter((e) => e.kind !== "main").map((e) => e.branch));
+	return all
 		.map((e) => {
-			const name = e.kind === "main" ? "main" : shortBranch(e.branch);
+			const name = e.kind === "main" ? "main" : names.get(e.branch)!;
 			const s = staleOf(e);
 			if (s.kind !== "behind") return name;
 			const what = [s.behind ? `${s.behind} behind` : "", s.conflicts ? plural(s.conflicts, "conflict") : ""].filter(Boolean);

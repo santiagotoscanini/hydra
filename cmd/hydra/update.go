@@ -46,6 +46,7 @@ func updateCmd(args []string) error {
 	fs.BoolVar(&noPull, "no-pull", false, "")
 	fs.BoolVar(&mainOnly, "main-only", false, "")
 	fs.BoolVar(&here, "here", false, "")
+	branchName := fs.String("branch", "", "")
 	timeout := fs.Duration("timeout", 15*time.Minute, "")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -59,6 +60,9 @@ func updateCmd(args []string) error {
 	}
 	if here && mainOnly {
 		return fmt.Errorf("--here and --main-only leave nothing to do together")
+	}
+	if *branchName != "" && (here || mainOnly) {
+		return fmt.Errorf("--branch updates one branch with no checkout; it doesn't go with --here or --main-only")
 	}
 	if !dry {
 		unlock, err := lockUpdate(co.CommonDir)
@@ -78,9 +82,12 @@ func updateCmd(args []string) error {
 		would = "would be "
 		fmt.Println("(dry run: nothing is pulled, restarted or merged)")
 	}
+	if *branchName != "" {
+		return updateBranch(co, ms, *branchName, dry, *timeout)
+	}
 	if here {
 		// Main stays where it is; only this worktree catches up with it.
-		needHand, err := updateWorktrees(co, ms, ms.Head, dry, *timeout, co.Root)
+		needHand, err := updateWorktrees(co, ms, ms.Head, dry, *timeout, co.Root, "")
 		if err != nil {
 			return err
 		}
@@ -161,7 +168,7 @@ func updateCmd(args []string) error {
 	// 3. The worktrees.
 	needHand := 0
 	if !mainOnly && !failed {
-		if needHand, err = updateWorktrees(co, ms, target, dry, *timeout, ""); err != nil {
+		if needHand, err = updateWorktrees(co, ms, target, dry, *timeout, "", ""); err != nil {
 			return err
 		}
 	}
@@ -180,6 +187,44 @@ func updateCmd(args []string) error {
 		fmt.Println("ok: main is " + would + "up to date. The worktrees were left alone (--main-only).")
 	default:
 		fmt.Println("ok: main and every worktree are " + would + "up to date.")
+	}
+	return nil
+}
+
+// updateBranch is `hydra update --branch NAME`: merge its parent into a
+// stack branch that no worktree has checked out, without a checkout. Main
+// stays where it is, as with --here.
+func updateBranch(co gitx.Checkout, ms *mainState, name string, dry bool, timeout time.Duration) error {
+	main, base := ms.target.checkout.Root, ms.target.stack.Hydra.BaseRef
+	wts, err := stack.List(main)
+	if err != nil {
+		return err
+	}
+	for _, w := range wts {
+		if w.Branch == name {
+			return fmt.Errorf("%s is checked out in %s: run `hydra update --here` there", name, w.Root)
+		}
+	}
+	view, err := loadStacks(main, base, wts)
+	if err != nil {
+		return err
+	}
+	if !view.st.IsBare(name) {
+		return fmt.Errorf("%s isn't a branch of a stack that a worktree sits on (`hydra status --all` lists those with no checkout)", name)
+	}
+	needHand, err := updateWorktrees(co, ms, ms.Head, dry, timeout, "", name)
+	if err != nil {
+		return err
+	}
+	fmt.Println()
+	switch {
+	case needHand > 0:
+		fmt.Println("this branch needs a hand (above).")
+		return errProblems{}
+	case dry:
+		fmt.Printf("Run `hydra update --branch %s` to do it.\n", name)
+	default:
+		fmt.Println("ok: the branch is up to date with its parent (main itself wasn't pulled).")
 	}
 	return nil
 }
@@ -627,39 +672,59 @@ func restartAndWait(st *config.Stack, source string, c *pc.Client, name string, 
 	}
 }
 
-// wtUpdate is what an update does to one worktree.
+// wtUpdate is what an update does to one worktree, or to a stack branch
+// that no worktree has checked out (root "": see bare.go).
 type wtUpdate struct {
 	root, name string
+	main       string   // the main checkout: where git runs for a branch with no checkout
 	parent     string   // the ref merged in: main, or the branch it is stacked on
+	chain      []string // the branches from the bottom of its stack up to its own
 	depth      int      // position in its stack: parents are updated first
 	behind     int      // commits the parent has that it doesn't
 	action     string   // "merge", "fast-forward", or "" when left alone
 	note       string   // why it was left alone, or what happened
 	hand       bool     // someone has to step in
 	detail     []string // for the ones that need a hand: files, and the command
+	// For a branch with no checkout: the commits decide merged, and the
+	// merged tree.
+	ours, theirs, tree string
 }
 
+// bare says whether it is a stack branch with no checkout.
+func (u *wtUpdate) bare() bool { return u.root == "" }
+
 // updateWorktrees merges main (or the branch a worktree is stacked on) into
-// every worktree that is behind it (only the one at only, when that is
-// set), and returns how many need a hand.
-func updateWorktrees(co gitx.Checkout, ms *mainState, mainCommit string, dry bool, timeout time.Duration, only string) (int, error) {
+// every worktree that is behind it, and into the stack branches no worktree
+// has checked out, parents first. only, when set, picks the worktree at
+// that root; onlyBranch, a branch with no checkout. It returns how many
+// need a hand.
+func updateWorktrees(co gitx.Checkout, ms *mainState, mainCommit string, dry bool, timeout time.Duration, only, onlyBranch string) (int, error) {
 	main, base := ms.target.checkout.Root, ms.target.stack.Hydra.BaseRef
 	wts, err := stack.List(main)
 	if err != nil {
 		return 0, err
 	}
+	view, err := loadStacks(main, base, wts)
+	if err != nil {
+		return 0, err
+	}
 	var ups []*wtUpdate
 	for _, wt := range wts {
-		if wt.Root == main || (only != "" && wt.Root != only) {
+		if wt.Root == main || onlyBranch != "" || (only != "" && wt.Root != only) {
 			continue
 		}
-		ups = append(ups, &wtUpdate{root: wt.Root, name: wt.Branch})
+		ups = append(ups, &wtUpdate{root: wt.Root, name: wt.Branch, main: main})
+	}
+	for _, b := range view.st.Bare {
+		if only == "" && (onlyBranch == "" || onlyBranch == b.Name) {
+			ups = append(ups, &wtUpdate{name: b.Name, main: main})
+		}
 	}
 	if len(ups) == 0 {
 		return 0, nil
 	}
 	for _, u := range ups {
-		u.inspect(ms, base)
+		u.inspect(base, view)
 	}
 	sort.SliceStable(ups, func(i, j int) bool { return ups[i].depth < ups[j].depth })
 
@@ -672,9 +737,15 @@ func updateWorktrees(co gitx.Checkout, ms *mainState, mainCommit string, dry boo
 		}
 		return shortBranch(u.name)
 	}
+	where := func(u *wtUpdate) string {
+		if u.bare() {
+			return "(no checkout)"
+		}
+		return filepath.Base(u.root)
+	}
 	wRoot, wBranch := 0, 0
 	for _, u := range ups {
-		wRoot = max(wRoot, utf8.RuneCountInString(filepath.Base(u.root)))
+		wRoot = max(wRoot, utf8.RuneCountInString(where(u)))
 		wBranch = max(wBranch, utf8.RuneCountInString(branch(u)))
 	}
 	hand := 0
@@ -682,7 +753,7 @@ func updateWorktrees(co gitx.Checkout, ms *mainState, mainCommit string, dry boo
 		// A parent merged a moment ago may have changed what this needs.
 		if u.depth > 1 && !dry {
 			u.action, u.note, u.hand = "", "", false
-			u.inspect(ms, base)
+			u.inspect(base, view)
 		}
 		u.decide(main, base, mainCommit, dry)
 		if u.action != "" && !dry {
@@ -691,11 +762,15 @@ func updateWorktrees(co gitx.Checkout, ms *mainState, mainCommit string, dry boo
 		if u.hand {
 			hand++
 		}
-		fmt.Printf("  %-*s  %-*s  %s\n", wRoot, filepath.Base(u.root), wBranch, branch(u), u.note)
+		fmt.Printf("  %-*s  %-*s  %s\n", wRoot, where(u), wBranch, branch(u), u.note)
 	}
 	for _, u := range ups {
 		if len(u.detail) > 0 {
-			fmt.Printf("\n  %s\n", u.root)
+			if u.bare() {
+				fmt.Printf("\n  branch %s (no checkout)\n", u.name)
+			} else {
+				fmt.Printf("\n  %s\n", u.root)
+			}
 			for _, line := range u.detail {
 				fmt.Println("    " + line)
 			}
@@ -704,30 +779,30 @@ func updateWorktrees(co gitx.Checkout, ms *mainState, mainCommit string, dry boo
 	return hand, nil
 }
 
-// inspect finds what the worktree is stacked on.
-func (u *wtUpdate) inspect(ms *mainState, base string) {
-	u.parent, u.depth = base, 1
+// inspect finds what it is stacked on. view may be nil: the worktrees only.
+func (u *wtUpdate) inspect(base string, view *stackView) {
+	u.parent, u.depth, u.chain = base, 1, nil
 	if u.name == "" {
 		return
 	}
-	chain, _, err := stack.Chain(u.root, stack.Options{
-		BaseRef: base,
-		ParentOverride: func(root string) string {
-			lf, _ := readLocal(filepath.Join(root, ".hydra.local.yaml"))
-			if lf == nil {
-				return ""
-			}
-			return lf.Parent
-		},
-	})
+	if u.bare() {
+		u.parent, u.chain = view.bareParent(u.name), view.bareChain(u.name)
+		u.depth = len(u.chain)
+		return
+	}
+	parent, chain, err := view.place(u.root, base)
 	if err == nil && len(chain) > 0 {
-		u.parent, u.depth = chain[len(chain)-1].Parent, len(chain)
+		u.parent, u.chain, u.depth = parent, chain, len(chain)
 	}
 }
 
 // decide works out what to do, without changing anything: git merge-tree
 // tries the merge in memory.
 func (u *wtUpdate) decide(main, base, mainCommit string, dry bool) {
+	if u.bare() {
+		u.decideBare(base, mainCommit, dry)
+		return
+	}
 	if u.name == "" {
 		u.note = "left alone: no branch is checked out there"
 		return
@@ -779,14 +854,7 @@ func (u *wtUpdate) decide(main, base, mainCommit string, dry bool) {
 		u.action, u.note = "merge", fmt.Sprintf("%s %smerged in (%s)", u.parent, would, commits(behind))
 	default:
 		u.note, u.hand = fmt.Sprintf("CONFLICTS with %s in %d file%s (%s behind)", u.parent, len(files), plural(len(files)), commits(behind)), true
-		const show = 4
-		for i, f := range files {
-			if i == show && len(files) > show+1 {
-				u.detail = append(u.detail, fmt.Sprintf("conflict: … and %d more", len(files)-show))
-				break
-			}
-			u.detail = append(u.detail, "conflict: "+f)
-		}
+		u.conflictDetail(files)
 		u.detail = append(u.detail, fmt.Sprintf("resolve:  git -C %s merge %s", shQuote(u.root), u.parent))
 	}
 }
@@ -794,6 +862,10 @@ func (u *wtUpdate) decide(main, base, mainCommit string, dry bool) {
 // apply does the merge decide chose, then restarts what the merged commits
 // touched in the worktree's running stack.
 func (u *wtUpdate) apply(timeout time.Duration) {
+	if u.bare() {
+		u.applyBare()
+		return
+	}
 	before, err := gitx.Head(u.root)
 	if err != nil {
 		u.note, u.hand = "left alone: "+err.Error(), true

@@ -65,11 +65,11 @@ var mcpPrompts = []mcpPrompt{
 const updateAllPrompt = `Bring main and every worktree of this repository up to date with hydra's MCP tools, resolving merge conflicts yourself. I asked for this: you may call update_main.
 
 Rules for the whole run:
-- Never push, rebase, reset, force anything, delete a branch or remove a worktree. Never pass --no-verify. Never stop main's stack or run process-compose, hydra up/down or supabase commands yourself.
-- Touch only what this workflow names: a worktree's merge of its parent, and the files that merge conflicts in.
+- Never push, rebase, reset, force anything, delete a branch or remove a worktree (except the temporary worktree you make in step 3 for a branch with no checkout). Never pass --no-verify. Never stop main's stack or run process-compose, hydra up/down or supabase commands yourself.
+- Touch only what this workflow names: a worktree's (or a stack branch's) merge of its parent, and the files that merge conflicts in.
 - Leave uncommitted work alone: a worktree with uncommitted changes is skipped, unless I said otherwise.
 
-1. Plan. Call worktrees. It lists main, then every worktree in the order to update it: each worktree comes right before the branches stacked on it (marked └), so a branch is merged after its parent took in main. Show me the plan as a short table in that order, one row per worktree: its name and parent, how far behind it is, and what will happen:
+1. Plan. Call worktrees. It lists main, then every worktree in the order to update it: each worktree comes right before the branches stacked on it (marked └), so a branch is merged after its parent took in main. It also lists the branches of a PR stack that no worktree has checked out but a worktree sits on (checkout: false): main <- schema <- core <- web with only web checked out lists schema and core in their place, since web runs their code. Show me the plan as a short table in that order, one row per worktree: its name and parent, how far behind it is, and what will happen:
    - next "merge": a clean merge;
    - next "resolve": conflicts you will resolve (name the files);
    - next "skip": left alone, with the reason (uncommitted work, a merge already under way, ...);
@@ -81,8 +81,9 @@ Rules for the whole run:
 3. The worktrees, in the order worktrees gave, one at a time. A branch stacked on another is only updated once its parent is done; if its parent was skipped or failed, skip it too and say why.
    - next "nothing": move on.
    - next "skip": move on, and keep the reason for the report.
-   - next "merge": call update_worktree with its name. Its output says what was merged and what restarted. If it fails, keep the error for the report and move on to the next worktree that doesn't sit on this one.
-   - next "resolve": in that worktree's directory (its path), with git:
+   - next "merge": call update_worktree with its name (for checkout: false, its branch: hydra merges it without a checkout). Its output says what was merged and what restarted. If it fails, keep the error for the report and move on to the next worktree that doesn't sit on this one.
+   - next "resolve" on a branch with checkout: false: it needs a checkout to resolve in. Make a temporary one: git -C <main's path> worktree add <a new directory under the system's temp directory> <branch>. Resolve there exactly as below (steps a to d; skip e: nothing runs it), then remove it: git -C <main's path> worktree remove <that directory>. If you stop on it, git merge --abort there, then remove the temporary worktree all the same.
+   - next "resolve" (a worktree): in that worktree's directory (its path), with git:
      a. Note the commit it is at (git rev-parse HEAD), then git merge <parent> (the parent worktrees names, nothing else). git stops on the conflicts.
      b. For each conflicted file, find what each side meant before editing it: read both versions and the merge base (git show :1:FILE, :2:FILE, :3:FILE), and the commits on each side that touched it (git log --oneline -n 10 <parent> -- FILE, and the same for HEAD). Keep both sides' intent: never just take one side to make the conflict go away. Regenerate generated files (lock files, generated types, ...) with the project's own command instead of merging their text.
      c. Run the checks the project documents for what you touched (its AGENTS.md or CLAUDE.md: type checks, linters, the tests of that area), in that worktree. Fix what the merge broke.

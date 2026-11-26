@@ -217,7 +217,9 @@ branch falls out of step. The manual lists
 one JSON object: what each runs and takes from main, its processes, its
 problems with their fixes (and the fix as a command when it is a hydra one),
 the programs outside any stack that hold its ports (`strays`),
-how far it is from main and what `hydra update` would do to it.
+how far it is from main and what `hydra update` would do to it, and
+(`branches`) the branches of PR stacks that have no worktree (see
+[Stacked branches](#stacked-branches)).
 `--watch` prints one every second.
 
 ### The dashboard
@@ -229,7 +231,9 @@ spinner and `starting 2/3` while it starts), and how it stands against its
 parent, as a tree: main at the root, each stacked branch under the one it
 is stacked on. A branch under one that is behind is out of date too
 (`↑ web is behind`), and the first stale branch of each chain stands out,
-so you see where to update first. In a panel for the
+so you see where to update first. A PR stack's branch that no worktree has
+checked out is a row in its place (`◇`, muted, `no checkout`): nothing to
+start or stop there, only `m`. In a panel for the
 chosen one, its problems with their fixes, its services and what it takes
 from main. At 120 columns or wider the panels sit side by side. It uses
 the terminal's own colours and follows its light or dark theme, also when
@@ -265,7 +269,8 @@ the terminal switches while it runs.
 Each key runs the hydra command an agent would type, in the chosen
 checkout: `u` `hydra up -D`, `d` `hydra down`, `r` `hydra process restart`,
 `l` `hydra process logs -f`, `o` opens an address by name (`hosts`) in
-the browser, `f` a problem's fix, `m` `hydra update --here`,
+the browser, `f` a problem's fix, `m` `hydra update --here` (on a branch
+with no checkout, `hydra update --branch NAME`),
 `U` `hydra update` (both after their dry run), `R` reads everything again,
 `?` lists the keys, `q` quits and leaves every stack running. `⏎` opens the
 stack in `process-compose attach`; F10 or ctrl-c, then Yes, comes back with
@@ -298,9 +303,9 @@ In a project without an `x-hydra` block it lists no tools, so registering it for
 | `down` | `hydra down` | refused |
 | `update_here` | `hydra update --here` (`dry_run`) | refused |
 | `main_status` | main's stack, and which of its services this worktree uses | reads |
-| `worktrees` | main and every worktree in the order to update them (a branch after the one it is stacked on): parent, behind/ahead, every conflicting file, uncommitted changes, what an update would do, stack, slot | reads |
+| `worktrees` | main and every worktree in the order to update them (a branch after the one it is stacked on), with a PR stack's branches that have no worktree (`checkout: false`): parent, behind/ahead, every conflicting file, uncommitted changes, what an update would do, stack, slot | reads |
 | `update_main` | `hydra update --main-only` (`dry_run`): pull main, bring its stack along; only when the developer asked | allowed |
-| `update_worktree` | `hydra update --here` in the named `worktree` (`dry_run`; `since`: after a merge by hand, restart what it touched) | allowed |
+| `update_worktree` | `hydra update --here` in the named `worktree` (`dry_run`; `since`: after a merge by hand, restart what it touched); for a branch with no checkout, `hydra update --branch` | allowed |
 
 Agents with a shell get it wrong: they start process-compose by hand, which
 runs everything on main's ports. They stop main's stack because theirs looks
@@ -318,7 +323,9 @@ The agent calls `worktrees` and shows the plan, waits for your yes, runs
 `update_main`, then each worktree in order: `update_worktree` for a clean
 merge; for a conflict, `git merge` in that worktree, resolves each file
 keeping both sides' intent, runs the project's checks, commits with git's
-message and calls `update_worktree` again with `since`. An ambiguous
+message and calls `update_worktree` again with `since`. A stack branch with
+no worktree is merged without one; its conflict is resolved in a temporary
+worktree that the agent removes afterwards. An ambiguous
 conflict is aborted and comes back as a question. It never pushes, rebases
 or forces, and skips worktrees with uncommitted work. It ends with a table
 of what happened to each.
@@ -397,12 +404,15 @@ hydra update              # --dry-run says what it would do
    to be ready. It stops at the first failure, so no service starts on
    migrations that didn't apply, and the next `hydra update` picks up from
    there.
-3. **Merges main into every worktree that is behind it**, after trying the
+3. **Merges main into every worktree that is behind it** (a stacked branch:
+   the branch it is stacked on, parents first), after trying the
    merge in memory. It fast-forwards a branch with no commits of its own,
    merges where the merge is clean, and leaves the rest alone, saying why:
    a conflict (with the files and the command), uncommitted work, a branch
    whose changes are all in main already. In a worktree whose stack is
-   running it then restarts what the merge touched there. It never resolves
+   running it then restarts what the merge touched there. A PR stack's
+   branch that no worktree has checked out is merged too, without a
+   checkout (see [Stacked branches](#stacked-branches)). It never resolves
    a conflict, rewrites a commit or pushes.
 
 ```
@@ -431,7 +441,8 @@ code, and `hydra update` restarts exactly those.
 `--main-only` leaves the worktrees alone, `--no-pull` skips the pull.
 `hydra update --here`, in a worktree, does only step 3, for that worktree:
 it merges main (or the branch it is stacked on) and restarts what the merge
-touched there. Main isn't pulled.
+touched there. Main isn't pulled. `hydra update --branch NAME` does the same
+for a stack branch with no checkout.
 `./examples/demo/update.sh` runs all of this on a throwaway repository.
 
 ### Stopping and cleaning up
@@ -529,6 +540,27 @@ branch it was created from (read from its reflog), if that branch is checked
 out in a worktree; else the deepest checked-out branch whose tip it contains.
 Branches that only share history (siblings) are not parents. `hydra plan`
 prints the stack it found and why each service runs where it does.
+
+A PR stack's branches don't all need a worktree:
+
+```
+main ← schema ← core ← web      only web checked out
+```
+
+web runs schema's and core's code, so it is only as current as they are.
+hydra finds them: from the stacks the `gh stack` extension keeps in
+`.git/gh-stack`, else from ancestry (the local branches web contains that
+main doesn't, when they form a strict chain; `backup/*` and merged branches
+never count). They show in `hydra status --all`, `hydra status --json`
+(`branches`), the dashboard and the `worktrees` tool, each measured against
+its parent; web is "on core". `hydra update` updates the chain parents
+first, main → schema → core → web: a clean merge into a branch with no
+worktree needs no checkout (`git merge-tree`, `git commit-tree`, then
+`git update-ref`, which refuses if the branch moved meanwhile), with git's
+message and your git identity. A conflict is left alone, with the files and
+the commands for a temporary worktree to resolve it in. For running
+services nothing changes: what core changed is in web's worktree, so it
+runs there.
 
 ### One copy for every worktree
 
@@ -760,12 +792,13 @@ the watcher starting and stopping services as files change in them.
 `./examples/demo/tls.sh` a TLS front, and `./examples/demo/dashboard.sh`
 drives the dashboard in tmux. `./examples/demo/mcp.sh` plays an agent's
 tool and talks MCP to `hydra mcp`: up, wait, status, logs, restart and down
-in a worktree, every action refused in main, and main and four worktrees
-(two stacked, one conflicting) brought up to date with `worktrees`,
-`update_main` and `update_worktree`.
+in a worktree, every action refused in main, and main and six worktrees
+(two stacked, one conflicting, two around a branch with no worktree)
+brought up to date with `worktrees`, `update_main` and `update_worktree`.
 `./examples/demo/update.sh` is the
 end-to-end test: `hydra status`, the checks before `hydra up`,
-`hydra update`, a second start, the order in which an edit's services
+`hydra update` (a PR stack with no worktree for its lower branches among
+them), a second start, the order in which an edit's services
 start, a removed worktree, a killed process-compose and
 `hydra down --worktrees`, checking what every step printed. Each demo builds hydra
 into its own throwaway directory, so none of them changes the `hydra` on

@@ -221,7 +221,9 @@ object (`cmd/hydra/snapshot.go`): main's processes and problems, and per
 worktree what it runs here and takes from main, its problems with their
 fixes, how far it is behind and ahead of main, the branches it is stacked
 on, and what `hydra update` would do to it (`git merge-tree` tries the
-merge). A problem whose fix is a hydra command carries it as `run`, the
+merge). `branches` lists the PR stack branches with no worktree (see
+[Stacks](#stacks)), each with its chain and what an update would do. A
+problem whose fix is a hydra command carries it as `run`, the
 command to run in that checkout; advice has none. `version` changes only
 when a field changes meaning or goes away.
 
@@ -243,7 +245,11 @@ own clock:
 - The slow parts due for worktrees that moved run first. After main moves,
   every worktree is due at once, and the one an agent just merged must not
   wait behind twenty that only need a look.
-- Which worktrees there are: every second (`git worktree list`).
+- Which worktrees there are: every second (`git worktree list`). The
+  stacks' branches with no checkout: every second, one `git for-each-ref`
+  of the branches; finding them again (gh-stack's file, one `git rev-list`)
+  only when a branch moved. Where each stands: when it, its parent or main
+  moves, and every 2 minutes.
 - Programs outside any stack holding a stack's ports (`strays`, with a
   problem each): every 15 seconds, one `lsof` and one `ps` for all
   checkouts together.
@@ -302,7 +308,16 @@ behind its upstream makes every branch behind; the header says that once
 instead of every row. Siblings are in order of name, not of state, so a
 row stays put when its stack starts. The snapshot gives each worktree's
 parent and how far behind it it is (`update.parent`, `update.behind`), so
-the dashboard draws the tree without asking git. The
+the dashboard draws the tree without asking git. A PR stack's branch that
+no worktree has checked out is a row too, in its place in the chain
+(`◇`, muted, `no checkout`), with the same staleness rules: in
+`main ← schema ← core ← web` with only web checked out and main merged
+straight into web, schema is "10 behind main" and core and web are
+"↑ schema is behind", which is the truth about what web runs. Such a row
+offers only `m`, which runs `hydra update --branch`. Branches of one stack
+often share a ticket id (`scrm-264-app-ring-…`), so where names are said
+together they are told apart by what follows the words they share
+(`schema`, `core`). The
 chosen checkout's detail is a panel that leads with its problems and their
 fixes; on a wide terminal the problems get their own panel under the list.
 Slots and ports are means, not news: the list doesn't show them. Every
@@ -496,10 +511,24 @@ no cron. Fetching is fine (it moves `origin/main` only).
    a worktree whose stack runs, the processes whose `paths` match the merged
    files are restarted there, in the same way as in main.
 
+   A PR stack's branch with no worktree takes its place in that order
+   (main → schema → core → web). Its merge needs no checkout: `git
+   merge-tree --write-tree` merges in memory (again, not from the
+   dashboard's cache, so the tree is in this repository's objects), `git
+   commit-tree` makes the commit with the branch first and the parent
+   second, git's message (`Merge branch 'main' into schema`) and the author
+   and committer from git config, and `git update-ref` moves the branch
+   with its old commit as a guard: if anyone moved it meanwhile, git
+   refuses and nothing changes. A branch that got checked out meanwhile is
+   left alone. Nothing restarts: nothing runs it. A conflict is left alone
+   with the files and the commands for a temporary worktree (`git worktree
+   add`, merge and commit there, `git worktree remove`).
+
 `--dry-run` prints all of this without doing it, `--main-only` skips step 3,
 `--no-pull` step 1. `--here`, in a worktree, is step 3 for that worktree
 alone: main isn't pulled and its stack is left alone, for when one branch
-needs main's latest without moving anyone else's. One update runs at a time per repository (a lock in the
+needs main's latest without moving anyone else's. `--branch NAME` is step 3
+for one stack branch with no checkout. One update runs at a time per repository (a lock in the
 shared `.git` directory). Conflicts, generated files and pushing stay with
 the person or agent who owns the branch.
 
@@ -532,10 +561,48 @@ checked out) are not parents: from ancestry alone a sibling looks the same as
 a parent that moved on. A branch made with `git checkout -b b2` while on b1
 records "Created from HEAD"; once b1 gets new commits, b2 needs `parent: b1`.
 
+### Branches with no checkout
+
+A PR stack is often checked out at its top only: `main ← schema ← core ←
+web`, one worktree for web. web runs schema's and core's code, so hydra
+only works if they are up to date with their parents too; they are part of
+the chain even though nothing runs them. Only branches under a worktree's
+branch count: a branch nobody runs needs nothing (`internal/stack`,
+`branches.go`).
+
+- **gh-stack first.** The `gh stack` extension keeps its stacks in
+  `.git/gh-stack` (JSON: each stack's trunk and its branches, bottom
+  first). A stack on the base branch that holds a worktree's branch says
+  what each branch sits on, up to the highest one checked out; members
+  that no longer exist locally or are merged into main are skipped. It
+  wins over ancestry: the developer said it.
+- **Then ancestry**, for a worktree's branch gh-stack doesn't know: the
+  local branches it contains that main doesn't, when they form a strict
+  chain (each contains the one under it). A branch merged in from
+  elsewhere, or two that don't contain each other, aren't a chain, and
+  nothing is inferred. A branch that only took merges since a commit the
+  worktree has (schema after main was merged into it) still counts as
+  under it, at that commit; a sibling with commits of its own (a prototype
+  cut from schema) doesn't. Only a chain with a branch that has no
+  checkout changes anything: worktrees alone are found as above.
+- **Never:** `backup/*`, the base branch, a branch at the same commit as
+  the worktree's, a branch main or its remote-tracking branch contains.
+- **Cost:** one `git for-each-ref` of the branches (and the base's
+  remote-tracking branches) per look. Finding the stacks again (reading
+  gh-stack's file, one `git rev-list --parents` of every commit on a branch
+  that main doesn't have, and the containment worked out in memory) only
+  when a branch moved, gh-stack's file changed or the worktrees did. Never
+  the network.
+
+A worktree's parent for updating is then, in order: its `parent:`; what the
+stacks say; what the worktrees say (above). Planning doesn't change: a
+branch with no worktree has no files of its own to run, and what it changed
+is in the worktree above it, so its changes count as that worktree's layer.
+
 Commands of its own: bare `hydra` (the dashboard), `hydra status` (is it
 all up and in step; `--json` for every checkout as data), `hydra update`
 (move main and bring everything along; `--here` merges main into one
-worktree only), `hydra plan` (what runs where, and why), `hydra render` (the
+worktree only, `--branch NAME` into one stack branch with no checkout), `hydra plan` (what runs where, and why), `hydra render` (the
 generated file), `hydra slots` (which worktree has which slot, and freeing
 one), `hydra throttle` (machine-wide turns for a build step), `hydra trust` (the CA behind TLS fronts) and `hydra version` (the
 commit it was built from, read from the build's VCS stamp).

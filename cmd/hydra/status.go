@@ -81,6 +81,11 @@ func statusCmd(args []string) error {
 	printWorktreeTable(ms, ws)
 
 	problems := stillStarting(worktreeProblems(ms, ws, true), waited)
+	more, err := chainProblems(ms, ws.target.checkout.Root)
+	if err != nil {
+		return err
+	}
+	problems = append(problems, more...)
 	want := map[int]portUse{}
 	worktreePorts(want, ws)
 	problems = append(problems, strayProblems(findStrays(want))...)
@@ -430,6 +435,9 @@ func statusAll(co gitx.Checkout, ms *mainState, waited time.Duration) error {
 	if ms.Up {
 		problems = append(problems, failing(ms, nil)...)
 	}
+	if err := printBareTable(ms, wts); err != nil {
+		return err
+	}
 	problems = stillStarting(append(problems, goneProblems(co)...), waited)
 	want := map[int]portUse{}
 	mainPorts(want, ms)
@@ -450,6 +458,85 @@ func statusAll(co gitx.Checkout, ms *mainState, waited time.Duration) error {
 		fmt.Println("\nok, with the notes above.")
 	}
 	return nil
+}
+
+// printBareTable lists the stack branches no worktree has checked out, and
+// how each stands against its parent. Like a worktree behind main, one
+// behind its parent is said here, not as a problem: `hydra status` in a
+// worktree stacked on it warns.
+func printBareTable(ms *mainState, wts []stack.Worktree) error {
+	main, base := ms.target.checkout.Root, ms.target.stack.Hydra.BaseRef
+	view, err := loadStacks(main, base, wts)
+	if err != nil {
+		return err
+	}
+	rows := bareRows(view, main, base, ms.Head, nil)
+	if len(rows) == 0 {
+		return nil
+	}
+	fmt.Println()
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NO CHECKOUT\tON\tVS ITS PARENT\tUNDER")
+	chains := view.chains()
+	for _, r := range rows {
+		vs := "in step"
+		switch {
+		case strings.HasPrefix(r.u.note, "CONFLICTS"):
+			vs = fmt.Sprintf("! %s behind, merging it conflicts", commits(strconv.Itoa(r.u.behind)))
+		case r.u.hand:
+			vs = "! " + r.u.note
+		case r.u.behind > 0:
+			vs = "! " + commits(strconv.Itoa(r.u.behind)) + " behind"
+		case strings.HasPrefix(r.u.note, "left alone: everything"):
+			vs = "landed: everything on it is in " + shortBranch(r.u.parent)
+		}
+		under := strings.Join(stackedOn(chains, r.name), ", ")
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", shortBranch(r.name), shortBranch(r.u.parent), vs, under)
+	}
+	w.Flush()
+	if hint := bareHint(rows); hint != "" {
+		fmt.Println(hint)
+	}
+	return nil
+}
+
+// bareHint says what to run for the branches with no checkout that are
+// behind, if any is.
+func bareHint(rows []bareRow) string {
+	for _, r := range rows {
+		if r.u.action != "" {
+			return "(`hydra update` merges them without a checkout, parents first; `hydra update --branch NAME`, one.)"
+		}
+	}
+	return ""
+}
+
+// chainProblems warns about the branches with no checkout in this
+// worktree's stack that are behind their parents: it runs their code.
+func chainProblems(ms *mainState, root string) ([]problem, error) {
+	main, base := ms.target.checkout.Root, ms.target.stack.Hydra.BaseRef
+	wts, err := stack.List(main)
+	if err != nil {
+		return nil, err
+	}
+	view, err := loadStacks(main, base, wts)
+	if err != nil {
+		return nil, err
+	}
+	if len(view.st.Bare) == 0 {
+		return nil, nil
+	}
+	_, chain, err := view.place(root, base)
+	if err != nil || len(chain) < 2 {
+		return nil, nil
+	}
+	var problems []problem
+	for _, r := range bareRows(view, main, base, ms.Head, chain[:len(chain)-1]) {
+		if p := r.problem([]string{"this worktree"}); p != nil {
+			problems = append(problems, *p)
+		}
+	}
+	return problems, nil
 }
 
 // goneProblems names the worktrees that were removed with their stack still

@@ -63,7 +63,7 @@ func TestFarBehind(t *testing.T) {
 	}
 	// The answer for a pair of commits is kept: a later look doesn't merge again.
 	mergeTrees.Lock()
-	mergeTrees.m[clean+" "+mainHead] = []string{"cached.go"}
+	mergeTrees.m[clean+" "+mainHead] = merged{files: []string{"cached.go"}}
 	mergeTrees.Unlock()
 	if f := farBehindOf(dir, clean, mainHead, 3, 100); f == nil || f.Conflicts[0] != "cached.go" {
 		t.Errorf("not from the cache: %+v", f)

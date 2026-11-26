@@ -163,7 +163,7 @@ $ git ls-files --others --exclude-standard
   <div class="measure">
     <p style="margin-top:18px">Services that point at it are restarted with the new address. Further edits to a service that already runs here are left to its own reload, like <code>next dev</code> or <code>air</code>.</p>
     <p>It asks git rather than watching files because only git knows whether a file still differs from <code>main</code>: a revert has to stop the service, and a write to <code>node_modules</code> must not start one. It reads without taking git's index lock, so it never gets in the way of an agent's commit.</p>
-    <p>Stacked branches work too: each branch is compared with its parent, and each service runs from the worktree of the branch that changed it. <a href="docs/#stacks">How a stack is found</a>.</p>
+    <p>Stacked branches work too: each branch is compared with its parent, and each service runs from the worktree of the branch that changed it. A PR stack checked out at its top only still counts its lower branches: they are shown, and updated with their parents, without a checkout. <a href="docs/#stacks">How a stack is found</a>.</p>
     <p>A worktree that is removed takes its stack with it. The watcher notices, stops everything that ran there and deletes what git couldn't, and the ports go to the next worktree only after that. <a href="docs/#cleanup">Stopping and cleaning up</a>.</p>
   </div>
 </section>
@@ -254,7 +254,7 @@ you open  localhost:3400         slot 2's port for web. hydra's router answers,
 <section id="dashboard">
   <div class="measure">
     <h2>All of it on one screen</h2>
-    <p>Every command so far acts on one checkout. With a few agents at work you want to see all of them at once, so type <code>hydra</code> on its own. It opens a dashboard of main and every worktree, named by branch, as a tree of branches with each stacked one under its parent: whether its stack is up, how it stands against its parent (a branch on one that is behind is out of date too, and the row where it starts stands out), and for the one you pick, in a panel below, what is wrong and the fix, what it runs and what it takes from main.</p>
+    <p>Every command so far acts on one checkout. With a few agents at work you want to see all of them at once, so type <code>hydra</code> on its own. It opens a dashboard of main and every worktree, named by branch, as a tree of branches with each stacked one under its parent (a PR stack's branches with no worktree included): whether its stack is up, how it stands against its parent (a branch on one that is behind is out of date too, and the row where it starts stands out), and for the one you pick, in a panel below, what is wrong and the fix, what it runs and what it takes from main.</p>
   </div>
   <div class="code term measure" style="margin-top:16px">
     <div class="file">hydra, in examples/demo/dashboard.sh, 80 columns</div>

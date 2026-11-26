@@ -7,7 +7,10 @@
 #     notices that main's stack still runs the old code.
 #  3. `hydra update` runs the jobs again, restarts what the pull touched, in
 #     order, and merges main into every worktree it can. It leaves alone the
-#     ones with a conflict or uncommitted work, and says so.
+#     ones with a conflict or uncommitted work, and says so. A PR stack
+#     whose lower branches have no worktree (ring-schema <- ring-core <-
+#     ring-web, only ring-web checked out) is updated parents first, the
+#     branches with no checkout merged without one.
 #  4. A worktree cut from origin's newer main refuses to start on main's
 #     older stack, and says what to run.
 #  5. A migration that fails stops the update before the API restarts.
@@ -154,6 +157,12 @@ g worktree add -q -b landed "$repo/landed" main
 (cd "$repo/landed" && put docs/notes.md && g add -A && g commit -qm "docs: notes")
 g worktree add -q -b solo "$repo/solo" main
 (cd "$repo/solo" && put apps/web/solo.tsx && g add -A && g commit -qm "web: solo")
+# A PR stack with only its top branch checked out.
+g branch ring-schema main
+g worktree add -q ringtmp ring-schema && (cd ringtmp && put db/ring.sql && g add -A && g commit -qm "ring: schema" && g checkout -q -b ring-core && put apps/api/ring.go && g add -A && g commit -qm "ring: core")
+g worktree remove ringtmp
+g worktree add -q -b ring-web "$repo/ringweb" ring-core
+(cd "$repo/ringweb" && put apps/web/ring.tsx && g add -A && g commit -qm "ring: web")
 
 echo
 echo "--- 2. teammates push; someone pulls main by hand"
@@ -166,6 +175,29 @@ run "$H" status --all; echo "$out" | show
 refuse "$out" "main's files moved from .* without .hydra update."
 expect "$out" 'api: apps/api/users.go'
 expect "$out" 'migrate: db/migrations/002.sql'
+expect "$out" 'NO CHECKOUT +ON +VS ITS PARENT +UNDER'
+expect "$out" 'ring-core +ring-schema +in step +ring-web'
+expect "$out" 'ring-schema +main +! 4 commits behind +ring-web'
+expect "$out" 'hydra update. merges them without a checkout, parents first'
+run sh -c "cd '$repo/ringweb' && '$H' status"
+expect "$out" '! ring-schema has no checkout and is 4 commits behind main: this worktree, stacked on it, runs without them.'
+expect "$out" 'fix: hydra update --branch ring-schema'
+page="$("$H" status --json | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+for b in d["branches"]:
+    print("branch", b["branch"], "on", b["update"]["parent"], "behind it", b["update"].get("behind", 0), "| stack", " ".join(b["stack"]), "|", b["source"])
+w = {w["branch"]: w for w in d["worktrees"]}["ring-web"]
+print("worktree ring-web on", w["update"]["parent"], "| stack", " ".join(w["stack"]))
+')"
+echo "hydra status --json says:"; echo "$page" | sed 's/^/  /'
+expect "$page" 'branch ring-core on ring-schema behind it 0 \| stack ring-schema ring-core \| ancestry'
+expect "$page" 'branch ring-schema on main behind it 4 \| stack ring-schema \| ancestry'
+expect "$page" 'worktree ring-web on ring-core \| stack ring-schema ring-core ring-web'
+run "$H" update --branch ring-web
+refuse "$out" 'ring-web is checked out in .*/ringweb: run .hydra update --here. there'
+run "$H" update --branch ring-schema --dry-run; echo "$out" | show
+expect "$out" '\(no checkout\) +ring-schema +main would be merged in \(4 commits\), without a checkout'
 echo
 echo "one worktree on its own: hydra update --here merges main into it, and moves nothing else"
 cd "$repo/conflict"
@@ -196,6 +228,15 @@ expect "$out" 'conflict: apps/api/users.go'
 expect "$out" 'resolve:  git -C .*/conflict merge main'
 expect "$out" 'dirty +dirty +left alone, 4 commits behind main: 1 file with uncommitted changes'
 expect "$out" 'landed +landed +left alone: everything on it is already in main'
+# The stack, parents first: the branches with no checkout without one.
+expect "$out" '\(no checkout\) +ring-schema +main merged in \(4 commits\), without a checkout → [0-9a-f]{9}'
+expect "$out" '\(no checkout\) +ring-core +ring-schema merged in \([0-9]+ commits\), without a checkout'
+expect "$out" 'ringweb +ring-web +ring-core merged in'
+order="$(echo "$out" | grep -oE '^  (\(no checkout\)|ringweb) +ring-[a-z]+' | grep -oE 'ring-[a-z]+$' | tr '\n' ' ')"
+[ "$order" = "ring-schema ring-core ring-web " ] || fail "the stack was updated in the order: $order"
+[ "$(g log -1 --format=%s ring-schema)" = "Merge branch 'main' into ring-schema" ] || fail "ring-schema's merge: $(g log -1 --format=%s ring-schema)"
+g merge-base --is-ancestor main ring-schema && g merge-base --is-ancestor ring-schema ring-core && g merge-base --is-ancestor ring-core ring-web || fail "the stack isn't one chain on main after the update"
+[ -z "$(g status --porcelain --untracked-files=no)" ] || fail "main's checkout changed"
 expect "$(cat "$main/.process-compose/logs"/* 2>/dev/null; "$H" process logs migrate -p "$pc_port" 2>/dev/null | tail -3)" 'applied +2 migrations'
 [ "$(g -C "$repo/dirty" status --porcelain | wc -l | tr -d ' ')" = 1 ] || fail "the dirty worktree was touched"
 echo

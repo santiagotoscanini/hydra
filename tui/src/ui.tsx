@@ -12,13 +12,13 @@ import {
 	mainServices,
 	pad,
 	progress,
-	shortBranch,
 	stateOf,
 	tildePath,
 	wrap,
 	badgeOf,
 	chainText,
 	firstToUpdate,
+	labelBeside,
 	type Entry,
 	type Node,
 	type Staleness,
@@ -180,29 +180,36 @@ export function ListRow({
 	selected,
 	width,
 	busy,
+	short,
 }: {
 	node: Node;
 	selected: boolean;
 	width: number;
 	busy?: string;
+	/** What tells it apart from branches with the same ticket ("schema"),
+	 *  shown after the ticket when the whole title doesn't fit. */
+	short?: string;
 }) {
 	const { selectionBg } = useContext(ThemeContext);
 	const e = node.e;
 	const st = stateOf(e, busy);
 	const badge = badgeOf(node);
-	const n = displayName(e);
+	const full = displayName(e);
 	const cols = rowColumns(width, len(node.lead));
+	const n = full.id && short && len(full.id) + 1 + len(full.title) > cols.name ? { id: full.id, title: short } : full;
 	const bg = selected ? selectionBg : undefined;
 	// On the selection's background the words are the terminal's own text
 	// colour, which reads on it in any palette; the glyph keeps the state's
 	// colour. Without a background (the theme isn't known) the name is cyan.
 	const on = (c?: string) => (bg ? undefined : wordColor(c));
+	// A branch with no checkout is drawn muted: nothing runs there.
+	const muted = e.kind === "branch" && !bg;
 	const name: Seg[] = n.id
 		? [
-				{ text: n.id, bold: true, color: selected && !bg ? "cyan" : undefined },
-				{ text: " " + n.title, bold: selected },
+				{ text: n.id, bold: !muted, dim: muted, color: selected && !bg ? "cyan" : undefined },
+				{ text: " " + n.title, bold: selected, dim: muted },
 			]
-		: [{ text: n.title, bold: true, color: selected ? on("cyan") : e.kind === "main" ? "magenta" : undefined }];
+		: [{ text: n.title, bold: !muted, dim: muted, color: selected ? on("cyan") : e.kind === "main" ? "magenta" : undefined }];
 	const nameFit = fit(name, cols.name);
 	const nameLen = nameFit.reduce((k, s) => k + len(s.text), 0);
 	// The badge right-aligned: the longest way of saying it that fits.
@@ -277,7 +284,8 @@ export function detailRows(
 	if (e.idleStopped && !e.up) stateSegs.push({ text: `nobody used it for ${e.idleStopped}, so hydra stopped it: u starts it`, color: "blue" });
 	else if (e.kind === "main" && !e.up && !e.pending && !opts.busy) stateSegs.push({ text: "not running: the worktrees that use main's services need it", color: "red" });
 	if (stateSegs.length) add(...stateSegs);
-	add({ text: `${e.branch} · ${tildePath(e.root, opts.home)}` }, { text: e.memory ? ` · ${bytes(e.memory)}` : "" });
+	if (e.kind === "branch") add({ text: `${e.branch} · ` }, { text: "no checkout", dim: true });
+	else add({ text: `${e.branch} · ${tildePath(e.root, opts.home)}` }, { text: e.memory ? ` · ${bytes(e.memory)}` : "" });
 	if (e.commit) add({ text: e.commit + " ", bold: true }, { text: e.subject });
 	if (e.error) {
 		blank();
@@ -291,7 +299,7 @@ export function detailRows(
 	}
 
 	// What is wrong comes first: it is what to act on.
-	if (opts.problems) {
+	if (opts.problems && e.kind !== "branch") {
 		blank();
 		if (e.problems.length) add(...section("!", e.problems.length === 1 ? "1 problem" : `${e.problems.length} problems`, problemsTitle(e).color));
 		out.push(...problemRows(e, width));
@@ -314,7 +322,7 @@ export function detailRows(
 		const node = opts.node;
 		const s = node?.stale;
 		const color = conflicts ? "red" : s?.kind === "behind" || e.farBehind || e.outOfStep.length ? "yellow" : s?.kind === "inherits" ? "yellow" : "cyan";
-		const parent = e.parent && e.stack.length > 1 ? shortBranch(e.parent) : undefined;
+		const parent = e.parent && e.stack.length > 1 ? labelBeside(e.parent, e.branch) : undefined;
 		if (!parent) add(...section("⇅", "vs main", color, [{ text: "  " + vsMainText }]));
 		else {
 			const own = s?.kind === "behind" ? [s.behind ? `${s.behind} behind` : "", s.conflicts ? `${s.conflicts} conflict${s.conflicts === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ") : "in step";
@@ -326,8 +334,8 @@ export function detailRows(
 		// Which branch to bring up to date first: the top of the stale part.
 		const first = node && firstToUpdate(node);
 		if (first && first !== e) {
-			const name = shortBranch(first.branch);
-			for (const l of wrap(`${name} is behind ${first.parent ? shortBranch(first.parent) : "main"}: update it first (select it, m), or U updates every branch, parents first`, width - 2))
+			const name = labelBeside(first.branch, e.branch);
+			for (const l of wrap(`${name} is behind ${first.parent ? labelBeside(first.parent, first.branch) : "main"}: update it first (select it, m), or U updates every branch, parents first`, width - 2))
 				add({ text: "  " + l, color: "yellow" });
 		}
 		const u = e.update;
@@ -345,6 +353,13 @@ export function detailRows(
 		if (e.outOfStep.length && !files.length) {
 			add({ text: e.mainBehind ? `  main is older than this branch in: ${e.outOfStep.join(", ")}` : `  main changed what this uses from it: ${e.outOfStep.join(", ")}`, color: "yellow" });
 		}
+	}
+
+	if (e.kind === "branch") {
+		blank();
+		for (const l of wrap("No worktree has it checked out, so nothing runs it; the branches stacked on it run its code. m merges its parent into it without a checkout (hydra update --branch).", width, ""))
+			add({ text: l, dim: true });
+		return out;
 	}
 
 	// Services.
@@ -411,7 +426,10 @@ export function problemRows(e: Entry, width: number): Seg[][] {
 	const add = (...segs: Seg[]) => out.push(segs);
 	if (e.problems.length === 0) {
 		if (!e.pending && !e.error)
-			add({ text: "✓ ", color: "green", bold: true }, { text: e.up || e.kind === "main" ? "nothing wrong" : "nothing in the way: u starts it", color: "green" });
+			add(
+				{ text: "✓ ", color: "green", bold: true },
+				{ text: e.up || e.kind === "main" ? "nothing wrong" : e.kind === "branch" ? "nothing runs it: no checkout" : "nothing in the way: u starts it", color: "green" },
+			);
 		return out;
 	}
 	e.problems.forEach((p, i) => {
@@ -513,6 +531,7 @@ export const KEYS: Array<[string, string]> = [
 	["o", "open a service's address by name in the browser (x-hydra hosts)"],
 	["f", "run the fix of one of its problems (asks first)"],
 	["m", "merge its parent (main, or the branch it is stacked on) into it: hydra update --here (asks first)"],
+	["", "  on a branch with no checkout (◇): hydra update --branch NAME"],
 	["U", "update all: hydra update, which pulls main (dry run, then asks)"],
 	["R", "read everything again now"],
 	["pgup pgdn", "scroll the detail"],
@@ -520,6 +539,7 @@ export const KEYS: Array<[string, string]> = [
 	["q", "quit; every stack keeps running"],
 	["● ○ ◌", "up · down · stopped by hydra, unused for x-hydra idle_stop"],
 	["⠋ ✗", "starting (ready/total) or another action under way · failing"],
+	["◇", "a stack's branch with no checkout: nothing runs it, only m applies"],
 	["├─ └─", "a branch under the one it is stacked on; main is the root"],
 	["in step", "has every commit of its parent, and so does every branch above it"],
 	["12 behind", "commits its parent has that it doesn't; bold: the chain goes stale here"],
@@ -541,6 +561,11 @@ export function HelpBody({ width, height }: { width: number; height: number }) {
 
 export function footerKeys(e: Entry | undefined): Array<[string, string]> {
 	const keys: Array<[string, string]> = [];
+	if (e?.kind === "branch") {
+		// Nothing to start, stop or look at: only its merge.
+		if (!e.pending && (e.behindParent > 0 || e.update?.action)) keys.push(["m", `merge ${e.parent ? labelBeside(e.parent, e.branch) : "main"}`]);
+		return keys;
+	}
 	if (e && !e.pending && !e.error) {
 		if (e.up) keys.push(["⏎", "open"], ["d", "down"], ["r", "restart"]);
 		else keys.push(["u", "up"]);
@@ -548,7 +573,7 @@ export function footerKeys(e: Entry | undefined): Array<[string, string]> {
 		if (e.services.some((s) => s.address)) keys.push(["o", "browse"]);
 		if (e.problems.some((p) => p.run)) keys.push(["f", "fix"]);
 		if (e.kind === "worktree" && (e.behindParent > 0 || e.update?.action))
-			keys.push(["m", `merge ${e.parent && e.stack.length > 1 ? shortBranch(e.parent) : "main"}`]);
+			keys.push(["m", `merge ${e.parent && e.stack.length > 1 ? labelBeside(e.parent, e.branch) : "main"}`]);
 	}
 	return keys;
 }

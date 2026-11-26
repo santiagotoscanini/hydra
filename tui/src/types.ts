@@ -85,6 +85,24 @@ export interface WorktreeState {
 	error?: string;
 }
 
+/** A branch of a PR stack that a worktree sits on but no worktree has
+ *  checked out: hydra runs that worktree on its code. */
+export interface Branch {
+	branch: string;
+	commit: string;
+	subject: string;
+	/** Commits main's checkout has that it doesn't. */
+	behind: number;
+	ahead: number;
+	/** The chain, bottom first, its own last. */
+	stack: string[];
+	/** How hydra knows it is a stack branch. */
+	source: "gh-stack" | "ancestry";
+	update?: Update;
+	pending?: boolean;
+	gitAt: string;
+}
+
 export interface Snapshot {
 	version: number;
 	repo: string;
@@ -93,5 +111,7 @@ export interface Snapshot {
 	at: string;
 	main?: MainState;
 	worktrees: WorktreeState[];
+	/** Stack branches with no checkout (absent from older hydras). */
+	branches?: Branch[];
 	error?: string;
 }

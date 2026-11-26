@@ -26,12 +26,15 @@ import (
 // another worktree), so they behave exactly as the commands do. The
 // update_all prompt is the workflow that ties them together.
 
-// wtEntry is one worktree, as the worktrees tool lists it.
+// wtEntry is one worktree, as the worktrees tool lists it, or a branch of
+// a stack that no worktree has checked out (Checkout false: no path, its
+// branch as its name, nothing runs it).
 type wtEntry struct {
-	Order  int    `json:"order"` // 1 is main; the worktrees follow, parents first
-	Name   string `json:"name"`  // the folder's name
-	Path   string `json:"path"`
-	Branch string `json:"branch"` // "" when detached
+	Order    int    `json:"order"`  // 1 is main; the worktrees follow, parents first
+	Name     string `json:"name"`   // the folder's name; the branch, with no checkout
+	Path     string `json:"path"`   // "" with no checkout
+	Branch   string `json:"branch"` // "" when detached
+	Checkout bool   `json:"checkout"`
 	// Parent is what an update merges in: main's branch, or the branch it
 	// is stacked on.
 	Parent string `json:"parent"`
@@ -49,7 +52,7 @@ type wtEntry struct {
 	// "nothing" (up to date).
 	Next  string `json:"next"`
 	Note  string `json:"note"`  // hydra update's line for it
-	Stack string `json:"stack"` // "up", "down" or "idle-stopped"
+	Stack string `json:"stack"` // "up", "down", "idle-stopped", or "none" with no checkout
 	Slot  int    `json:"slot"`  // 0: it never ran
 }
 
@@ -100,11 +103,18 @@ func listWorktrees(co gitx.Checkout) (*worktreesResult, error) {
 	for _, e := range mustList(co.CommonDir) {
 		slotOf[e.Root] = e.Slot
 	}
+	view, err := loadStacks(mainRoot, base, wts)
+	if err != nil {
+		return nil, err
+	}
 	var entries []*wtEntry
 	for _, wt := range wts {
 		if wt.Root != mainRoot {
-			entries = append(entries, &wtEntry{Name: filepath.Base(wt.Root), Path: wt.Root, Branch: wt.Branch, Slot: slotOf[wt.Root], Conflicts: []string{}})
+			entries = append(entries, &wtEntry{Name: filepath.Base(wt.Root), Path: wt.Root, Branch: wt.Branch, Checkout: true, Slot: slotOf[wt.Root], Conflicts: []string{}})
 		}
+	}
+	for _, b := range view.st.Bare {
+		entries = append(entries, &wtEntry{Name: b.Name, Branch: b.Name, Conflicts: []string{}})
 	}
 	// Each takes a few git commands, and a merge-tree when it is behind.
 	var wg sync.WaitGroup
@@ -115,7 +125,7 @@ func listWorktrees(co gitx.Checkout) (*worktreesResult, error) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			e.inspect(mainRoot, base, ms.Head)
+			e.inspect(mainRoot, base, ms.Head, view)
 		}(e)
 	}
 	wg.Wait()
@@ -125,11 +135,16 @@ func listWorktrees(co gitx.Checkout) (*worktreesResult, error) {
 
 // inspect works out where the worktree stands against its parent, the way
 // hydra update does, and every file merging the parent in conflicts in.
-func (e *wtEntry) inspect(mainRoot, base, mainHead string) {
-	u := &wtUpdate{root: e.Path, name: e.Branch}
-	u.inspect(nil, base)
+func (e *wtEntry) inspect(mainRoot, base, mainHead string, view *stackView) {
+	u := &wtUpdate{root: e.Path, name: e.Branch, main: mainRoot}
+	u.inspect(base, view)
 	u.decide(mainRoot, base, mainHead, true)
 	e.Parent, e.Depth, e.Note = u.parent, u.depth, u.note
+	if !e.Checkout {
+		e.Stack = "none"
+		e.inspectBare(u)
+		return
+	}
 	switch {
 	case pc.Unix(socketFor(e.Path)).Alive():
 		e.Stack = "up"
@@ -173,15 +188,38 @@ func (e *wtEntry) inspect(mainRoot, base, mainHead string) {
 			}
 		}
 	}
+	e.Next = nextOf(u)
+}
+
+// inspectBare is the rest of inspect for a branch with no checkout: how far
+// it is from its parent, and what merging it conflicts in.
+func (e *wtEntry) inspectBare(u *wtUpdate) {
+	if u.ours != "" && u.theirs != "" {
+		if out, err := gitOut(u.main, "rev-list", "--left-right", "--count", u.theirs+"..."+u.ours); err == nil {
+			if f := strings.Fields(out); len(f) == 2 {
+				e.Behind, _ = strconv.Atoi(f[0])
+				e.Ahead, _ = strconv.Atoi(f[1])
+			}
+		}
+		if e.Behind > 0 && !gitx.IsAncestor(u.main, u.ours, u.theirs) {
+			if _, files, err := mergeTreeCached(u.main, u.ours, u.theirs); err == nil {
+				e.Conflicts = files
+			}
+		}
+	}
+	e.Next = nextOf(u)
+}
+
+func nextOf(u *wtUpdate) string {
 	switch {
 	case u.action != "":
-		e.Next = "merge"
+		return "merge"
 	case strings.HasPrefix(u.note, "CONFLICTS"):
-		e.Next = "resolve"
+		return "resolve"
 	case u.hand:
-		e.Next = "skip"
+		return "skip"
 	default:
-		e.Next = "nothing"
+		return "nothing"
 	}
 }
 
@@ -281,7 +319,9 @@ func orDetached(branch string) string {
 // its stack.
 func (w *wtEntry) facts() []string {
 	var f []string
-	if w.Branch == "" {
+	if !w.Checkout {
+		f = append(f, "no checkout")
+	} else if w.Branch == "" {
 		f = append(f, "detached")
 	} else if w.Branch != w.Name {
 		f = append(f, "branch "+w.Branch)
@@ -310,6 +350,9 @@ func (w *wtEntry) facts() []string {
 	}
 	if w.Next == "skip" && len(w.Conflicts) > 0 {
 		f = append(f, fmt.Sprintf("and merging it conflicts in %d file%s: %s", len(w.Conflicts), plural(len(w.Conflicts)), someFiles(w.Conflicts)))
+	}
+	if !w.Checkout {
+		return f // nothing runs it
 	}
 	stack := "stack " + w.Stack
 	if w.Slot > 0 {
@@ -347,6 +390,9 @@ func mcpUpdateWorktree(_ context.Context, c *mcpCall) (toolResult, error) {
 	}
 	root, err := findWorktree(c.co, a.Worktree)
 	if err != nil {
+		if b := findBare(c.co, a.Worktree); b != "" {
+			return updateBareTool(c, b, a.DryRun)
+		}
 		return toolResult{}, err
 	}
 	if a.Since != "" && !gitx.IsAncestor(root, a.Since, "HEAD") {
@@ -385,6 +431,52 @@ func mcpUpdateWorktree(_ context.Context, c *mcpCall) (toolResult, error) {
 					"Resolve them with git in that worktree: cd %s && git merge %s; fix each file, run the checks, commit the merge (git's message). "+
 					"Then call update_worktree again, with since: the commit it was at before (git rev-parse HEAD before merging): it restarts what the merge touched.",
 					runErr, w.Parent, len(w.Conflicts), plural(len(w.Conflicts)), strings.Join(w.Conflicts, "\n  "), shQuote(root), w.Parent)
+			}
+		}
+	}
+	return toolResult{}, runErr
+}
+
+// findBare names the stack branch with no checkout that name is, or "".
+func findBare(co gitx.Checkout, name string) string {
+	ms, err := loadMain(co)
+	if err != nil {
+		return ""
+	}
+	wts, err := stack.List(co.Main)
+	if err != nil {
+		return ""
+	}
+	view, err := loadStacks(co.Main, ms.target.stack.Hydra.BaseRef, wts)
+	if err != nil || !view.st.IsBare(name) {
+		return ""
+	}
+	return name
+}
+
+// updateBareTool is update_worktree for a branch with no checkout: hydra
+// update --branch, which merges without one. A conflict needs one: the
+// error says how to make a temporary worktree for it.
+func updateBareTool(c *mcpCall, branch string, dry bool) (toolResult, error) {
+	args := []string{"update", "--branch", branch}
+	if dry {
+		args = append(args, "--dry-run")
+	}
+	out, runErr := c.hydraIn(c.co.Main, args...)
+	data := map[string]any{"worktree": branch, "branch": branch, "checkout": false, "output": out, "dryRun": dry}
+	if runErr == nil {
+		return toolResult{summary: out, data: data}, nil
+	}
+	os.Setenv("GIT_OPTIONAL_LOCKS", "0")
+	if r, err := listWorktrees(c.co); err == nil {
+		for _, w := range r.Worktrees {
+			if !w.Checkout && w.Branch == branch && w.Next == "resolve" {
+				tmp := filepath.Join(os.TempDir(), "hydra-merge-"+branchSlug(branch))
+				return toolResult{}, fmt.Errorf("%w\n\nThe branch was left as it was. It has no checkout, and merging %s conflicts in %d file%s:\n  %s\n"+
+					"Resolve them in a temporary worktree: git -C %s worktree add %s %s; cd %s && git merge %s; fix each file, run the checks, commit the merge (git's message). "+
+					"Then remove it: git -C %s worktree remove %s. Then call worktrees again: the branches stacked on it come next.",
+					runErr, w.Parent, len(w.Conflicts), plural(len(w.Conflicts)), strings.Join(w.Conflicts, "\n  "),
+					shQuote(c.co.Main), shQuote(tmp), shQuote(branch), shQuote(tmp), shQuote(w.Parent), shQuote(c.co.Main), shQuote(tmp))
 			}
 		}
 	}

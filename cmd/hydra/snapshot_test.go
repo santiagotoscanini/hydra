@@ -156,7 +156,7 @@ func TestTheSnapshotSaysHowFarBehindItsParentAWorktreeIs(t *testing.T) {
 	}
 	want := map[string]string{"a": "main 1", "b": "a 1", "c": "b 0", "d": "main 1"}
 	for name, w := range want {
-		g := gitState(stack.Worktree{Root: wt(name), Branch: name}, main, "main", mainHead, 0)
+		g := gitState(stack.Worktree{Root: wt(name), Branch: name}, main, "main", mainHead, 0, nil)
 		if got := fmt.Sprintf("%s %d", g.update.Parent, g.update.Behind); got != w {
 			t.Errorf("%s: parent and behind = %q, want %q (%s)", name, got, w, g.update.Note)
 		}

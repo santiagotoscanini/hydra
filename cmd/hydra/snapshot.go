@@ -184,7 +184,39 @@ type snapshot struct {
 	At        time.Time      `json:"at"`
 	Main      *snapMain      `json:"main,omitempty"`
 	Worktrees []snapWorktree `json:"worktrees"`
-	Error     string         `json:"error,omitempty"`
+	// Branches: the branches of PR stacks that a worktree sits on but no
+	// worktree has checked out, by name.
+	Branches []snapBranch `json:"branches,omitempty"`
+	Error    string       `json:"error,omitempty"`
+}
+
+// snapBranch is a branch of a PR stack that no worktree has checked out,
+// under a worktree's branch: hydra runs that worktree on its code, so it is
+// measured against its parent and updated with the worktrees.
+type snapBranch struct {
+	Branch  string      `json:"branch"`
+	Commit  string      `json:"commit"`
+	Subject string      `json:"subject"`
+	Behind  int         `json:"behind"` // commits main's checkout has that it doesn't
+	Ahead   int         `json:"ahead"`
+	Stack   []string    `json:"stack"`  // the chain, bottom first, its own last
+	Source  string      `json:"source"` // how hydra knows: "gh-stack" or "ancestry"
+	Update  *snapUpdate `json:"update,omitempty"`
+	Pending bool        `json:"pending,omitempty"` // not worked out yet
+	GitAt   time.Time   `json:"gitAt"`
+}
+
+func snapBranchOf(b stack.Bare, g *wtGit) snapBranch {
+	out := snapBranch{Branch: b.Name, Source: b.Source, Stack: []string{b.Name}}
+	if g == nil {
+		out.Pending = true
+		return out
+	}
+	out.Commit, out.Subject, out.Behind, out.Ahead, out.Update, out.GitAt = g.commit, g.subject, g.behind, g.ahead, g.update, g.at
+	if len(g.stack) > 0 {
+		out.Stack = g.stack
+	}
+	return out
 }
 
 // snapshotter keeps what the slow parts found between snapshots.
@@ -201,11 +233,16 @@ type snapshotter struct {
 	wts      []stack.Worktree // as git lists them, the main checkout left out
 	plans    map[string]*wtPlan
 	gits     map[string]*wtGit
-	busy     map[string]bool   // a slow refresh of this worktree is under way
-	gitDirs  map[string]string // by worktree root: its git directory, read once
-	changed  chan struct{}     // a slow refresh finished
-	mem      func(pid int) int64
-	memAt    time.Time
+	// The stack branches no worktree has checked out (bare.go), and where
+	// each stands, by branch.
+	view    *stackView
+	viewErr error
+	bares   map[string]*wtGit
+	busy    map[string]bool   // a slow refresh of this worktree (or "bare:" branch) is under way
+	gitDirs map[string]string // by worktree root: its git directory, read once
+	changed chan struct{}     // a slow refresh finished
+	mem     func(pid int) int64
+	memAt   time.Time
 	// What holds the stacks' ports without being part of one, by checkout,
 	// looked for every strayAge in the background (at once when once).
 	strays     map[string][]stray
@@ -308,7 +345,7 @@ func newSnapshotter(here gitx.Checkout) (*snapshotter, error) {
 	}
 	return &snapshotter{
 		here: here, main: mainCo,
-		plans: map[string]*wtPlan{}, gits: map[string]*wtGit{}, busy: map[string]bool{}, gitDirs: map[string]string{},
+		plans: map[string]*wtPlan{}, gits: map[string]*wtGit{}, bares: map[string]*wtGit{}, busy: map[string]bool{}, gitDirs: map[string]string{},
 		changed: make(chan struct{}, 1),
 	}, nil
 }
@@ -411,13 +448,36 @@ func (s *snapshotter) refresh(wait, force bool, only string) {
 	}
 	s.refreshMain(force && only == "", mainHead)
 
+	// The stacks' branches without a checkout: one git command while no
+	// branch moved (stack.FindStacks caches the rest).
+	var view *stackView
+	var viewErr error
+	s.mu.Lock()
+	stackBase := ""
+	if s.ms != nil {
+		stackBase = s.ms.target.stack.Hydra.BaseRef
+	}
+	s.mu.Unlock()
+	if stackBase != "" {
+		if view, viewErr = loadStacks(s.main.Root, stackBase, wts); view != nil {
+			for b, h := range view.st.Heads {
+				if _, ok := heads[b]; !ok {
+					heads[b] = h
+				}
+			}
+		}
+	}
+
 	s.mu.Lock()
 	s.wts = mine
+	s.view, s.viewErr = view, viewErr
 	live := map[string]bool{}
 	type job struct {
 		wt                stack.Worktree
 		plan, git, urgent bool
 		mark              indexMark
+		bare              *stack.Bare // a branch with no checkout, instead of wt
+		parentHead        string
 	}
 	var jobs []job
 	now := time.Now()
@@ -451,6 +511,27 @@ func (s *snapshotter) refresh(wait, force bool, only string) {
 			jobs = append(jobs, j)
 		}
 	}
+	if view != nil {
+		liveBare := map[string]bool{}
+		for _, b := range view.st.Bare {
+			liveBare[b.Name] = true
+			if s.busy["bare:"+b.Name] {
+				continue
+			}
+			g := s.bares[b.Name]
+			parentHead := heads[view.bareParent(b.Name)]
+			moved := g == nil || g.head != b.Head || g.parentHead != parentHead
+			if moved || force && only == "" || g.mainHead != mainHead || now.Sub(g.at) > gitAge {
+				s.busy["bare:"+b.Name] = true
+				jobs = append(jobs, job{bare: &b, parentHead: parentHead, urgent: g != nil && moved})
+			}
+		}
+		for name := range s.bares {
+			if !liveBare[name] {
+				delete(s.bares, name)
+			}
+		}
+	}
 	for root := range s.plans {
 		if !live[root] {
 			delete(s.plans, root) // the worktree was removed
@@ -477,13 +558,31 @@ func (s *snapshotter) refresh(wait, force bool, only string) {
 	run := func(j job) {
 		defer wg.Done()
 		defer func() { <-sem }()
+		if j.bare != nil {
+			var g *wtGit
+			if base != "" {
+				g = bareState(*j.bare, view, mainRoot, base, mainHead)
+				g.parentHead = j.parentHead
+			}
+			s.mu.Lock()
+			if g != nil {
+				s.bares[j.bare.Name] = g
+			}
+			delete(s.busy, "bare:"+j.bare.Name)
+			s.mu.Unlock()
+			select {
+			case s.changed <- struct{}{}:
+			default:
+			}
+			return
+		}
 		var p *wtPlan
 		var g *wtGit
 		if j.plan {
 			p = planWorktree(j.wt, mainHead)
 		}
 		if j.git && base != "" {
-			g = gitState(j.wt, mainRoot, base, mainHead, limit)
+			g = gitState(j.wt, mainRoot, base, mainHead, limit, view)
 			g.parentHead = heads[g.update.Parent]
 			g.index = j.mark
 		}
@@ -564,8 +663,8 @@ func planWorktree(wt stack.Worktree, mainHead string) *wtPlan {
 }
 
 // gitState works out where a worktree stands against main, and what
-// `hydra update` would do to it.
-func gitState(wt stack.Worktree, mainRoot, base, mainHead string, limit int) *wtGit {
+// `hydra update` would do to it. view may be nil: the worktrees only.
+func gitState(wt stack.Worktree, mainRoot, base, mainHead string, limit int, view *stackView) *wtGit {
 	g := &wtGit{at: time.Now(), head: wt.Head, mainHead: mainHead}
 	if out, err := gitOut(wt.Root, "log", "-1", "--abbrev=9", "--format=%h%x09%s"); err == nil {
 		g.commit, g.subject, _ = strings.Cut(out, "\t")
@@ -579,42 +678,44 @@ func gitState(wt stack.Worktree, mainRoot, base, mainHead string, limit int) *wt
 	// Cached by the pair of commits (mainConflicts): a look every two
 	// minutes for uncommitted work doesn't merge again.
 	g.far = farBehindOf(wt.Root, wt.Head, mainHead, g.behind, limit)
-	u := &wtUpdate{root: wt.Root, name: wt.Branch}
-	u.inspect(nil, base)
+	u := &wtUpdate{root: wt.Root, name: wt.Branch, main: mainRoot}
+	u.inspect(base, view)
 	u.decide(mainRoot, base, mainHead, true)
-	g.update = &snapUpdate{Parent: u.parent, Behind: u.behind, Action: u.action, Note: u.note, Hand: u.hand}
-	for _, line := range u.detail {
-		if f, ok := strings.CutPrefix(line, "conflict: "); ok {
-			g.update.Conflicts = append(g.update.Conflicts, f)
-		}
-	}
+	g.update = snapUpdateOf(u)
 	if u.depth > 1 {
-		g.stack = stackOf(wt.Root, base)
+		g.stack = u.chain
 	}
 	return g
 }
 
-// stackOf names the branches a worktree is stacked on, bottom first, and
-// its own last.
-func stackOf(root, base string) []string {
-	chain, _, err := stack.Chain(root, stack.Options{
-		BaseRef: base,
-		ParentOverride: func(root string) string {
-			lf, _ := readLocal(filepath.Join(root, ".hydra.local.yaml"))
-			if lf == nil {
-				return ""
-			}
-			return lf.Parent
-		},
-	})
-	if err != nil {
-		return nil
+func snapUpdateOf(u *wtUpdate) *snapUpdate {
+	su := &snapUpdate{Parent: u.parent, Behind: u.behind, Action: u.action, Note: u.note, Hand: u.hand}
+	for _, line := range u.detail {
+		if f, ok := strings.CutPrefix(line, "conflict: "); ok {
+			su.Conflicts = append(su.Conflicts, f)
+		}
 	}
-	var out []string
-	for _, l := range chain {
-		out = append(out, l.Name)
+	return su
+}
+
+// bareState works out where a stack branch with no checkout stands: against
+// main, and against its parent, as `hydra update` would merge it.
+func bareState(b stack.Bare, view *stackView, mainRoot, base, mainHead string) *wtGit {
+	g := &wtGit{at: time.Now(), head: b.Head, mainHead: mainHead}
+	if out, err := gitOut(mainRoot, "log", "-1", "--abbrev=9", "--format=%h%x09%s", b.Head); err == nil {
+		g.commit, g.subject, _ = strings.Cut(out, "\t")
 	}
-	return out
+	if out, err := gitOut(mainRoot, "rev-list", "--left-right", "--count", mainHead+"..."+b.Head); err == nil {
+		if f := strings.Fields(out); len(f) == 2 {
+			g.behind, _ = strconv.Atoi(f[0])
+			g.ahead, _ = strconv.Atoi(f[1])
+		}
+	}
+	u := &wtUpdate{name: b.Name, main: mainRoot}
+	u.inspect(base, view)
+	u.decide(mainRoot, base, mainHead, true)
+	g.update, g.stack = snapUpdateOf(u), u.chain
+	return g
 }
 
 // build puts a snapshot together: the main checkout as last read, each
@@ -630,6 +731,15 @@ func (s *snapshotter) build() *snapshot {
 	for i, wt := range wts {
 		plans[i], gits[i] = s.plans[wt.Root], s.gits[wt.Root]
 	}
+	var bares []stack.Bare
+	var bareGits []*wtGit
+	if s.view != nil {
+		for _, b := range s.view.st.Bare {
+			bares = append(bares, b)
+			bareGits = append(bareGits, s.bares[b.Name])
+		}
+	}
+	viewErr := s.viewErr
 	s.mu.Unlock()
 	if ms == nil {
 		if msErr != nil {
@@ -672,6 +782,12 @@ func (s *snapshotter) build() *snapshot {
 		w := snapWorktreeOf(ms, wt, plans[i], gits[i], mem)
 		addStrays(&w.Strays, &w.Problems, strays[wt.Root])
 		snap.Worktrees = append(snap.Worktrees, w)
+	}
+	for i, b := range bares {
+		snap.Branches = append(snap.Branches, snapBranchOf(b, bareGits[i]))
+	}
+	if viewErr != nil {
+		snap.Main.Problems = append(snap.Main.Problems, snapProblem{Text: "can't read the stacks' branches: " + viewErr.Error()})
 	}
 	return snap
 }

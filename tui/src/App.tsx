@@ -9,6 +9,8 @@ import {
 	fixCommand,
 	outOfDate,
 	runsHere,
+	labelBeside,
+	labels,
 	shortBranch,
 	tree,
 	type Entry,
@@ -72,11 +74,6 @@ function useSize(fixed?: { columns: number; rows: number }) {
 	return size;
 }
 
-/** What a checkout is called in a message: its ticket id, or its branch. */
-function called(e: Entry): string {
-	const n = displayName(e);
-	return n.id ?? n.title;
-}
 
 export default function App({ backend, size: fixedSize, initial, theme = themeFor(), home }: Props) {
 	const { exit } = useApp();
@@ -115,6 +112,13 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 	const list = useMemo(() => nodes.map((n) => n.e), [nodes]);
 	const nodeOf = useMemo(() => new Map<Entry, Node>(nodes.map((n) => [n.e, n])), [nodes]);
 	const staleOf = (e: Entry): Staleness => nodeOf.get(e)?.stale ?? { kind: "none" };
+	// What a checkout is called in a message: its ticket id, or its branch;
+	// branches sharing a ticket (a PR stack) by what tells them apart.
+	const names = useMemo(() => labels(list.filter((e) => e.kind !== "main" && e.branch !== "(detached)").map((e) => e.branch)), [list]);
+	const called = (e: Entry): string => {
+		const n = displayName(e);
+		return (e.kind === "main" ? undefined : names.get(e.branch)) ?? n.id ?? n.title;
+	};
 	// The checkout hydra was started in, until someone moves.
 	useEffect(() => {
 		if (preselected.current || list.length === 0) return;
@@ -144,18 +148,18 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 	/** Runs hydra in the background in a checkout, shows it under way in
 	 *  its row and panel, and says how it went. */
 	const runQuiet = useCallback(
-		(args: string[], cwd: string, name: string, verb: string, after?: (r: Result) => void) => {
-			const now = busy[cwd];
+		(args: string[], cwd: string, name: string, verb: string, after?: (r: Result) => void, key = cwd) => {
+			const now = busy[key];
 			if (now) {
 				setMessage({ text: `wait: ${now.what} is still running`, color: "yellow" });
 				return;
 			}
 			const what = `hydra ${args.join(" ")}` + (name ? ` in ${name}` : "");
-			setBusy((b) => ({ ...b, [cwd]: { verb, what } }));
+			setBusy((b) => ({ ...b, [key]: { verb, what } }));
 			setMessage(undefined);
 			void backend.run(args, cwd).then((r) => {
 				setBusy((b) => {
-					const { [cwd]: _, ...rest } = b;
+					const { [key]: _, ...rest } = b;
 					return rest;
 				});
 				backend.refresh(cwd === mainRoot ? undefined : cwd);
@@ -178,8 +182,9 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 		return code;
 	};
 
-	/** A dry run first, then a confirmation with what it printed. */
-	const dryThenDo = (dryArgs: string[], realArgs: string[], cwd: string, title: string, refreshRoot?: string) => {
+	/** A dry run first, then a confirmation with what it printed. key: the
+	 *  row shown busy meanwhile, when it isn't the checkout at cwd. */
+	const dryThenDo = (dryArgs: string[], realArgs: string[], cwd: string, title: string, refreshRoot?: string, key = cwd) => {
 		runQuiet(dryArgs, cwd, "", "checking", (r) => {
 			const lines = r.output.replace(/\s+$/, "").split("\n");
 			if (r.code !== 0 && r.code !== 1) {
@@ -196,7 +201,7 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 						refreshRoot,
 					),
 			});
-		});
+		}, key);
 	};
 
 	const pickService = (title: string, names: string[], then: (name: string) => void) => {
@@ -209,6 +214,12 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 	};
 
 	const act = (key: string, e: Entry) => {
+		// A branch with no checkout: nothing runs there, so only m and U do
+		// anything.
+		if (e.kind === "branch" && key !== "merge" && key !== "update") {
+			setMessage({ text: `${called(e)} has no checkout: nothing runs it. m merges its parent into it; the worktrees stacked on it run its code`, color: "yellow" });
+			return;
+		}
 		switch (key) {
 			case "open":
 				if (!e.up) {
@@ -336,16 +347,30 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 				const s = staleOf(e);
 				if (s.kind === "inherits" && !e.update?.action) {
 					setMessage({
-						text: `${called(e)} has everything ${shortBranch(e.parent ?? "main")} has; ${shortBranch(s.from.branch)} is behind: update it first (select it, m), or U updates all, parents first`,
+						text: `${called(e)} has everything ${e.parent ? (names.get(e.parent) ?? labelBeside(e.parent, e.branch)) : "main"} has; ${called(s.from)} is behind: update it first (select it, m), or U updates all, parents first`,
 						color: "yellow",
 					});
+					return;
+				}
+				if (e.kind === "branch") {
+					// No checkout to run it in: from main's, by name.
+					dryThenDo(
+						["update", "--branch", e.branch, "--dry-run"],
+						["update", "--branch", e.branch],
+						mainRoot,
+						`Merge ${e.parent ? (names.get(e.parent) ?? labelBeside(e.parent, e.branch)) : "main"} into ${called(e)}, without a checkout? (hydra update --branch)`,
+						undefined,
+						e.root,
+					);
 					return;
 				}
 				dryThenDo(
 					["update", "--here", "--dry-run"],
 					["update", "--here"],
 					e.root,
-					`Merge ${e.parent && e.stack.length > 1 ? shortBranch(e.parent) : "main"} into ${called(e)}? (hydra update --here)`,
+					e.parent && e.stack.length > 1
+						? `Merge ${names.get(e.parent) ?? labelBeside(e.parent, e.branch)} into ${called(e)}? (hydra update --here)`
+						: `Merge main into ${called(e)}? (hydra update --here)`,
 					e.root,
 				);
 				return;
@@ -355,7 +380,7 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 					["update", "--dry-run"],
 					["update"],
 					mainRoot,
-					"Update everything? (hydra update: pulls main, restarts what moved, merges main into the worktrees)",
+					"Update everything? (hydra update: pulls main, restarts what moved, merges each branch's parent into it, parents first)",
 				);
 				return;
 		}
@@ -504,7 +529,14 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 				nodes
 					.slice(start, start + visible)
 					.map((n) => (
-						<ListRow key={n.e.root} node={n} selected={n.e.root === sel?.root} width={listInner} busy={verbOf(n.e)} />
+						<ListRow
+							key={n.e.root}
+							node={n}
+							selected={n.e.root === sel?.root}
+							width={listInner}
+							busy={verbOf(n.e)}
+							short={n.e.kind === "main" || names.get(n.e.branch) === shortBranch(n.e.branch) ? undefined : names.get(n.e.branch)}
+						/>
 					))
 			) : (
 				<Row width={listInner} segs={error ? [] : [{ text: " " }, { text: "", spin: true, color: "cyan" }, { text: " reading the repository…" }]} />

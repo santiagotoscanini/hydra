@@ -53,36 +53,47 @@ func (f *farBehind) problem(base string) problem {
 	}
 }
 
-// mergeTrees caches mainConflicts by the pair of commits: git merge-tree
-// reads both trees, which takes seconds on a large repository, and its
-// answer for two commits never changes.
+// mergeTrees caches merges by the pair of commits: git merge-tree reads
+// both trees, which takes seconds on a large repository, and its answer for
+// two commits never changes.
 var mergeTrees = struct {
 	sync.Mutex
-	m map[string][]string
-}{m: map[string][]string{}}
+	m map[string]merged
+}{m: map[string]merged{}}
+
+type merged struct {
+	tree  string
+	files []string
+}
 
 // mainConflicts lists the files that merging mainHead into head would
 // conflict in, with git merge-tree (git 2.38 or later), which merges in
 // memory and leaves the worktree alone.
 func mainConflicts(root, head, mainHead string) ([]string, error) {
-	key := head + " " + mainHead
+	_, files, err := mergeTreeCached(root, head, mainHead)
+	return files, err
+}
+
+// mergeTreeCached is mergeTree for two commits, remembered.
+func mergeTreeCached(root, ours, theirs string) (string, []string, error) {
+	key := ours + " " + theirs
 	mergeTrees.Lock()
-	files, ok := mergeTrees.m[key]
+	m, ok := mergeTrees.m[key]
 	mergeTrees.Unlock()
 	if ok {
-		return files, nil
+		return m.tree, m.files, nil
 	}
-	_, files, err := mergeTree(root, head, mainHead)
+	tree, files, err := mergeTree(root, ours, theirs)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	mergeTrees.Lock()
 	if len(mergeTrees.m) > 1000 { // twenty worktrees, each at many commits over a long watch
-		mergeTrees.m = map[string][]string{}
+		mergeTrees.m = map[string]merged{}
 	}
-	mergeTrees.m[key] = files
+	mergeTrees.m[key] = merged{tree, files}
 	mergeTrees.Unlock()
-	return files, nil
+	return tree, files, nil
 }
 
 // mergeTree merges theirs into ours in memory, with git merge-tree (git

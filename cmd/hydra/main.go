@@ -98,16 +98,20 @@ files; git merge-tree tries it, and touches nothing).
 
 Hydra's own commands:
   hydra status [--all] [--wait]  is everything this checkout uses up and in step
-                                 with main? (exit 1 if not; --all: every worktree;
+                                 with main? (exit 1 if not; --all: every worktree,
+                                 and a PR stack's branches with no worktree;
                                  --wait: first wait for what is still starting,
                                  for at most --timeout D, 10m by default; what is
                                  still starting then is an error)
   hydra status --json [--watch]  main and every worktree as one JSON object: what
                                  each runs, its processes, problems and fixes, how
-                                 far behind main, what an update would do (--watch:
-                                 one line every second; what the dashboard reads)
+                                 far behind main, what an update would do, and the
+                                 stack branches with no worktree (--watch: one
+                                 line every second; what the dashboard reads)
   hydra update [flags]           pull main, restart what the new commits touched
-                                 in its stack, merge main into the worktrees
+                                 in its stack, merge main into the worktrees (a
+                                 stacked branch: its parent, parents first, also
+                                 a PR stack's branches with no worktree)
   hydra log [KIND...] [flags]    what hydra did and saw in main and every worktree:
                                  commands, problems, process changes, usage once a
                                  minute (--since D, 1h by default; --here: this
@@ -150,6 +154,9 @@ Flags for update:
   --here           in a worktree: merge main (or the branch it is stacked on)
                    into this worktree only and restart what that touched;
                    main isn't pulled and its stack is left alone
+  --branch NAME    merge its parent into a stack branch that no worktree has
+                   checked out, without a checkout (git merge-tree, commit-tree,
+                   update-ref); a conflict is left alone. Main isn't pulled
   --no-pull        don't pull; bring the stack and the worktrees to where main is
   --timeout D      how long one process may take to come back (default 15m)
 

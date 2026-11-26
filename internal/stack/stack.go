@@ -28,6 +28,8 @@ type Layer struct {
 	Root   string // worktree root
 	Parent string // what the layer is diffed against: a branch name or the base ref
 	Base   string // the commit where this worktree's HEAD left Parent
+	// Explicit: Parent is the worktree's own `parent:` (ParentOverride).
+	Explicit bool
 }
 
 // Options tune parent detection.
@@ -96,7 +98,7 @@ func Chain(root string, opt Options) ([]Layer, []string, error) {
 		}
 		seen[w.Root] = true
 
-		parent, warn, err := findParent(w, wts, main, opt)
+		parent, explicit, warn, err := findParent(w, wts, main, opt)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -120,7 +122,7 @@ func Chain(root string, opt Options) ([]Layer, []string, error) {
 		if name == "" {
 			name = filepath.Base(w.Root)
 		}
-		chain = append([]Layer{{Name: name, Root: w.Root, Parent: parentRef, Base: strings.TrimSpace(base)}}, chain...)
+		chain = append([]Layer{{Name: name, Root: w.Root, Parent: parentRef, Base: strings.TrimSpace(base), Explicit: explicit}}, chain...)
 		if parent == nil {
 			return chain, warnings, nil
 		}
@@ -142,20 +144,26 @@ func Chain(root string, opt Options) ([]Layer, []string, error) {
 // looks exactly like a parent that moved on. Two contained branches at the
 // same commit can't be told apart either; w is then treated as sitting on
 // the base ref, with a warning.
-func findParent(w Worktree, wts []Worktree, main string, opt Options) (*Worktree, string, error) {
+func findParent(w Worktree, wts []Worktree, main string, opt Options) (*Worktree, bool, string, error) {
 	if opt.ParentOverride != nil {
 		if p := opt.ParentOverride(w.Root); p != "" {
 			if p == opt.BaseRef {
-				return nil, "", nil
+				return nil, true, "", nil
 			}
 			for i := range wts {
 				if wts[i].Branch == p {
-					return &wts[i], "", nil
+					return &wts[i], true, "", nil
 				}
 			}
-			return nil, "", fmt.Errorf("%s: parent %q is not checked out in any worktree", w.Root, p)
+			return nil, true, "", fmt.Errorf("%s: parent %q is not checked out in any worktree", w.Root, p)
 		}
 	}
+	parent, warn, err := inferParent(w, wts, main, opt)
+	return parent, false, warn, err
+}
+
+// inferParent is findParent without an explicit parent.
+func inferParent(w Worktree, wts []Worktree, main string, opt Options) (*Worktree, string, error) {
 	if w.Branch == "" {
 		return nil, "", nil
 	}

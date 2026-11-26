@@ -5,7 +5,7 @@ import { render } from "ink-testing-library";
 import App from "../src/App.js";
 import { ConfirmBody, Footer, ListRow, detailRows, footerKeys, problemRows, Row } from "../src/ui.js";
 import { badgeOf, branchName, entries, fixCommand, stateOf, tree, wrap, type Node } from "../src/model.js";
-import type { Snapshot, WorktreeState } from "../src/types.js";
+import type { Branch, Snapshot, WorktreeState } from "../src/types.js";
 import { FakeBackend, plain, tick } from "./fake.js";
 import { fixture } from "./fixture.js";
 
@@ -553,5 +553,101 @@ test("m on a branch in step with its parent says which branch to update first", 
 	await tick();
 	assert.match(plain(r.lastFrame()), /b has everything a has; a is behind: update it first/);
 	assert.equal(backend.runs.length, 0);
+	r.unmount();
+});
+
+// ── Stack branches with no checkout ───────────────────────────────────
+
+/** The PR stack main <- schema <- core <- web with only web checked out.
+ *  web merged main straight in; schema and core are 10 behind it. */
+function ring(): Snapshot {
+	const at = new Date().toISOString();
+	const b = (name: string, parent: string, behind: number, stack: string[]): Branch => ({
+		branch: `santiago/scrm-264-app-ring-${name}`,
+		commit: "0123456ab",
+		subject: name,
+		behind: 10,
+		ahead: stack.length,
+		stack: stack.map((s) => `santiago/scrm-264-app-ring-${s}`),
+		source: "gh-stack",
+		update: { parent, behind, action: behind ? "merge" : undefined, note: behind ? `${parent} would be merged in (${behind} commits), without a checkout` : "up to date" },
+		gitAt: at,
+	});
+	const s = snapOf([
+		wt("santiago/scrm-264-app-ring-web", "santiago/scrm-264-app-ring-core", 0, {
+			stack: ["schema", "core", "web"].map((x) => `santiago/scrm-264-app-ring-${x}`),
+		}),
+	]);
+	s.branches = [b("core", "santiago/scrm-264-app-ring-schema", 0, ["schema", "core"]), b("schema", "main", 10, ["schema"])];
+	return s;
+}
+
+test("a stack's branches with no checkout are rows in their place in the chain", async () => {
+	const snap = ring();
+	const nodes = tree(entries(snap));
+	assert.deepEqual(
+		nodes.map((n) => `${n.depth}:${n.e.kind}:${n.stale.kind}`),
+		["0:main:none", "1:branch:behind", "2:branch:inherits", "3:worktree:inherits"],
+	);
+	const lines = drawn(snap);
+	lines.forEach((l) => noLineWiderThan(l, 78));
+	assert.match(lines[1]!, /^ └─◇ scrm-264 app ring schema\s+no checkout\s+10 behind main$/);
+	assert.match(lines[2]!, /^ {3}└─◇ scrm-264 app ring core\s+no checkout\s+↑ schema is behind$/);
+	assert.match(lines[3]!, /^ {5}└─○ scrm-264 app ring web\s+down\s+↑ schema is behind$/, "web merged main, but its stack didn't");
+	assert.equal(badgeOf(nodes[1]!).bold, true, "where the chain goes stale is drawn strong");
+	const f = await framed(snap);
+	assert.match(f, /0 of 1 worktree up · 3 out of date/, "the header counts worktrees; what is out of date counts every branch");
+	noLineWiderThan(f, 80);
+	// Narrow (a wide terminal's left column): the ticket, then what tells
+	// the branches apart, rather than three cut-off titles alike.
+	const wide = await framed(snap, 120, 30);
+	assert.match(wide, /└─◇ scrm-264 schema +no checkout/);
+	assert.match(wide, /└─◇ scrm-264 core +no checkout/);
+	assert.match(wide, /└─○ scrm-264 w(eb|…) +down/);
+});
+
+test("a branch with no checkout: its detail, and only m in the footer", () => {
+	const es = entries(ring());
+	const schema = es.find((e) => e.branch.endsWith("schema"))!;
+	const core = es.find((e) => e.branch.endsWith("core"))!;
+	assert.equal(stateOf(schema).word, "no checkout");
+	assert.deepEqual(footerKeys(schema), [["m", "merge main"]]);
+	assert.deepEqual(footerKeys(core), [], "in step with schema: nothing to merge yet");
+	const nodes = tree(es);
+	const node = nodes.find((n) => n.e === core)!;
+	const text = rows(detailRows(core, 80, { node, staleOf: (e) => nodes.find((n) => n.e === e)!.stale }));
+	assert.match(text, /santiago\/scrm-264-app-ring-core · no checkout/);
+	assert.match(text, /vs schema +in step/);
+	assert.match(text, /main → schema \(10 behind\) → core/);
+	assert.match(text, /schema is behind main: update it first/);
+	assert.match(text, /No worktree has it checked out, so nothing runs it/);
+	assert.doesNotMatch(text, /Runs here|From main/);
+	assert.match(once(<>{problemRows(core, 60).map((s, i) => <Row key={i} segs={s} width={60} />)}</>), /nothing runs it: no checkout/);
+});
+
+test("m on a branch with no checkout merges without one, from main's checkout; other keys say why not", async () => {
+	const snap = ring();
+	snap.current = snap.main!.root;
+	const backend = new FakeBackend(snap);
+	backend.results["update --branch santiago/scrm-264-app-ring-schema --dry-run"] = {
+		code: 0,
+		output: "worktrees\n  (no checkout)  scrm-264-app-ring-schema  main would be merged in (10 commits), without a checkout\n",
+	};
+	const r = render(<App backend={backend} size={{ columns: 100, rows: 30 }} />);
+	await tick();
+	r.stdin.write(DOWN);
+	await tick();
+	assert.match(plain(r.lastFrame()), /▌└─◇ scrm-264 app ring schema/);
+	r.stdin.write("u");
+	await tick();
+	assert.match(plain(r.lastFrame()), /has no checkout: nothing runs it/);
+	assert.equal(backend.runs.length, 0);
+	r.stdin.write("m");
+	await tick();
+	assert.match(plain(r.lastFrame()), /Merge main into schema, without a checkout\? \(hydra update --branch\)/);
+	r.stdin.write("y");
+	await tick();
+	assert.deepEqual(backend.terminals[0]!.argv, ["hydra", "update", "--branch", "santiago/scrm-264-app-ring-schema"]);
+	assert.equal(backend.terminals[0]!.cwd, "/repo/main");
 	r.unmount();
 });
