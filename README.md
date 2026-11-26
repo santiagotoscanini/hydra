@@ -219,7 +219,10 @@ problems with their fixes (and the fix as a command when it is a hydra one),
 the programs outside any stack that hold its ports (`strays`),
 how far it is from main and what `hydra update` would do to it, and
 (`branches`) the branches of PR stacks that have no worktree (see
-[Stacked branches](#stacked-branches)).
+[Stacked branches](#stacked-branches)), and each branch's pull request
+(`pr`: number, open, draft, merged or closed, review, checks, link) from
+`gh`, which is optional. `hydra status` prints it on a `pr` line, and
+`hydra status --all` in a `PR` column, naming the worktrees on a merged PR.
 `--watch` prints one every second.
 
 ### The dashboard
@@ -233,43 +236,58 @@ is stacked on. A branch under one that is behind is out of date too
 (`↑ web is behind`), and the first stale branch of each chain stands out,
 so you see where to update first. A PR stack's branch that no worktree has
 checked out is a row in its place (`◇`, muted, `no checkout`): nothing to
-start or stop there, only `m`. In a panel for the
-chosen one, its problems with their fixes, its services and what it takes
-from main. At 120 columns or wider the panels sit side by side. It uses
+start or stop there, only `m`. Each row has its branch's PR, briefly
+(`#7 ✓`, `#10265 draft`, `#10265 ✗ checks`), read with `gh` every 3
+minutes in the background; one whose PR is merged or closed says `PR
+merged: nothing to do`, and the header counts them, so worktrees still
+running a merged branch stand out. gh is optional: without it there are no
+PR badges, and `?` says why. In a panel for the chosen one, what runs
+there and why, in this order: its PR and link, its chain of branches up to
+main and what to update first, each service it runs with the files that
+made it run here, what it takes from main, its problems with their fixes. At 120 columns or wider the panels sit side by side. It uses
 the terminal's own colours and follows its light or dark theme, also when
 the terminal switches while it runs.
 
 ```
- hydra  main   main up · 0 of 5 worktrees up · 5 out of date
-╭─ Checkouts 6 ────────────────────────────────────────────────────────────────╮
-│ ● main                              up                            up to date │
-│▌├─○ api                             down                       1 behind main │
-│ ├─○ clash                           down          1 behind main · 1 conflict │
-│ └─○ web                             down                       1 behind main │
-│   └─○ stacked                       down                     ↑ web is behind │
-│     └─○ deeper                      down                     ↑ web is behind │
+ hydra  main   main up · 0 of 6 worktrees up · 8 out of date · 1 on a merged PR
+╭─ Checkouts 9 ────────────────────────────────────────────────────────────────╮
+│ ● main                    up                                      up to date │
+│▌├─○ api                   down          #7 ✓                   1 behind main │
+│ ├─○ clash                 down                    1 behind main · 1 conflict │
+│ ├─◇ ring-schema           no checkout                          1 behind main │
+│ │ └─◇ ring-core           no checkout                ↑ ring-schema is behind │
+│ │   └─○ ring-web          down                       ↑ ring-schema is behind │
+│ └─○ web                   down                                 1 behind main │
+│   └─○ stacked             down                               ↑ web is behind │
+│     └─○ deeper            down          #8 merged   PR merged: nothing to do │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ api  ○ down ────────────────────────────────────────────────────────────────╮
 │ api · ~/code/shop/api                                                        │
 │ 85fb02ad0 api: orders                                                        │
 │                                                                              │
-│ ✓ nothing in the way: u starts it                                            │
+│ ◎ PR  #7 open · review required · checks passing                             │
+│   https://example.invalid/demo/repo/pull/7  p opens it                       │
 │                                                                              │
 │ ⇅ vs main  1 behind · 1 ahead                                                │
 │   update: main would be merged in (1 commit)                                 │
 │                                                                              │
-│ ◆ Runs here  1                                                               │
-│   ○ api    not started     changed: apps/api/orders.go                       │
+│ ◆ Runs here, and why  1                                                      │
+│   ○ api    not started                                                       │
+│     ↳ changed: apps/api/orders.go                                            │
+│ ◇ From main  ● db · 1 unused                                                 │
 │                                                                              │
-│ … 2 more lines (pgdn)                                                        │
+│ ✓ nothing in the way: u starts it                                            │
+│                                                                              │
+│                                                                              │
+│                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- u up  ·  l logs  ·  m merge main             U update all  ·  ? help  ·  q quit
+ u up  ·  l logs  ·  m merge main  ·  p PR    U update all  ·  ? help  ·  q quit
 ```
 
 Each key runs the hydra command an agent would type, in the chosen
 checkout: `u` `hydra up -D`, `d` `hydra down`, `r` `hydra process restart`,
 `l` `hydra process logs -f`, `o` opens an address by name (`hosts`) in
-the browser, `f` a problem's fix, `m` `hydra update --here` (on a branch
+the browser, `p` opens its PR, `f` a problem's fix, `m` `hydra update --here` (on a branch
 with no checkout, `hydra update --branch NAME`),
 `U` `hydra update` (both after their dry run), `R` reads everything again,
 `?` lists the keys, `q` quits and leaves every stack running. `⏎` opens the

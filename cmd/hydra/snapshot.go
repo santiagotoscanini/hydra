@@ -152,6 +152,7 @@ type snapWorktree struct {
 	Problems   []snapProblem `json:"problems"`
 	Strays     []snapStray   `json:"strays,omitempty"`
 	Update     *snapUpdate   `json:"update,omitempty"`
+	PR         *snapPR       `json:"pr,omitempty"` // its pull request (prs.go)
 	// IdleStopped: its stack isn't running because nobody used it for
 	// x-hydra idle_stop, and hydra stopped it.
 	IdleStopped *snapIdle `json:"idleStopped,omitempty"`
@@ -187,7 +188,10 @@ type snapshot struct {
 	// Branches: the branches of PR stacks that a worktree sits on but no
 	// worktree has checked out, by name.
 	Branches []snapBranch `json:"branches,omitempty"`
-	Error    string       `json:"error,omitempty"`
+	// PRs: when gh was last asked for the branches' PRs, and why it can't
+	// be (prs.go). Absent when the snapshot has no main.
+	PRs   *snapPRSource `json:"prs,omitempty"`
+	Error string        `json:"error,omitempty"`
 }
 
 // snapBranch is a branch of a PR stack that no worktree has checked out,
@@ -202,6 +206,7 @@ type snapBranch struct {
 	Stack   []string    `json:"stack"`  // the chain, bottom first, its own last
 	Source  string      `json:"source"` // how hydra knows: "gh-stack" or "ancestry"
 	Update  *snapUpdate `json:"update,omitempty"`
+	PR      *snapPR     `json:"pr,omitempty"`
 	Pending bool        `json:"pending,omitempty"` // not worked out yet
 	GitAt   time.Time   `json:"gitAt"`
 }
@@ -248,7 +253,8 @@ type snapshotter struct {
 	strays     map[string][]stray
 	straysAt   time.Time
 	straysBusy bool
-	once       bool // a single snapshot: nothing is left for the next one
+	prs        *prSource // the branches' PRs, asked of gh every prAge in the background
+	once       bool      // a single snapshot: nothing is left for the next one
 }
 
 // wtPlan is a worktree's plan, and the commits it was made at.
@@ -347,6 +353,7 @@ func newSnapshotter(here gitx.Checkout) (*snapshotter, error) {
 		here: here, main: mainCo,
 		plans: map[string]*wtPlan{}, gits: map[string]*wtGit{}, bares: map[string]*wtGit{}, busy: map[string]bool{}, gitDirs: map[string]string{},
 		changed: make(chan struct{}, 1),
+		prs:     newPRSource(mainCo.Root),
 	}, nil
 }
 
@@ -447,6 +454,7 @@ func (s *snapshotter) refresh(wait, force bool, only string) {
 		mine = append(mine, wt)
 	}
 	s.refreshMain(force && only == "", mainHead)
+	defer s.refreshPRs(wait, force && only == "", mine, heads)
 
 	// The stacks' branches without a checkout: one git command while no
 	// branch moved (stack.FindStacks caches the rest).
@@ -615,6 +623,60 @@ func (s *snapshotter) refresh(wait, force bool, only string) {
 	go dispatch()
 }
 
+// refreshPRs asks gh for the PRs of every branch shown, when that is due:
+// in the background, so a slow GitHub never holds up a snapshot. heads
+// has the commit of every branch (the worktrees' and the stacks').
+func (s *snapshotter) refreshPRs(wait, force bool, wts []stack.Worktree, heads map[string]string) {
+	s.mu.Lock()
+	base := ""
+	if s.ms != nil {
+		base = s.ms.target.stack.Hydra.BaseRef
+	}
+	var branches []string
+	for _, wt := range wts {
+		if wt.Branch != "" {
+			branches = append(branches, wt.Branch)
+		}
+	}
+	if s.view != nil {
+		for _, b := range s.view.st.Bare {
+			branches = append(branches, b.Name)
+		}
+	}
+	s.mu.Unlock()
+	if base == "" || len(branches) == 0 {
+		return
+	}
+	if !s.prs.due(branches, force) {
+		// gh's answer on disk is recent: only what git alone tells.
+		if !s.prs.claimLocal() {
+			return
+		}
+		if wait {
+			s.prs.local(branches, heads, base)
+			return
+		}
+		go func() {
+			s.prs.local(branches, heads, base)
+			select {
+			case s.changed <- struct{}{}:
+			default:
+			}
+		}()
+		return
+	}
+	timeout := prWatchWait
+	if s.once {
+		timeout = prStatusWait
+	}
+	s.prs.refresh(branches, heads, base, wait, timeout, func() {
+		select {
+		case s.changed <- struct{}{}:
+		default:
+		}
+	})
+}
+
 // refreshMain reads the main checkout again: all of it when that is due
 // (its HEAD moved, its stack came up or went down, or it is a few seconds
 // old), and otherwise only what its process-compose runs.
@@ -780,12 +842,16 @@ func (s *snapshotter) build() *snapshot {
 	addStrays(&snap.Main.Strays, &snap.Main.Problems, strays[ms.target.checkout.Root])
 	for i, wt := range wts {
 		w := snapWorktreeOf(ms, wt, plans[i], gits[i], mem)
+		w.PR = s.prs.of(wt.Branch)
 		addStrays(&w.Strays, &w.Problems, strays[wt.Root])
 		snap.Worktrees = append(snap.Worktrees, w)
 	}
 	for i, b := range bares {
-		snap.Branches = append(snap.Branches, snapBranchOf(b, bareGits[i]))
+		sb := snapBranchOf(b, bareGits[i])
+		sb.PR = s.prs.of(b.Name)
+		snap.Branches = append(snap.Branches, sb)
 	}
+	snap.PRs = s.prs.source()
 	if viewErr != nil {
 		snap.Main.Problems = append(snap.Main.Problems, snapProblem{Text: "can't read the stacks' branches: " + viewErr.Error()})
 	}

@@ -5,12 +5,14 @@ import { onRedraw } from "./hydra.js";
 import {
 	detailServices,
 	displayName,
+	donePRCount,
 	entries,
 	fixCommand,
 	outOfDate,
 	runsHere,
 	labelBeside,
 	labels,
+	prWidth,
 	shortBranch,
 	tree,
 	type Entry,
@@ -25,6 +27,7 @@ import {
 	HelpBody,
 	ListRow,
 	OutputBody,
+	rowColumns,
 	Panel,
 	PickerBody,
 	Row,
@@ -214,9 +217,9 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 	};
 
 	const act = (key: string, e: Entry) => {
-		// A branch with no checkout: nothing runs there, so only m and U do
-		// anything.
-		if (e.kind === "branch" && key !== "merge" && key !== "update") {
+		// A branch with no checkout: nothing runs there, so only m, U and p
+		// do anything.
+		if (e.kind === "branch" && key !== "merge" && key !== "update" && key !== "pr") {
 			setMessage({ text: `${called(e)} has no checkout: nothing runs it. m merges its parent into it; the worktrees stacked on it run its code`, color: "yellow" });
 			return;
 		}
@@ -308,6 +311,16 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 						});
 					},
 				);
+				return;
+			}
+			case "pr": {
+				const url = e.pr?.url;
+				if (!url) {
+					const why = snap?.prs?.error ? ` (${snap.prs.error})` : "";
+					setMessage({ text: e.kind === "main" ? "main has no PR" : `no PR known for ${called(e)}${why}`, color: "yellow" });
+					return;
+				}
+				void backend.browse(url).then((r) => setMessage(r.code === 0 ? { text: `opened ${url}` } : { text: r.output || `couldn't open ${url}`, color: "red" }));
 				return;
 			}
 			case "fix": {
@@ -440,6 +453,7 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 			r: "restart",
 			l: "logs",
 			o: "browse",
+			p: "pr",
 			f: "fix",
 			m: "merge",
 			U: "update",
@@ -466,7 +480,13 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 	// the right. Narrow: the list above the detail, which leads with the
 	// problems.
 	const wide = width >= 120;
-	const listW = wide ? Math.min(84, Math.max(60, Math.floor(width * 0.42))) : width;
+	// The PR column: as wide as its longest text, and only when the deepest
+	// row keeps room for its name; it is the first thing to go.
+	const prText = prWidth(list);
+	let listW = wide ? Math.min(84, Math.max(60, Math.floor(width * 0.42))) : width;
+	if (wide && prText) listW = Math.max(listW, Math.min(listW + prText + 1, width - 60));
+	const maxLead = Math.max(0, ...nodes.map((n) => Array.from(n.lead).length));
+	const prW = prText && rowColumns(listW - 2 - prText - 1, maxLead).name >= 10 ? prText : 0;
 	const listH = wide
 		? Math.min(list.length + 2, Math.max(5, Math.floor(body * 0.6)))
 		: Math.min(list.length + 2, Math.max(5, Math.floor(body * 0.4)));
@@ -481,6 +501,7 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 
 	const wtUp = snap ? snap.worktrees.filter((w) => w.up).length : 0;
 	const stale = nodes.filter(outOfDate).length;
+	const done = donePRCount(list);
 	const anyPending = !!snap?.worktrees.some((w) => w.pending);
 
 	// The detail panel, or an overlay in its place.
@@ -490,7 +511,7 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 	if (overlay?.kind === "help") {
 		title = [{ text: "Keys", bold: true }];
 		color = "cyan";
-		content = <HelpBody width={detailInner} height={detailRoom} />;
+		content = <HelpBody width={detailInner} height={detailRoom} prs={snap?.prs} />;
 	} else if (overlay?.kind === "confirm") {
 		title = [{ text: overlay.title, bold: true }];
 		color = "yellow";
@@ -504,7 +525,12 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 		color = overlay.code === 0 ? "green" : "red";
 		content = <OutputBody text={overlay.text} width={detailInner} height={detailRoom} />;
 	} else if (sel) {
-		const lines = detailRows(sel, detailInner, { home, busy: verbOf(sel), problems: !wide, node: nodeOf.get(sel), staleOf });
+		// The worktrees stacked on a branch with no checkout run its code.
+		const node = nodeOf.get(sel);
+		const at = node ? nodes.indexOf(node) : -1;
+		const via: Entry[] = [];
+		for (let i = at + 1; node && i < nodes.length && nodes[i]!.depth > node.depth; i++) if (nodes[i]!.e.kind === "worktree") via.push(nodes[i]!.e);
+		const lines = detailRows(sel, detailInner, { home, busy: verbOf(sel), problems: !wide, node, staleOf, prs: snap?.prs, via });
 		const max = Math.max(0, lines.length - detailRoom);
 		const from = Math.min(scroll, max);
 		const shown = lines.slice(from, from + detailRoom);
@@ -535,6 +561,7 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 							selected={n.e.root === sel?.root}
 							width={listInner}
 							busy={verbOf(n.e)}
+							prW={prW}
 							short={n.e.kind === "main" || names.get(n.e.branch) === shortBranch(n.e.branch) ? undefined : names.get(n.e.branch)}
 						/>
 					))
@@ -586,6 +613,7 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 					...(n
 						? [{ text: " · " }, stale ? { text: `${stale} out of date`, color: "yellow", bold: true } : { text: "all in step", dim: true }]
 						: []),
+					...(done.count ? [{ text: " · " }, { text: `${done.count} on ${done.count === 1 ? "a " : ""}${done.closed ? "merged or closed" : "merged"} PR${done.count === 1 ? "" : "s"}`, color: "magenta", bold: true }] : []),
 				]
 			: [];
 		const busyNote: Seg[] =
@@ -607,7 +635,7 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 				{overlay?.kind === "help" ? (
 					<Panel title={[{ text: "Keys", bold: true, color: undefined }]} color="cyan" width={width} height={body}>
 						<Box flexDirection="column" paddingX={1}>
-							<HelpBody width={width - 4} height={body - 2} />
+							<HelpBody width={width - 4} height={body - 2} prs={snap?.prs} />
 						</Box>
 					</Panel>
 				) : wide ? (

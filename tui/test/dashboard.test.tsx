@@ -4,7 +4,7 @@ import React from "react";
 import { render } from "ink-testing-library";
 import App from "../src/App.js";
 import { ConfirmBody, Footer, ListRow, detailRows, footerKeys, problemRows, Row } from "../src/ui.js";
-import { badgeOf, branchName, entries, fixCommand, stateOf, tree, wrap, type Node } from "../src/model.js";
+import { badgeOf, branchName, entries, fixCommand, stateOf, tree, wrap, type Entry, type Node } from "../src/model.js";
 import type { Branch, Snapshot, WorktreeState } from "../src/types.js";
 import { FakeBackend, plain, tick } from "./fake.js";
 import { fixture } from "./fixture.js";
@@ -69,11 +69,12 @@ test("the detail lists what runs here, what comes from main, and the problems wi
 	assert.match(f, /santiago\/cart-checkout · \/repo\/cart · 300M/);
 	assert.match(f, /⇅ vs main {2}3 behind · 1 ahead/);
 	assert.match(f, /update: main would be merged in \(3 commits\)/);
-	assert.match(f, /◆ Runs here {2}1\/2 ready/);
-	assert.match(f, /● web\s+running\s+http:\/\/cart\.localhost:3900\s+changed: apps\/web\/cart\.tsx/);
+	assert.match(f, /◆ Runs here, and why {2}1\/2 ready/);
+	assert.match(f, /● web\s+running\s+http:\/\/cart\.localhost:3900\s*│\n│\s+↳ changed: apps\/web\/cart\.tsx/);
 	assert.match(f, /✗ worker\s+exited with code 1\s+:8120/);
-	assert.match(f, /◇ From main {2}2 used, 1 more unused/);
-	assert.match(f, /● api ● db/);
+	assert.match(f, /◇ From main {2}● api {2}● db · 1 unused/);
+	// In this order: the chain, what runs here and why, main's, the problems.
+	assert.ok(f.indexOf("⇅ vs main") < f.indexOf("◆ Runs here") && f.indexOf("◆ Runs here") < f.indexOf("◇ From main") && f.indexOf("◇ From main") < f.indexOf("! 2 problems"));
 	assert.doesNotMatch(f, /seed/, "main's services nothing here uses are counted, not listed");
 	assert.match(f, /! 2 problems/);
 	assert.match(f, /✗ this branch is behind main/);
@@ -96,7 +97,6 @@ test("a wide terminal shows the problems in a panel of their own, under the list
 test("o opens the checkout's address by name in the browser", async () => {
 	const { backend, stdin, frame, unmount } = app(100, 50);
 	await tick();
-	assert.match(frame(), /↗ Addresses {2}o opens one/);
 	stdin.write("o");
 	await tick();
 	assert.deepEqual(backend.browsed, ["http://cart.localhost:3900"]);
@@ -127,7 +127,8 @@ test("main lists what it runs even while its stack is down", () => {
 	assert.deepEqual(stateOf(e), { glyph: "○", spin: false, word: "down", color: "red" });
 	const f = rows(detailRows(e, 80));
 	assert.match(f, /not running: the worktrees that use main's services need it/);
-	assert.match(f, /◆ Services {2}4, none running/);
+	assert.match(f, /◆ Runs {2}4, none running/);
+	assert.match(f, /⇅ Upstream {2}2 commits behind its upstream/);
 	assert.match(f, /○ api\s+not running\s+:8080/);
 	assert.doesNotMatch(f, /nothing runs here|switched off/);
 });
@@ -620,8 +621,8 @@ test("a branch with no checkout: its detail, and only m in the footer", () => {
 	assert.match(text, /vs schema +in step/);
 	assert.match(text, /main → schema \(10 behind\) → core/);
 	assert.match(text, /schema is behind main: update it first/);
-	assert.match(text, /No worktree has it checked out, so nothing runs it/);
-	assert.doesNotMatch(text, /Runs here|From main/);
+	assert.match(text, /◆ Runs here {2}nothing: no worktree has it checked out/);
+	assert.doesNotMatch(text, /From main/);
 	assert.match(once(<>{problemRows(core, 60).map((s, i) => <Row key={i} segs={s} width={60} />)}</>), /nothing runs it: no checkout/);
 });
 
@@ -650,4 +651,92 @@ test("m on a branch with no checkout merges without one, from main's checkout; o
 	assert.deepEqual(backend.terminals[0]!.argv, ["hydra", "update", "--branch", "santiago/scrm-264-app-ring-schema"]);
 	assert.equal(backend.terminals[0]!.cwd, "/repo/main");
 	r.unmount();
+});
+
+// ── Pull requests ─────────────────────────────────────────────────────
+
+/** The ring stack with its PRs: schema merged on GitHub, core a draft,
+ *  web open with its checks passing, and gh read a minute ago. */
+function ringPRs(): Snapshot {
+	const s = ring();
+	const url = (n: number) => `https://github.com/o/r/pull/${n}`;
+	s.branches!.find((b) => b.branch.endsWith("schema"))!.pr = { number: 10264, state: "merged", url: url(10264), base: "main" };
+	s.branches!.find((b) => b.branch.endsWith("core"))!.pr = { number: 10265, state: "draft", checks: "pending", url: url(10265) };
+	s.worktrees[0]!.pr = { number: 10266, state: "open", review: "review required", checks: "passing", url: url(10266) };
+	s.prs = { at: new Date(Date.now() - 60000).toISOString() };
+	return s;
+}
+
+test("each row has its PR in a few columns, and a merged one says nothing is left to do", async () => {
+	const snap = ringPRs();
+	const nodes = tree(entries(snap));
+	const lines = nodes.map((n) => once(<ListRow node={n} selected={false} width={78} prW={13} />));
+	lines.forEach((l) => noLineWiderThan(l, 78));
+	assert.match(lines[1]!, /◇ \S.*no checkout +#10264 merged +PR merged: nothing to do$/);
+	assert.match(lines[2]!, /no checkout +#10265 draft +↑ schema is behind$/);
+	assert.match(lines[3]!, /down +#10266 ✓ +↑ schema is behind$/);
+	// The whole dashboard, at 80 columns: the PR column fits beside the
+	// tree and the staleness, the header counts the merged PR, no wraps.
+	const f = await framed(snap, 80, 30);
+	noLineWiderThan(f, 80);
+	assert.match(f, /#10264 merged/);
+	assert.match(f, /#10266 ✓/);
+	assert.match(f, /3 out of date · 1 on a merged PR/);
+	// Too narrow for it: the PR column goes first; the marker stays.
+	const narrow = await framed(snap, 60, 30);
+	noLineWiderThan(narrow, 60);
+	assert.doesNotMatch(narrow, /#10266/);
+	assert.match(narrow, /PR merged/);
+});
+
+test("the detail says, in order: the PR, the chain, what runs here; a branch with no checkout names who runs it", () => {
+	const snap = ringPRs();
+	const nodes = tree(entries(snap));
+	const staleOf = (e: Entry) => nodes.find((n) => n.e === e)!.stale;
+	const web = nodes[3]!;
+	const text = rows(detailRows(web.e, 80, { node: web, staleOf, prs: snap.prs }));
+	assert.match(text, /◎ PR {2}#10266 open · review required · checks passing/);
+	assert.match(text, /https:\/\/github\.com\/o\/r\/pull\/10266 {2}p opens it/);
+	assert.match(text, /main → schema \(10 behind\) → core → web/);
+	assert.ok(text.indexOf("◎ PR") < text.indexOf("main → schema") && text.indexOf("main → schema") < text.indexOf("◆ Runs here"));
+
+	const schema = nodes[1]!;
+	const s = rows(detailRows(schema.e, 80, { node: schema, staleOf, prs: snap.prs, via: [web.e] }));
+	assert.match(s, /◎ PR {2}#10264 merged/);
+	assert.match(s, /PR merged: nothing left to do here/);
+	assert.match(s, /◆ Runs here {2}nothing: no worktree has it checked out/);
+	assert.match(s, /web, stacked on it, runs its code/);
+	assert.deepEqual(footerKeys(schema.e), [["p", "PR"]], "merged: nothing to merge into it, only its PR to open");
+});
+
+test("p opens the PR; without gh there are no badges and the help says why", async () => {
+	const snap = ringPRs();
+	const backend = new FakeBackend(snap);
+	const r = render(<App backend={backend} size={{ columns: 100, rows: 40 }} />);
+	await tick();
+	r.stdin.write("p");
+	await tick();
+	assert.match(plain(r.lastFrame()), /main has no PR/);
+	r.stdin.write("jjj"); // web
+	await tick();
+	r.stdin.write("p");
+	await tick();
+	assert.deepEqual(backend.browsed, ["https://github.com/o/r/pull/10266"]);
+	r.stdin.write("?");
+	await tick();
+	assert.match(plain(r.lastFrame()), /PR status from gh, read 1 min ago/);
+	assert.match(plain(r.lastFrame()), /p +open its pull request in the browser/);
+	r.unmount();
+
+	const none = ring();
+	none.prs = { error: "gh isn't installed: PR status needs GitHub's CLI (gh), and is optional" };
+	const f = await framed(none, 80, 30);
+	assert.doesNotMatch(f, /#102|◎ PR|PR merged|gh/, "no badges, no error");
+	const r2 = render(<App backend={new FakeBackend(none)} size={{ columns: 100, rows: 40 }} />);
+	await tick();
+	r2.stdin.write("?");
+	await tick();
+	assert.match(plain(r2.lastFrame()), /no PR status: gh isn't installed/);
+	r2.stdin.write("q");
+	r2.unmount();
 });

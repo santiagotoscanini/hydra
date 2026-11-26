@@ -76,6 +76,15 @@ func statusCmd(args []string) error {
 		down = "stack stopped after " + n.After + " idle"
 	}
 	fmt.Printf("worktree  %s  %s  %s\n", ws.target.checkout.Root, slotText(ws), upText(ws.Up, "stack up", down))
+	if branch := gitx.Branch(ws.target.checkout.Root); branch != "" {
+		if wts, err := stack.List(co.Main); err == nil {
+			view, _ := loadStacks(ms.target.checkout.Root, ms.target.stack.Hydra.BaseRef, wts)
+			prs := shownPRs(ms, wts, view)
+			if pr := prs.of(branch); pr != nil || prs.ghTrouble() != "" {
+				fmt.Printf("pr        %s\n", prText(pr, prs.source()))
+			}
+		}
+	}
 	printAddresses(ws.target.stack, config.HostLabel(ws.target.checkout.Root), "")
 	fmt.Println()
 	printWorktreeTable(ms, ws)
@@ -376,15 +385,29 @@ func statusAll(co gitx.Checkout, ms *mainState, waited time.Duration) error {
 		}(l)
 	}
 	wg.Wait()
+	view, viewErr := loadStacks(ms.target.checkout.Root, ms.target.stack.Hydra.BaseRef, wts)
+	if viewErr != nil {
+		return viewErr
+	}
+	prs := shownPRs(ms, wts, view)
+	var done []string // the branches on a merged or closed PR
+	var shown []string
+	for _, wt := range wts {
+		shown = append(shown, wt.Branch)
+	}
+	for _, b := range view.st.Bare {
+		shown = append(shown, b.Name)
+	}
+	withPR := prs.any(shown) // a PR column only when one is known
 
 	if len(lines) > 0 {
 		fmt.Println()
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "WORKTREE\tBRANCH\tSLOT\tSTACK\tRUNS HERE\tVS MAIN")
+		fmt.Fprintln(w, "WORKTREE\tBRANCH\tSLOT\tSTACK\t"+cell(withPR, "PR\t")+"RUNS HERE\tVS MAIN")
 		for _, l := range lines {
 			name := filepath.Base(l.root)
 			if l.err != nil {
-				fmt.Fprintf(w, "%s\t-\t-\t-\t-\t%v\n", name, l.err)
+				fmt.Fprintf(w, "%s\t-\t-\t-\t%s-\t%v\n", name, cell(withPR, "-\t"), l.err)
 				continue
 			}
 			ws := l.ws
@@ -426,7 +449,11 @@ func statusAll(co gitx.Checkout, ms *mainState, waited time.Duration) error {
 					bad = true
 				}
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", name, shortBranch(ws.Name), slot, state, here, vs)
+			pr := prs.of(ws.Name)
+			if pr.Done() {
+				done = append(done, name)
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s%s\t%s\n", name, shortBranch(ws.Name), slot, state, cell(withPR, prCell(pr)+"\t"), here, vs)
 		}
 		w.Flush()
 	}
@@ -435,8 +462,12 @@ func statusAll(co gitx.Checkout, ms *mainState, waited time.Duration) error {
 	if ms.Up {
 		problems = append(problems, failing(ms, nil)...)
 	}
-	if err := printBareTable(ms, wts); err != nil {
-		return err
+	done = append(done, printBareTable(ms, view, prs, withPR)...)
+	if line := donePRs(done); line != "" {
+		fmt.Println(line)
+	}
+	if why := prs.ghTrouble(); why != "" && len(shown) > 1 {
+		fmt.Println("(no PR status: " + why + ")")
 	}
 	problems = stillStarting(append(problems, goneProblems(co)...), waited)
 	want := map[int]portUse{}
@@ -460,23 +491,28 @@ func statusAll(co gitx.Checkout, ms *mainState, waited time.Duration) error {
 	return nil
 }
 
+// cell is text when on, "": a column that is left out.
+func cell(on bool, text string) string {
+	if on {
+		return text
+	}
+	return ""
+}
+
 // printBareTable lists the stack branches no worktree has checked out, and
 // how each stands against its parent. Like a worktree behind main, one
 // behind its parent is said here, not as a problem: `hydra status` in a
 // worktree stacked on it warns.
-func printBareTable(ms *mainState, wts []stack.Worktree) error {
+// It returns the ones on a merged or closed PR.
+func printBareTable(ms *mainState, view *stackView, prs *prSource, withPR bool) (done []string) {
 	main, base := ms.target.checkout.Root, ms.target.stack.Hydra.BaseRef
-	view, err := loadStacks(main, base, wts)
-	if err != nil {
-		return err
-	}
 	rows := bareRows(view, main, base, ms.Head, nil)
 	if len(rows) == 0 {
 		return nil
 	}
 	fmt.Println()
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NO CHECKOUT\tON\tVS ITS PARENT\tUNDER")
+	fmt.Fprintln(w, "NO CHECKOUT\tON\t"+cell(withPR, "PR\t")+"VS ITS PARENT\tUNDER")
 	chains := view.chains()
 	for _, r := range rows {
 		vs := "in step"
@@ -491,13 +527,17 @@ func printBareTable(ms *mainState, wts []stack.Worktree) error {
 			vs = "landed: everything on it is in " + shortBranch(r.u.parent)
 		}
 		under := strings.Join(stackedOn(chains, r.name), ", ")
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", shortBranch(r.name), shortBranch(r.u.parent), vs, under)
+		pr := prs.of(r.name)
+		if pr.Done() {
+			done = append(done, shortBranch(r.name))
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s%s\t%s\n", shortBranch(r.name), shortBranch(r.u.parent), cell(withPR, prCell(pr)+"\t"), vs, under)
 	}
 	w.Flush()
 	if hint := bareHint(rows); hint != "" {
 		fmt.Println(hint)
 	}
-	return nil
+	return done
 }
 
 // bareHint says what to run for the branches with no checkout that are

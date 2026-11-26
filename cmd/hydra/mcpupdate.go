@@ -54,6 +54,9 @@ type wtEntry struct {
 	Note  string `json:"note"`  // hydra update's line for it
 	Stack string `json:"stack"` // "up", "down", "idle-stopped", or "none" with no checkout
 	Slot  int    `json:"slot"`  // 0: it never ran
+	// PR is its pull request (prs.go); absent when none is known. One merged
+	// or closed has nothing left to do: next is "skip".
+	PR *snapPR `json:"pr,omitempty"`
 }
 
 type mainEntry struct {
@@ -129,6 +132,14 @@ func listWorktrees(co gitx.Checkout) (*worktreesResult, error) {
 		}(e)
 	}
 	wg.Wait()
+	prs := shownPRs(ms, wts, view)
+	for _, e := range entries {
+		e.PR = prs.of(e.Branch)
+		if e.PR.Done() {
+			e.Next = "skip"
+			e.Note = "left alone: its PR is " + e.PR.Long() + ", nothing left to do here"
+		}
+	}
 	res.Worktrees = updateOrder(entries, base)
 	return res, nil
 }
@@ -327,6 +338,9 @@ func (w *wtEntry) facts() []string {
 		f = append(f, "branch "+w.Branch)
 	}
 	f = append(f, "on "+w.Parent)
+	if w.PR != nil && !w.PR.Done() {
+		f = append(f, "PR "+w.PR.Long())
+	}
 	switch {
 	case w.Behind > 0 && w.Ahead > 0:
 		f = append(f, fmt.Sprintf("%d behind, %d ahead", w.Behind, w.Ahead))

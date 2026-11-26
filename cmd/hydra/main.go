@@ -48,8 +48,9 @@ import (
 const usage = `hydra: run only what a worktree changed, and take the rest from main.
 
   hydra                    the dashboard (in a terminal): main and every
-                           worktree, what each runs here and takes from
-                           main, what is wrong and the fix; keys start,
+                           worktree, what each runs here and why, what it
+                           takes from main, its PR (with gh, optional),
+                           what is wrong and the fix; keys start,
                            stop, restart, update and open (attach) a stack.
                            ? lists the keys. Needs node. Without a terminal
                            (an agent, a script) it starts this checkout, as

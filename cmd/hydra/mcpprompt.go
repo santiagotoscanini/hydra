@@ -72,13 +72,13 @@ Rules for the whole run:
 1. Plan. Call worktrees. It lists main, then every worktree in the order to update it: each worktree comes right before the branches stacked on it (marked └), so a branch is merged after its parent took in main. It also lists the branches of a PR stack that no worktree has checked out but a worktree sits on (checkout: false): main <- schema <- core <- web with only web checked out lists schema and core in their place, since web runs their code. Show me the plan as a short table in that order, one row per worktree: its name and parent, how far behind it is, and what will happen:
    - next "merge": a clean merge;
    - next "resolve": conflicts you will resolve (name the files);
-   - next "skip": left alone, with the reason (uncommitted work, a merge already under way, ...);
+   - next "skip": left alone, with the reason (uncommitted work, a merge already under way, its PR is merged or closed, ...);
    - next "nothing": already up to date.
    The conflicts are worked out against main as it is now; pulling main can add some. Ask me to confirm before you change anything, and do what I say about any row.
 
 2. Main. Call update_main with dry_run: true. It fetches, and says how far main would move and what of main's stack would restart. If its output has a "SWITCHES ON" line, stop and ask me. Otherwise call update_main. If it fails (main has uncommitted changes, is on another branch, can't fast-forward, or a process didn't come back), stop: tell me what it printed, and change nothing else. When main moved, call worktrees again: conflicts can have changed. Tell me what is different from the plan I confirmed.
 
-3. The worktrees, in the order worktrees gave, one at a time. A branch stacked on another is only updated once its parent is done; if its parent was skipped or failed, skip it too and say why.
+3. The worktrees, in the order worktrees gave, one at a time. A branch stacked on another is only updated once its parent is done; if its parent was skipped or failed, skip it too and say why. A branch whose PR is merged or closed (pr.state "merged" or "closed", next "skip"): never merge into it, whatever its next says after main moves; list it in the report as on a merged PR, nothing left to do. A branch stacked on one is not skipped for that: its parent's code is already in main.
    - next "nothing": move on.
    - next "skip": move on, and keep the reason for the report.
    - next "merge": call update_worktree with its name (for checkout: false, its branch: hydra merges it without a checkout). Its output says what was merged and what restarted. If it fails, keep the error for the report and move on to the next worktree that doesn't sit on this one.
@@ -92,4 +92,4 @@ Rules for the whole run:
      Stop on that worktree instead of guessing when a conflict is ambiguous: both sides changed behaviour in ways that can't both hold, database migrations or schema changes clash or need a new order, or you can't tell what one side meant. Run git merge --abort there, so the worktree is as it was, and keep the question you would ask me for the report. Then go on with the worktrees that don't sit on it.
    update_worktree runs one at a time per repository (a second one at once says another hydra update is running). Resolving conflicts in independent chains may be done in parallel, by subagents if your tool has them; within a chain, strictly in order.
 
-4. Report. A table in the same order: worktree, then merged cleanly / resolved (the files, and the checks you ran) / skipped (why) / stopped (the question for me) / failed (the error). Then what runs: whether main's stack is up and on the new commit, and which worktree stacks are up. Last, call worktrees once more and say whether anything is still behind.`
+4. Report. A table in the same order: worktree, then merged cleanly / resolved (the files, and the checks you ran) / skipped (why) / on a merged PR (its number) / stopped (the question for me) / failed (the error). Then what runs: whether main's stack is up and on the new commit, and which worktree stacks are up. Last, call worktrees once more and say whether anything is still behind.`

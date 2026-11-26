@@ -1,6 +1,6 @@
 // What the dashboard shows, worked out from a snapshot. Pure: no I/O.
 
-import type { Health, Problem, Service, Snapshot, Update } from "./types.js";
+import type { Health, PR, Problem, Service, Snapshot, Update } from "./types.js";
 
 /** One row of the list: the main checkout, a worktree, or a branch of a PR
  *  stack that no worktree has checked out (kind "branch": nothing runs it,
@@ -27,6 +27,7 @@ export interface Entry {
 	services: Service[];
 	problems: Problem[];
 	update?: Update;
+	pr?: PR;
 	outOfStep: string[];
 	mainBehind: boolean;
 	/** hydra stopped its stack after this long unused ("2h"). */
@@ -86,6 +87,7 @@ export function entries(s: Snapshot): Entry[] {
 			services: w.services,
 			problems: w.problems,
 			update: w.update,
+			pr: w.pr,
 			outOfStep: w.outOfStep.map((k) => k.service),
 			mainBehind: !!w.mainBehind,
 			idleStopped: w.idleStopped?.after,
@@ -115,6 +117,7 @@ export function entries(s: Snapshot): Entry[] {
 			services: [],
 			problems: [],
 			update: b.update,
+			pr: b.pr,
 			outOfStep: [],
 			mainBehind: false,
 			memory: 0,
@@ -355,6 +358,8 @@ export interface Badge {
 
 export function badgeOf(n: Node): Badge {
 	const e = n.e;
+	// Its PR is merged or closed: where it stands doesn't matter any more.
+	if (prDone(e.pr)) return { texts: [`PR ${e.pr!.state}: nothing to do`, `PR ${e.pr!.state}`], color: "magenta", bold: true };
 	if (e.kind === "main") {
 		const parts: string[] = [];
 		if (e.behind > 0) parts.push(`${e.behind} behind upstream`);
@@ -507,4 +512,56 @@ export function tildePath(p: string, home: string | undefined): string {
 export function mainServices(e: Entry): { on: Service[]; off: Service[] } {
 	const off = e.up ? e.services.filter((s) => s.health === "off") : [];
 	return { on: e.services.filter((s) => !off.includes(s)), off };
+}
+
+// ── Pull requests ─────────────────────────────────────────────────────
+
+/** Nothing is left to do on the branch: its PR is merged or closed. */
+export function prDone(pr?: PR): boolean {
+	return pr?.state === "merged" || pr?.state === "closed";
+}
+
+/** A PR in a few columns, for the list: "#10265 draft", "#10265 ✗ checks". */
+export function prShort(pr?: PR): string {
+	if (!pr) return "";
+	const num = pr.number ? `#${pr.number} ` : "";
+	if (pr.state !== "open") return num + pr.state;
+	if (pr.checks === "failing") return num + "✗ checks";
+	if (pr.review === "changes requested") return num + "✗ review";
+	if (pr.checks === "pending") return num + "◐ checks";
+	if (pr.review === "approved") return num + "approved";
+	if (pr.checks === "passing") return num + "✓";
+	return num + "open";
+}
+
+/** The colour of a PR's state: GitHub's, more or less. */
+export function prColor(pr?: PR): string | undefined {
+	if (!pr) return undefined;
+	if (pr.state === "merged") return "magenta";
+	if (pr.state === "closed") return "red";
+	if (pr.state === "draft") return "gray";
+	if (pr.checks === "failing" || pr.review === "changes requested") return "red";
+	if (pr.checks === "pending") return "yellow";
+	return "green";
+}
+
+/** A PR on one line: "#10265 open · review required · checks passing". */
+export function prLong(pr: PR): string {
+	const parts = [pr.number ? `#${pr.number} ${pr.state}` : pr.mergedLocally ? "merged: its commits are in origin's main" : pr.state];
+	if (!prDone(pr)) {
+		if (pr.review) parts.push(pr.review);
+		if (pr.checks) parts.push(`checks ${pr.checks}`);
+	}
+	return parts.join(" · ");
+}
+
+/** The widest PR text in the list, which is the PR column's width. */
+export function prWidth(list: Entry[]): number {
+	return Math.max(0, ...list.map((e) => Array.from(prShort(e.pr)).length));
+}
+
+/** The worktrees and branches of a merged or closed PR. */
+export function donePRCount(list: Entry[]): { count: number; closed: boolean } {
+	const done = list.filter((e) => prDone(e.pr));
+	return { count: done.length, closed: done.some((e) => e.pr!.state === "closed") };
 }

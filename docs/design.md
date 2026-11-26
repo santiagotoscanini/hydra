@@ -227,6 +227,11 @@ problem whose fix is a hydra command carries it as `run`, the
 command to run in that checkout; advice has none. `version` changes only
 when a field changes meaning or goes away.
 
+Each worktree and branch has its `pr` (number, state, review, checks,
+URL, and `mergedLocally` when git alone says it is merged), and `prs` says
+when gh was last asked and why it can't be. All additions: version 1
+readers are unaffected.
+
 `--watch` prints one per line, every second, and reads `refresh [ROOT]`
 lines on stdin. What it costs to know differs a lot, so each part has its
 own clock:
@@ -318,8 +323,12 @@ offers only `m`, which runs `hydra update --branch`. Branches of one stack
 often share a ticket id (`scrm-264-app-ring-…`), so where names are said
 together they are told apart by what follows the words they share
 (`schema`, `core`). The
-chosen checkout's detail is a panel that leads with its problems and their
-fixes; on a wide terminal the problems get their own panel under the list.
+chosen checkout's detail is a panel that answers "what runs here, and
+why", always in one order: its PR, its chain up to main with what to
+update first, each service it runs with its state and the files that made
+it run here, what it takes from main on one line, its problems with their
+fix keys. A fixed order is found without reading. On a wide terminal the
+problems get their own panel under the list.
 Slots and ports are means, not news: the list doesn't show them. Every
 action shows itself under way where it happens (a spinner and `starting
 2/3` in the row and the panel) and ends in a line that says how it went,
@@ -345,6 +354,15 @@ when that ends. In process-compose's attach mode, F10 or ctrl-c asks
 stack running: that is the way back, and the help and the title say so.
 (`q` does nothing there.) Commands that only print run in the background,
 with their last line as the result and their output shown when they fail.
+
+Each row has its branch's pull request, briefly (`#10265 draft`,
+`#10265 ✗ checks`), and one whose PR is merged or closed says `PR merged:
+nothing to do` in place of its staleness, counted in the header. With 20
+or 30 worktrees, the developer asked to see which of them still run a
+branch whose PR was merged: they hold a stack and an agent's attention for
+nothing. The PR column is the first thing to go on a narrow list; the
+detail always has it. See [Pull requests](#pull-requests) for where it
+comes from.
 
 Making and removing worktrees is not hydra's job: the tool that runs the
 agents does it, and the dashboard shows a new worktree within a second and
@@ -457,6 +475,44 @@ it). `hydra update`'s own merge-tree is skipped for a worktree with
 uncommitted work, which every agent's has, so this one is separate. It is a
 warning, not a refusal: the stack runs fine on a branch that is merely old,
 and `hydra up` doesn't pay for the merge.
+
+## Pull requests
+
+hydra shows each branch's pull request because the developer, with many
+worktrees, wants to see which of them run a branch whose PR is already
+merged: nothing is left to do there. It stays a reader of GitHub, as it is
+of git: it never pushes, comments, edits or closes a PR, and removing a
+worktree belongs to the tool that made it.
+
+- **One call, in the background.** `gh pr list --state all --search
+  "head:a head:b …"` for every branch shown (GitHub ORs the qualifiers),
+  25 branches a call, in the main checkout (`cmd/hydra/prs.go`). Asking for
+  the repository's last 200 PRs with their checks took 16 seconds on a busy
+  repository and could miss an old branch; by head it took under 3 for 25
+  branches. The watch asks every 3 minutes, on `refresh`, and within 15
+  seconds of a new branch, never on the 1-second path, giving up after 20
+  seconds (api.github.com can be slow; gh uses HTTPS, so a network that
+  blocks SSH doesn't matter). One-shot commands (`hydra status`, the MCP
+  tools) use the answer when it is younger than 3 minutes and otherwise ask,
+  waiting 8 seconds at most. The answer is kept on disk, so a new dashboard
+  has it in its first frame.
+- **Optional, and quiet without it.** No gh, logged out, offline, or no
+  remote on a server: no PR badges, a reason in `prs.error` (one muted
+  line in the dashboard's help, a line under `hydra status --all`), and
+  nothing else changes. The last PRs known stay, with the reason they
+  aren't newer. A remote that is a path (tests, demos) isn't asked at all.
+  `HYDRA_GH` names the gh to run (a fake one in tests and the dashboard
+  demo); `off` turns it off.
+- **Merged, without GitHub.** A merge commit puts the branch's commit in
+  `origin/main`, off its first-parent line; that is free and offline to
+  check. A branch just cut from main is on that line, so it doesn't count.
+  A squash merge leaves nothing in git: only gh tells it.
+- **Which PR.** A branch's open PR, else its newest; a fork's PR on a
+  branch of the same name isn't the branch's.
+- **What it changes.** Only what is shown, and the `update_all` workflow:
+  the `worktrees` tool says `next: skip` for a branch on a merged or closed
+  PR, so the agent doesn't merge into it and reports it. `hydra update`
+  itself doesn't ask GitHub and behaves as before.
 
 ## Updating main
 

@@ -44,7 +44,15 @@ func canon(p string) string {
 }
 
 func TestMain(m *testing.M) {
+	// No test reaches GitHub, or writes to the user's cache.
+	cache, err := os.MkdirTemp("", "hydra-test-cache")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("HYDRA_CACHE_DIR", cache)
+	os.Setenv("HYDRA_GH", "off")
 	code := m.Run()
+	os.RemoveAll(cache)
 	if hydraBin.err == nil && hydraBin.dir != "" {
 		os.RemoveAll(hydraBin.dir)
 	}
@@ -291,5 +299,34 @@ func TestIndexMarkOfAWorktree(t *testing.T) {
 	os.WriteFile(filepath.Join(gitDir, "MERGE_HEAD"), []byte("x\n"), 0o644)
 	if after := markOf(gitDir); !after.merge || after == before {
 		t.Errorf("a merge under way: %+v", after)
+	}
+}
+
+// A branch whose PR is merged has nothing left to do: worktrees says so,
+// and the update_all workflow skips it.
+func TestMCPWorktreesSkipAMergedPR(t *testing.T) {
+	main, wt := stackedRepo(t)
+	exec.Command("git", "-C", main, "remote", "add", "origin", "https://example.invalid/o/r.git").Run()
+	fake := filepath.Join(t.TempDir(), "gh")
+	os.WriteFile(fake, []byte(`#!/bin/sh
+echo '[{"number":5,"state":"MERGED","headRefName":"a","baseRefName":"main","url":"https://example.invalid/pull/5","statusCheckRollup":[]},
+ {"number":6,"state":"OPEN","isDraft":true,"headRefName":"b","baseRefName":"a","url":"https://example.invalid/pull/6","statusCheckRollup":[]}]'
+`), 0o755)
+	t.Setenv("HYDRA_GH", fake)
+	r, _ := session(t, wt("b"), toolCall(1, "worktrees", `{}`))
+	text, isErr := toolText(t, r["1"])
+	if isErr {
+		t.Fatal(text)
+	}
+	ws := r["1"]["result"].(map[string]any)["structuredContent"].(map[string]any)["worktrees"].([]any)
+	a, b := ws[0].(map[string]any), ws[1].(map[string]any)
+	if a["next"] != "skip" || a["pr"].(map[string]any)["state"] != "merged" || !strings.Contains(a["note"].(string), "#5 merged, nothing left to do") {
+		t.Errorf("a: %v", a)
+	}
+	if b["pr"].(map[string]any)["number"] != float64(6) || b["next"] != "nothing" {
+		t.Errorf("b: %v", b)
+	}
+	if !strings.Contains(text, "PR #6 draft") || !strings.Contains(text, "SKIP: left alone: its PR is #5 merged") {
+		t.Errorf("summary:\n%s", text)
 	}
 }

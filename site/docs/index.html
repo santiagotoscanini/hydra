@@ -51,6 +51,7 @@
   <a href="#watching">Watching</a>
   <a href="#instep">In step with main</a>
   <a href="#stacks">Stacked branches</a>
+  <a href="#prs">Pull requests</a>
   <a href="#routed">One copy for every worktree</a>
   <a href="#hosts">An address per worktree</a>
   <a href="#supabase">A database per worktree</a>
@@ -449,6 +450,7 @@ without: [web]       # never run these here
 <pre data-lang="text">
 main      ~/code/shop  on main at 9a782732a  stack up
 worktree  ~/code/shop-notes  notes, slot 2  stack up
+pr        #7 open · review required · checks passing  https://github.com/me/shop/pull/7
 
 SERVICE  RUNS          PORT  STATE
 api      here          8480  ready
@@ -462,7 +464,7 @@ web      main, routed  3400  ready
 </pre>
     </div>
     <ul>
-      <li>The first two lines say where main and this worktree are: commit, branch, slot, and whether each stack is up. If main's upstream has commits it doesn't have yet, a line under it says how many. With <a href="#hosts"><code>hosts</code></a>, an <code>address</code> line gives the worktree's addresses by name: <code>address   web http://shop-notes.localhost:3900</code>; in the main checkout it gives main's.</li>
+      <li>The first two lines say where main and this worktree are: commit, branch, slot, and whether each stack is up. If main's upstream has commits it doesn't have yet, a line under it says how many. The <code>pr</code> line is the branch's <a href="#prs">pull request</a>: <code>#7 open · review required · checks passing</code> and its link; <code>PR #7 merged: nothing left to do here</code> once it is merged or closed; <code>none for this branch</code>; or <code>unknown:</code> and why gh can't be asked (it is optional). There is no <code>pr</code> line in a repository with no remote on a server. With <a href="#hosts"><code>hosts</code></a>, an <code>address</code> line gives the worktree's addresses by name: <code>address   web http://shop-notes.localhost:3900</code>; in the main checkout it gives main's.</li>
       <li>The table lists what runs here and what this worktree takes from main, each with its state right now. Services of main that nothing here calls or waits for are counted, not listed.</li>
       <li>A line marked <b>✗</b> is an error: the command exits 1, and <code>hydra up</code> won't start the worktree. A line marked <b>!</b> is a note: worth knowing, exit 0. Each comes with the command that fixes it.</li>
       <li>With nothing to report, the last line starts with <code>ok:</code> and the command exits 0.</li>
@@ -487,16 +489,17 @@ hydra-router  running
 web           ready
 worker        running
 
-WORKTREE       BRANCH    SLOT  STACK  RUNS HERE  VS MAIN
-shop-cart      cart      1     up     deps, web  in step
-shop-checkout  checkout  -     -      deps, web  behind main in api  (4 behind, 1 ahead)
-shop-notes     notes     2     up     api        in step  (2 ahead)
-shop-search    search    -     -      api        behind main in web  (4 behind, 1 ahead)
+WORKTREE       BRANCH    SLOT  STACK  PR          RUNS HERE  VS MAIN
+shop-cart      cart      1     up     #5 merged   deps, web  in step
+shop-checkout  checkout  -     -      #6 draft    deps, web  behind main in api  (4 behind, 1 ahead)
+shop-notes     notes     2     up     #7 ✓        api        in step  (2 ahead)
+shop-search    search    -     -      -           api        behind main in web  (4 behind, 1 ahead)
+On a merged or closed PR, nothing left to do: shop-cart.
 
 ok: main's stack is up and runs what main has checked out.
 </pre>
     </div>
-    <p><code>SLOT -</code> is a worktree that never started a stack. <code>STACK</code> is <code>up</code>, <code>up, 1 problem</code> (run <code>hydra status</code> there for it), <code>idle-stopped</code> (<a href="#idle">stopped for being unused</a>) or <code>-</code>. <code>VS MAIN</code> says whether the branch and main are <a href="#instep">in step</a>, then how many commits each side has that the other lacks. It starts with <code>!</code> when the branch is <a href="#far-behind">far behind main</a>, and then ends with <code>merging main conflicts in N files</code> when it would.</p>
+    <p><code>SLOT -</code> is a worktree that never started a stack. <code>STACK</code> is <code>up</code>, <code>up, 1 problem</code> (run <code>hydra status</code> there for it), <code>idle-stopped</code> (<a href="#idle">stopped for being unused</a>) or <code>-</code>. <code>PR</code> is its <a href="#prs">pull request</a> in a few words (<code>#7 ✓</code>, <code>#6 draft</code>, <code>#9 ✗ checks</code>, <code>#5 merged</code>), or <code>-</code>; the column is there only when some branch has a PR known. The worktrees and branches on a merged or closed PR are named on a line under the tables, and <code>(no PR status: gh isn't logged in: gh auth login)</code> says why there is none when gh can't be asked (nothing is said for a repository with no remote on a server). <code>VS MAIN</code> says whether the branch and main are <a href="#instep">in step</a>, then how many commits each side has that the other lacks. It starts with <code>!</code> when the branch is <a href="#far-behind">far behind main</a>, and then ends with <code>merging main conflicts in N files</code> when it would.</p>
 
     <p>When a worktree sits on PR stack branches that no worktree has checked out (<a href="#stacks-bare">branches with no worktree</a>), a second table lists them, each against its parent, with the worktrees stacked on it. Like a worktree behind main, one behind its parent is said here and not as a problem; <code>hydra status</code> in a worktree stacked on it warns.</p>
     <div class="code">
@@ -590,69 +593,82 @@ ring-schema  main         ! 4 commits behind  ring-web
   <section id="dashboard">
     <h2>The dashboard</h2>
     <p>Type <code>hydra</code>, with nothing after it, in a terminal anywhere in the repository. It opens a dashboard of the main checkout and every worktree, with the one you typed it in chosen, and keeps itself up to date. It only shows what hydra's commands would tell you, and every key runs one of them.</p>
-    <div class="code term">
-      <div class="file">hydra, 100 columns</div>
-<pre><b class="m"> hydra</b><b>  main</b>   main <b class="x">up</b> · 1 of 5 worktrees up · <b class="w">5 out of date</b>
-<span class="s">╭─ </span><b>Checkouts</b> 6<span class="s"> ────────────────────────────────────────────────────────────────────────────────────╮</span>
-<span class="s">│</span> <span class="x">●</span> <b class="m">main</b>                                                  <span class="x">up           </span> <span class="c">                up to date</span> <span class="s">│</span>
-<span class="s">│</span><span class="s hl">▌</span><span class="c hl">├─</span><span class="x hl">●</span><span class="hl"> </span><b class="s hl">api</b><span class="hl">                                                 </span><span class="x hl">up           </span><span class="hl"> </span><span class="w hl">             1 behind main</span><span class="hl"> </span><span class="s">│</span>
-<span class="s">│</span> <span class="c">├─</span><span class="c">○</span> <b>clash</b>                                               <span class="c">down         </span> <span class="r">1 behind main · 1 conflict</span> <span class="s">│</span>
-<span class="s">│</span> <span class="c">└─</span><span class="c">○</span> <b>web</b>                                                 <span class="c">down         </span> <span class="w">             1 behind main</span> <span class="s">│</span>
-<span class="s">│</span> <span class="c">  └─</span><span class="c">○</span> <b>stacked</b>                                           <span class="c">down         </span>            <span class="w">↑ </span><span class="c">web is behind</span> <span class="s">│</span>
-<span class="s">│</span> <span class="c">    └─</span><span class="c">○</span> <b>deeper</b>                                          <span class="c">down         </span>            <span class="w">↑ </span><span class="c">web is behind</span> <span class="s">│</span>
-<span class="s">╰──────────────────────────────────────────────────────────────────────────────────────────────────╯</span>
-<span class="c">╭─ </span><b>api</b><span class="c">  </span><span class="x">●</span><b class="x"> up</b><span class="c"> ──────────────────────────────────────────────────────────────────────────────────────╮</span>
-<span class="c">│</span> api · ~/code/shop/api                                                 <span class="c">                           │</span>
-<span class="c">│</span> <b>85fb02ad0 </b>api: orders                                                                            <span class="c">│</span>
-<span class="c">│</span>                                                                                                  <span class="c">│</span>
-<span class="c">│</span> <b class="x">✓ </b><span class="x">nothing wrong</span>                                                                                  <span class="c">│</span>
-<span class="c">│</span>                                                                                                  <span class="c">│</span>
-<span class="c">│</span> <b class="s">⇅ </b><b>vs main</b>  1 behind · 1 ahead                                                                    <span class="c">│</span>
-<span class="c">│</span>   update: main would be merged in (1 commit)                                                     <span class="c">│</span>
-<span class="c">│</span>                                                                                                  <span class="c">│</span>
-<span class="c">│</span> <b class="s">◆ </b><b>Runs here</b>  1/1 ready                                                                           <span class="c">│</span>
-<span class="c">│</span>   <span class="x">●</span> api    <span class="x">running       </span>  changed: apps/api/orders.go                                           <span class="c">│</span>
-<span class="c">│</span>                                                                                                  <span class="c">│</span>
-<span class="c">│</span> <b class="c">◇ </b><b>From main</b>  1 used, 1 more unused                                                               <span class="c">│</span>
-<span class="c">│</span>   <span class="x">●</span> db                                                                                           <span class="c">│</span>
-<span class="c">│</span>                                                                                                  <span class="c">│</span>
-<span class="c">│</span>                                                                                                  <span class="c">│</span>
-<span class="c">│</span>                                                                                                  <span class="c">│</span>
-<span class="c">│</span>                                                                                                  <span class="c">│</span>
-<span class="c">│</span>                                                                                                  <span class="c">│</span>
-<span class="c">│</span>                                                                                                  <span class="c">│</span>
-<span class="c">╰──────────────────────────────────────────────────────────────────────────────────────────────────╯</span>
- <span class="x">✓ hydra up -D in api: Starting Process Compose in detached mode. Use &#x27;process-compose attach&#x27; to c…</span>
- <b class="s">⏎</b><span class="c"> open  ·  </span><b class="s">d</b><span class="c"> down  ·  </span><b class="s">r</b><span class="c"> restart  ·  </span><b class="s">l</b><span class="c"> logs  ·  </span><b class="s">m</b><span class="c"> merge main</span>      <b class="s">U</b><span class="c"> update all  ·  </span><b class="s">?</b><span class="c"> help  ·  </span><b class="s">q</b><span class="c"> quit</span></pre>
+    <div class="code">
+      <div class="file">hydra, in examples/demo/dashboard.sh, 80 columns</div>
+<pre data-lang="text">
+ hydra  main   main up · 0 of 6 worktrees up · 8 out of date · 1 on a merged PR
+╭─ Checkouts 9 ────────────────────────────────────────────────────────────────╮
+│ ● main                    up                                      up to date │
+│▌├─○ api                   down          #7 ✓                   1 behind main │
+│ ├─○ clash                 down                    1 behind main · 1 conflict │
+│ ├─◇ ring-schema           no checkout                          1 behind main │
+│ │ └─◇ ring-core           no checkout                ↑ ring-schema is behind │
+│ │   └─○ ring-web          down                       ↑ ring-schema is behind │
+│ └─○ web                   down                                 1 behind main │
+│   └─○ stacked             down                               ↑ web is behind │
+│     └─○ deeper            down          #8 merged   PR merged: nothing to do │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ api  ○ down ────────────────────────────────────────────────────────────────╮
+│ api · ~/code/shop/api                                                        │
+│ 85fb02ad0 api: orders                                                        │
+│                                                                              │
+│ ◎ PR  #7 open · review required · checks passing                             │
+│   https://example.invalid/demo/repo/pull/7  p opens it                       │
+│                                                                              │
+│ ⇅ vs main  1 behind · 1 ahead                                                │
+│   update: main would be merged in (1 commit)                                 │
+│                                                                              │
+│ ◆ Runs here, and why  1                                                      │
+│   ○ api    not started                                                       │
+│     ↳ changed: apps/api/orders.go                                            │
+│ ◇ From main  ● db · 1 unused                                                 │
+│                                                                              │
+│ ✓ nothing in the way: u starts it                                            │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ u up  ·  l logs  ·  m merge main  ·  p PR    U update all  ·  ? help  ·  q quit
+</pre>
     </div>
     <p>The <b>Checkouts</b> panel has one line per checkout, drawn as a tree: main at the top, the worktrees on main under it, and each <a href="#stacks">stacked</a> branch under the branch it is stacked on, joined by thin lines (<code>├─</code>, <code>└─</code>). Branches under the same parent are in order of name, so a row doesn't move when its stack starts or stops; <kbd>↑</kbd> and <kbd>↓</kbd> go down the tree as it reads. The chosen one has a coloured background and a <code>▌</code> at its left edge; the dashboard starts on the one you typed <code>hydra</code> in.</p>
     <p>A branch runs on the code of every branch under it, so hydra only works when each one has what its parent has. Each row says how it stands against its own parent, and a branch whose parent, or any branch above it, is behind is out of date too, even when it has everything its parent has. The first branch of a chain that is behind is in strong yellow (red with conflicts); the branches under it that are in step with their parent say <code>↑ fla-709 is behind</code>, fainter, naming where the chain goes stale. That one is updated first; <kbd>U</kbd> updates every branch in that order. The header counts them: <code>1 of 5 worktrees up · 5 out of date</code>, or <code>all in step</code>. When main is behind its upstream, every branch is, so the header says it once (<code>main up, 10 behind upstream (U)</code>) and the rows don't repeat it.</p>
-    <p>A PR stack is often checked out at its top only. Its lower branches are rows too, in their place in the chain, with a hollow <code>◇</code>, a muted name and <code>no checkout</code> instead of up or down (see <a href="#stacks-bare">branches with no worktree</a>). The same rules apply: below, <code>ring-web</code> merged main straight in, but <code>ring-schema</code> under it didn't, so <code>ring-web</code> is out of date through it. Nothing runs on such a row, so the keys offer only <kbd>m</kbd>, which merges its parent into it without a checkout.</p>
+    <p>A PR stack is often checked out at its top only. Its lower branches are rows too, in their place in the chain, with a hollow <code>◇</code>, a muted name and <code>no checkout</code> instead of up or down (see <a href="#stacks-bare">branches with no worktree</a>). The same rules apply: below, <code>ring-web</code> merged main straight in, but <code>ring-schema</code> under it didn't, so <code>ring-web</code> is out of date through it. Nothing runs on such a row, so the keys offer only <kbd>m</kbd>, which merges its parent into it without a checkout (and <kbd>p</kbd>, with a PR).</p>
+    <p id="dashboard-prs">Each row also has its branch's pull request, briefly, read from GitHub with <a href="#prs">gh</a>: <code>#7 ✓</code>, <code>#10265 draft</code>, <code>#10265 ✗ checks</code>. A branch whose PR is merged or closed has nothing left to do: its row says <code>PR merged: nothing to do</code> in strong magenta in the place of where it stands against its parent, and the header counts them (<code>1 on a merged PR</code>), so a worktree still running a merged branch stands out. Removing it is up to you, or whatever makes your worktrees; hydra never does. Without gh, logged out or offline, there is no PR column and nothing says so but one muted line at the top of <kbd>?</kbd>.</p>
     <div class="code">
       <div class="file">hydra, in examples/demo/dashboard.sh, 80 columns, ring-schema chosen</div>
 <pre data-lang="text">
- hydra  main   main up · 0 of 6 worktrees up · 8 out of date
+ hydra  main   main up · 0 of 6 worktrees up · 8 out of date · 1 on a merged PR
 ╭─ Checkouts 9 ────────────────────────────────────────────────────────────────╮
-│ ● main                              up                            up to date │
-│ ├─○ api                             down                       1 behind main │
-│ ├─○ clash                           down          1 behind main · 1 conflict │
-│▌├─◇ ring-schema                     no checkout                1 behind main │
-│ │ └─◇ ring-core                     no checkout      ↑ ring-schema is behind │
-│ │   └─○ ring-web                    down             ↑ ring-schema is behind │
-│ └─○ web                             down                       1 behind main │
-│   └─○ stacked                       down                     ↑ web is behind │
-│     └─○ deeper                      down                     ↑ web is behind │
+│ ● main                    up                                      up to date │
+│ ├─○ api                   down          #7 ✓                   1 behind main │
+│ ├─○ clash                 down                    1 behind main · 1 conflict │
+│▌├─◇ ring-schema           no checkout                          1 behind main │
+│ │ └─◇ ring-core           no checkout                ↑ ring-schema is behind │
+│ │   └─○ ring-web          down                       ↑ ring-schema is behind │
+│ └─○ web                   down                                 1 behind main │
+│   └─○ stacked             down                               ↑ web is behind │
+│     └─○ deeper            down          #8 merged   PR merged: nothing to do │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ ring-schema  ◇ no checkout ─────────────────────────────────────────────────╮
 │ ring-schema · no checkout                                                    │
 │ f9ce348ec ring: schema                                                       │
 │                                                                              │
+│ ◎ PR  none for this branch                                                   │
+│                                                                              │
 │ ⇅ vs main  1 behind · 1 ahead                                                │
 │   update: main would be merged in (1 commit), without a checkout             │
 │                                                                              │
-│ No worktree has it checked out, so nothing runs it; the branches stacked on  │
-│ it run its code. m merges its parent into it without a checkout (hydra       │
-│ update --branch).                                                            │
+│ ◆ Runs here  nothing: no worktree has it checked out                         │
+│   ring-web, stacked on it, runs its code. m merges its parent into it        │
+│   without a checkout (hydra update --branch).                                │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
  m merge main                                 U update all  ·  ? help  ·  q quit
 </pre>
@@ -662,10 +678,19 @@ ring-schema  main         ! 4 commits behind  ring-web
       <tr><th>Part</th><th>What it says</th></tr>
       <tr><td>The name</td><td>The branch, without its <code>you/</code> prefix. A branch that starts with a ticket id shows it first and its title in words: <code>santiago/fla-709-an-advisor-splits</code> is <code>fla-709 an advisor splits</code>. Branches of one stack often share a ticket (<code>scrm-264-app-ring-schema</code>, <code>-core</code>, <code>-web</code>): when a title doesn't fit, they show the ticket and what tells them apart (<code>scrm-264 schema</code>), and messages and badges name them that way (<code>↑ schema is behind</code>). A detached checkout shows its folder. A branch with no worktree is muted.</td></tr>
       <tr><td>The state</td><td><code>● up</code>; <code>○ down</code> (red for main, which every worktree needs); <code>◌ idle-stopped</code> (hydra stopped it, <a href="#idle">unused</a>); <code>starting 2/3</code> with a spinner, how many of its services are ready; <code>✗ failing</code> (a process here failed); <code>up, 2 issues</code> (up, with problems marked ✗). While a key's command runs in it, a spinner and what it does: <code>starting…</code>, <code>stopping…</code>, <code>restarting api…</code>, <code>checking…</code>. <code>planning</code>: a new worktree hydra hasn't worked out yet. <code>◇ no checkout</code>: a PR stack's branch that no worktree has checked out; nothing runs it.</td></tr>
-      <tr><td>Against its parent</td><td><code>1 behind main</code>, <code>7 behind fla-709</code>: commits its parent (main, or the branch it is stacked on) has that it doesn't; bold where the chain goes stale, plain under a branch that is behind too. The parent's name goes when the line is short of room. <code>1 conflict</code>: merging the parent in (or <code>hydra update</code>) would conflict in that many files, in red. <code>↑ web is behind</code>: in step with its parent, but <code>web</code> above it is behind; update <code>web</code> first. <code>in step</code>: it has everything its parent has, and so does every branch up to main. <code>main is older</code>: main's copy of a service this worktree uses is older than its own (see <a href="#instep">in step with main</a>). <code>landed in web</code>: everything on the branch is in its parent already. For main: commits its upstream has that it doesn't, and uncommitted files, or <code>up to date</code>.</td></tr>
+      <tr><td>Its PR</td><td><code>#10265</code> and one word: <code>open</code>, <code>draft</code>, <code>merged</code>, <code>closed</code>; for an open one, <code>✗ checks</code> (a check failed), <code>✗ review</code> (changes requested), <code>◐ checks</code> (checks running), <code>approved</code>, or <code>✓</code> (checks pass). <code>merged</code> with no number: git alone says so (its commits are in <code>origin/main</code>), gh didn't. The column is as wide as its longest text, and is the first thing to go when the list is narrow (the deepest row needs room for its name); the detail always shows the PR.</td></tr>
+      <tr><td>Against its parent</td><td><code>1 behind main</code>, <code>7 behind fla-709</code>: commits its parent (main, or the branch it is stacked on) has that it doesn't; bold where the chain goes stale, plain under a branch that is behind too. The parent's name goes when the line is short of room. <code>1 conflict</code>: merging the parent in (or <code>hydra update</code>) would conflict in that many files, in red. <code>↑ web is behind</code>: in step with its parent, but <code>web</code> above it is behind; update <code>web</code> first. <code>in step</code>: it has everything its parent has, and so does every branch up to main. <code>main is older</code>: main's copy of a service this worktree uses is older than its own (see <a href="#instep">in step with main</a>). <code>landed in web</code>: everything on the branch is in its parent already. <code>PR merged: nothing to do</code> (or <code>PR closed</code>): its PR is done, whatever else is true. For main: commits its upstream has that it doesn't, and uncommitted files, or <code>up to date</code>.</td></tr>
     </table></div>
-    <p>The panel below is the chosen checkout, with its name and state in the border: its branch, folder and memory; the commit; its problems, the same texts as <a href="#messages">every message</a> that <a href="#status"><code>hydra status</code></a> prints, each with its fix (<code>f runs it</code> marks a fix that is a hydra command), or <code>✓ nothing wrong</code>; how far it is from its parent and from main and what <a href="#updating"><code>hydra update</code></a> would do to it (a conflict names the files); for a stacked branch, its chain, each branch that is behind with how far (<code>main → fla-709 (69 behind) → fla-710</code>), and which one to update first; each service it runs here with its state, its address or port and why it runs here; the services of main's it uses (<code>(routed)</code>: main's copy answering on this worktree's port), and how many it doesn't; and its <a href="#hosts">addresses by name</a>, with <code>hosts</code>. For main, every service it runs, and the ones switched off on one line; while main's stack is down it lists what it would run.</p>
-    <p>At 120 columns or wider the two sit side by side, and the problems get a panel of their own under the list, so the fixes stay in view however long the detail is. Narrower, the list is on top and the detail leads with the problems. No line wraps at any width: what doesn't fit is cut with <code>…</code>, and <kbd>pgdn</kbd> scrolls the detail.</p>
+    <p>The panel below is the chosen checkout, with its name and state in the border: what runs there, and why. Under its branch, folder, memory and commit, always in this order:</p>
+    <ol>
+      <li><b>◎ PR</b>: its number, state, review and checks (<code>#7 open · review required · checks passing</code>) and its link, which <kbd>p</kbd> opens. Merged or closed: <code>PR merged: nothing left to do here</code>. <code>none for this branch</code> when gh found none; nothing at all when gh can't be asked.</li>
+      <li><b>⇅ vs its parent</b>: how far it is from its parent and from main, and what <a href="#updating"><code>hydra update</code></a> would do to it (a conflict names the files); for a stacked branch, its chain, each branch that is behind with how far (<code>main → fla-709 (69 behind) → fla-710</code>), and which one to update first.</li>
+      <li><b>◆ Runs here, and why</b>: each service it runs here with its state and its address by name, URL or port, and under it (<code>↳</code>) why it runs here: the files that changed (<code>changed: apps/api/orders.go</code>) or what pulls it in.</li>
+      <li><b>◇ From main</b>, on one line: main's services it uses, with their state (<code>(routed)</code>: main's copy answering on this worktree's port), and how many it doesn't.</li>
+      <li>Its <b>problems</b>, the same texts as <a href="#messages">every message</a> that <a href="#status"><code>hydra status</code></a> prints, each with its fix (<code>f runs it</code> marks a fix that is a hydra command), or <code>✓ nothing wrong</code>.</li>
+    </ol>
+    <p>For main: every service it runs (the ones switched off on one line; while its stack is down, what it would run), how it stands against its upstream, and its problems. For a branch with no checkout: its PR, its chain, and that nothing runs it, naming the worktrees stacked on it that run its code.</p>
+    <p>At 120 columns or wider the two sit side by side, and the problems get a panel of their own under the list, so the fixes stay in view however long the detail is. Narrower, the list is on top and the detail ends with the problems. No line wraps at any width: what doesn't fit is cut with <code>…</code>, and <kbd>pgdn</kbd> scrolls the detail.</p>
 
     <h3>The keys</h3>
     <p>Each key runs the hydra command an agent would type, in the chosen checkout. Anything that stops a stack, runs a fix or moves a branch asks first.</p>
@@ -678,6 +703,7 @@ ring-schema  main         ! 4 commits behind  ring-web
       <tr><td><kbd>r</kbd></td><td>Restart a service: <code>hydra process restart NAME</code>. With more than one, it asks which.</td></tr>
       <tr><td><kbd>l</kbd></td><td>Follow a service's output: <code>hydra process logs NAME -f</code>, one of this worktree's or of main's it uses. ctrl-c comes back.</td></tr>
       <tr><td><kbd>o</kbd></td><td>Open a service's <a href="#hosts">address by name</a> in the browser (<code>open</code>, or <code>xdg-open</code> on Linux). With more than one, it asks which. Only with <code>hosts</code>.</td></tr>
+      <tr><td><kbd>p</kbd></td><td>Open its pull request in the browser. Also on a branch with no checkout.</td></tr>
       <tr><td><kbd>f</kbd></td><td>Run the fix of one of its problems. Shows the problem and the command, and asks.</td></tr>
       <tr><td><kbd>m</kbd></td><td>In a worktree: merge its parent into it (main, or the branch it is stacked on), <a href="#update-here"><code>hydra update --here</code></a>. On a branch with no checkout: <a href="#update-branch"><code>hydra update --branch NAME</code></a>, from the main checkout, which needs no checkout. Shows the dry run, then asks. On a branch in step with its parent under one that is behind, it says which branch to update first instead.</td></tr>
       <tr><td><kbd>U</kbd></td><td>Update everything: <a href="#updating"><code>hydra update</code></a>, which pulls main. Shows the dry run, then asks.</td></tr>
@@ -686,17 +712,18 @@ ring-schema  main         ! 4 commits behind  ring-web
       <tr><td><kbd>?</kbd></td><td>List the keys and what the glyphs, lines and words in the list mean. esc closes it.</td></tr>
       <tr><td><kbd>q</kbd>, ctrl-c</td><td>Quit. Every stack keeps running.</td></tr>
     </table></div>
-    <p>The line at the bottom shows only the keys that apply to the chosen checkout (<kbd>u</kbd> when its stack is down, <kbd>⏎</kbd> <kbd>d</kbd> <kbd>r</kbd> when it is up, <kbd>f</kbd> when a problem has a fix it can run, <kbd>m</kbd> when the worktree is behind its parent, named: <code>m merge fla-709</code>; on a branch with no checkout, <kbd>m</kbd> alone), and on the right the ones that always do. Any other key on a branch with no checkout says it has none. <kbd>u</kbd>, <kbd>d</kbd> and <kbd>r</kbd> run in the background: the checkout's row and panel show a spinner and how far it got, a line above the keys says what runs, then how it went, and a command that fails shows its output in the panel. A question (<kbd>d</kbd>, <kbd>f</kbd>, the dry run of <kbd>m</kbd> and <kbd>U</kbd>) takes the panel's place in a yellow box, and <kbd>y</kbd> or <kbd>n</kbd> answers it. <kbd>⏎</kbd>, <kbd>l</kbd>, <kbd>f</kbd> and the yes of <kbd>m</kbd> and <kbd>U</kbd> take the whole terminal, and give it back when they end.</p>
+    <p>The line at the bottom shows only the keys that apply to the chosen checkout (<kbd>u</kbd> when its stack is down, <kbd>⏎</kbd> <kbd>d</kbd> <kbd>r</kbd> when it is up, <kbd>f</kbd> when a problem has a fix it can run, <kbd>m</kbd> when the worktree is behind its parent, named: <code>m merge fla-709</code>, and not on a merged PR; <kbd>p</kbd> when it has a PR; on a branch with no checkout, <kbd>m</kbd> and <kbd>p</kbd> alone), and on the right the ones that always do. Any other key on a branch with no checkout says it has none. <kbd>u</kbd>, <kbd>d</kbd> and <kbd>r</kbd> run in the background: the checkout's row and panel show a spinner and how far it got, a line above the keys says what runs, then how it went, and a command that fails shows its output in the panel. A question (<kbd>d</kbd>, <kbd>f</kbd>, the dry run of <kbd>m</kbd> and <kbd>U</kbd>) takes the panel's place in a yellow box, and <kbd>y</kbd> or <kbd>n</kbd> answers it. <kbd>⏎</kbd>, <kbd>l</kbd>, <kbd>f</kbd> and the yes of <kbd>m</kbd> and <kbd>U</kbd> take the whole terminal, and give it back when they end.</p>
 
     <h3 id="dashboard-open">Opening a stack, and coming back</h3>
     <p><kbd>⏎</kbd> hands the terminal to <code>process-compose attach</code> on the chosen checkout's stack: every process, its state and its log, the same as <code>hydra attach</code> there. To come back, press <b>F10</b> or <b>ctrl-c</b>. process-compose asks <code>Detach from the remote project?</code>; choose <b>Yes</b>. You are back in the dashboard, and the stack is still running. <kbd>q</kbd> does nothing on that screen.</p>
 
     <h3>How fresh it is</h3>
     <p>A spinner in the header shows while it reads everything again (<kbd>R</kbd>) or works out a new worktree. Process states are read every second, memory every 5 seconds. What a worktree would run takes git a walk of its working tree, so it is worked out again every 30 seconds while its stack runs and every 2 minutes otherwise. Where a worktree stands against main is worked out again when its branch, main or the branch it is stacked on moves, when files are staged or a merge is begun, resolved or aborted there, and at least every 2 minutes. What moved goes first: after main moves, the worktree you just merged doesn't wait behind the rest. After a key's command, that checkout is read again at once; <kbd>R</kbd> reads everything. With 30 worktrees it costs about a tenth of one core, and it never takes git's index lock.</p>
+    <p>PRs are asked of GitHub every 3 minutes, on <kbd>R</kbd>, and within 15 seconds of a new branch showing up: one <code>gh pr list</code> for every branch shown (one more per 25 branches), in the background, so a slow GitHub never holds up the screen; it gives up after 20 seconds. The answer is kept in <a href="#files">the cache</a>, so the next dashboard starts with it. <kbd>?</kbd> says when gh was last read, or why it can't be.</p>
     <p>New worktrees show up within a second, and removed ones go. Making and removing worktrees isn't the dashboard's job: <code>git worktree add</code>, or whatever makes them for you.</p>
 
     <h3>What it needs</h3>
-    <p>The dashboard is a Node.js program inside the hydra binary, written to your cache directory the first time a build opens it (see <a href="#files">files hydra writes</a>). It needs Node.js 20 or later on <code>PATH</code>. Without a terminal (an agent's shell, a script, a pipe), with any argument, or in a repository whose stack file has no <code>x-hydra</code> block, <code>hydra</code> does what it always did: it hands its arguments to process-compose, so bare <code>hydra</code> there starts this checkout, like <code>hydra up</code>.</p>
+    <p>The dashboard is a Node.js program inside the hydra binary, written to your cache directory the first time a build opens it (see <a href="#files">files hydra writes</a>). It needs Node.js 20 or later on <code>PATH</code>. The PR column needs <a href="#prs">gh</a>, logged in; it is optional. Without a terminal (an agent's shell, a script, a pipe), with any argument, or in a repository whose stack file has no <code>x-hydra</code> block, <code>hydra</code> does what it always did: it hands its arguments to process-compose, so bare <code>hydra</code> there starts this checkout, like <code>hydra up</code>.</p>
 
     <h3 id="json">As JSON: hydra status --json</h3>
     <p>What the dashboard shows comes from <code>hydra status --json --watch</code>, and scripts and agents can read it too. <code>hydra status --json</code> prints one JSON object and exits:</p>
@@ -741,10 +768,13 @@ ring-schema  main         ! 4 commits behind  ring-web
           "run": "hydra process restart api" }
       ],
       "update": { "parent": "main", "behind": 1, "action": "merge", "note": "main would be merged in (1 commit)" },
+      "pr": { "number": 7, "state": "open", "review": "review required", "checks": "passing",
+              "url": "https://github.com/me/shop/pull/7", "base": "main" },
       "plannedAt": "2026-11-25T12:15:51.080761-08:00",
       "gitAt": "2026-11-25T12:15:51.264949-08:00"
     }
-  ]
+  ],
+  "prs": { "at": "2026-11-25T12:14:02.118204-08:00" }
 }
 </pre>
     </div>
@@ -766,6 +796,8 @@ ring-schema  main         ! 4 commits behind  ring-web
       <tr><td><code>strays</code></td><td>Programs outside any stack that hold one of its ports, each with <code>port</code>, <code>service</code>, <code>pid</code>, <code>command</code>, <code>dir</code> (its working directory) and <code>dirGone</code> (that directory no longer exists). Absent when there are none; each one is also in <code>problems</code>. Looked for every 15 seconds in a watch.</td></tr>
       <tr><td><code>idleStopped</code></td><td>The stack isn't running because nobody used it for <a href="#idle"><code>idle_stop</code></a>: <code>at</code> (when hydra stopped it) and <code>after</code> (the <code>idle_stop</code>, <code>"2h"</code>). Absent otherwise.</td></tr>
       <tr><td><code>pending</code></td><td>Not planned yet: the first seconds of a watch.</td></tr>
+      <tr><td><code>pr</code></td><td>The branch's <a href="#prs">pull request</a>, on a worktree and on each of <code>branches</code>: <code>number</code>, <code>state</code> (<code>open</code>, <code>draft</code>, <code>merged</code>, <code>closed</code>), <code>review</code> (<code>approved</code>, <code>changes requested</code>, <code>review required</code>), <code>checks</code> (<code>passing</code>, <code>failing</code>, <code>pending</code>), <code>url</code>, <code>base</code> (the branch it merges into) and <code>mergedLocally</code> (its commits are in <code>origin/main</code>, merged with a merge commit: git alone says so; without gh, <code>state</code> is then <code>merged</code> and there is no number). Absent when no PR is known.</td></tr>
+      <tr><td><code>prs</code></td><td>Where <code>pr</code> comes from: <code>at</code> (when gh was last asked) and <code>error</code> (why it can't be: <code>gh isn't installed…</code>, <code>gh isn't logged in…</code>, <code>gh didn't answer in time…</code>, <code>the repository has no remote…</code>). The last PRs known stay with an <code>error</code>.</td></tr>
     </table></div>
     <p><code>hydra status --json --watch</code> prints one such object per line, every second, and reads lines on its standard input: <code>refresh</code> reads everything again now, <code>refresh ROOT</code> reads that worktree again. It ends when its input closes.</p>
   </section>
@@ -1093,7 +1125,7 @@ $ codex mcp add hydra -- hydra mcp                   # Codex
       <tr><td><code>down</code></td><td><code>hydra down</code>: stops this worktree's stack, and nothing else.</td><td>Refused</td></tr>
       <tr><td><code>update_here</code></td><td><a href="#update-here"><code>hydra update --here</code></a>: merges main into this worktree and restarts what that touched. <code>dry_run: true</code> says what it would do. A conflict or uncommitted work comes back as an error, left to the agent.</td><td>Refused</td></tr>
       <tr><td><code>main_status</code></td><td>Main's stack, read-only: whether it is up, its commit, each process's state, its problems. From a worktree, also which of main's services this worktree uses, and why.</td><td>Reads main's stack</td></tr>
-      <tr><td><code>worktrees</code></td><td>Main and every worktree of the repository, in the order to update them: each worktree right before the branches stacked on it. For each worktree: its branch, its parent (main, or the branch it is stacked on), commits behind and ahead of it, every file merging the parent in conflicts in, uncommitted changes, what <code>update_worktree</code> would do (<code>next</code>: <code>merge</code>, <code>resolve</code>, <code>skip</code> or <code>nothing</code>), its stack (<code>up</code>, <code>down</code>, <code>idle-stopped</code>) and slot. The branches of a PR stack that a worktree sits on but no worktree has checked out are listed in their place too, with <code>checkout: false</code>, no path, the branch as their name and stack <code>none</code> (see <a href="#stacks-bare">branches with no worktree</a>). For main: how far behind its upstream it is as of the last fetch, uncommitted changes, whether its stack is up.</td><td>Reads</td></tr>
+      <tr><td><code>worktrees</code></td><td>Main and every worktree of the repository, in the order to update them: each worktree right before the branches stacked on it. For each worktree: its branch, its parent (main, or the branch it is stacked on), commits behind and ahead of it, every file merging the parent in conflicts in, uncommitted changes, what <code>update_worktree</code> would do (<code>next</code>: <code>merge</code>, <code>resolve</code>, <code>skip</code> or <code>nothing</code>), its stack (<code>up</code>, <code>down</code>, <code>idle-stopped</code>) and slot, and its <a href="#prs">PR</a> (<code>pr</code>, as in <a href="#json"><code>hydra status --json</code></a>; one merged or closed has <code>next</code> <code>skip</code>: nothing left to do). The branches of a PR stack that a worktree sits on but no worktree has checked out are listed in their place too, with <code>checkout: false</code>, no path, the branch as their name and stack <code>none</code> (see <a href="#stacks-bare">branches with no worktree</a>). For main: how far behind its upstream it is as of the last fetch, uncommitted changes, whether its stack is up.</td><td>Reads</td></tr>
       <tr><td><code>update_main</code></td><td><a href="#updating"><code>hydra update --main-only</code></a>: pulls main (fast-forward only) and brings its stack to the new commit. No worktree is merged. <code>dry_run: true</code> fetches and says how far main would move and what would restart. Its description tells the agent to call it only when you asked; an <a href="#mcp-rules">ask rule</a> makes sure.</td><td>Allowed</td></tr>
       <tr><td><code>update_worktree</code></td><td><a href="#update-here"><code>hydra update --here</code></a>, run in the <code>worktree</code> named (its folder, branch or path): merges its parent in and restarts what that touched in its stack. Main is left alone. A conflict comes back as an error naming every file, with the worktree as it was. <code>since</code>: after a merge made by hand, the commit before it; what the merge touched is restarted too. Given a branch with no checkout, it runs <a href="#update-branch"><code>hydra update --branch</code></a> instead: a clean merge without a checkout; a conflict comes back as an error with the steps for a temporary worktree. <code>dry_run: true</code> says what it would do.</td><td>Allowed</td></tr>
     </table></div>
@@ -1146,10 +1178,11 @@ up {"services": ["worker"]}, then wait {"processes": ["worker"]}
     </div>
     <p>What you type after it is added to the workflow and wins where they disagree. The agent then:</p>
     <ol>
-      <li>Calls <code>worktrees</code> and shows you the plan, one row per worktree in order: a clean merge, conflicts to resolve (which files), skipped (uncommitted work, a merge already under way), or nothing to do. It waits for your yes.</li>
+      <li>Calls <code>worktrees</code> and shows you the plan, one row per worktree in order: a clean merge, conflicts to resolve (which files), skipped (uncommitted work, a merge already under way, its PR is merged or closed), or nothing to do. It waits for your yes.</li>
       <li>Calls <code>update_main</code> with <code>dry_run</code>, then without. If it fails, it stops and tells you what it printed. When main moved, it calls <code>worktrees</code> again, since pulling main can add conflicts, and says what changed.</li>
       <li>Goes through the worktrees in order, a branch only after the one it is stacked on. A clean merge is <code>update_worktree</code>, also for a stack branch with no worktree, which it merges without one; such a branch's conflict it resolves in a temporary worktree (<code>git worktree add</code>), which it removes afterwards. A conflict it resolves in that worktree with git: <code>git merge</code> the parent, read both sides, the merge base and the commits on each side, keep both sides' intent, run the checks the project's <code>AGENTS.md</code> names, commit with git's own message, then <code>update_worktree</code> again with <code>since</code>, which restarts what the merge touched. When a conflict is ambiguous (behaviour changed on both sides, migrations clash, it can't tell what one side meant) it runs <code>git merge --abort</code> and keeps the question for you, and goes on with the worktrees that don't sit on that one.</li>
-      <li>Ends with a table: merged cleanly, resolved (files, checks run), skipped (why), stopped (the question), failed (the error), and what runs.</li>
+      <li>Never merges into a branch whose PR is merged or closed: it lists those as on a merged PR, nothing left to do. A branch stacked on one is updated as usual.</li>
+      <li>Ends with a table: merged cleanly, resolved (files, checks run), skipped (why), on a merged PR, stopped (the question), failed (the error), and what runs.</li>
     </ol>
     <p>It never pushes, rebases, resets or forces anything, never skips hooks, never removes a worktree but the temporary one it made, and leaves a worktree with uncommitted work alone. <code>update_worktree</code> runs one at a time per repository; an agent with subagents may resolve independent chains in parallel. The <a href="#dashboard">dashboard</a> follows along: a merge, a merge begun or aborted, or main moving shows within a second or two.</p>
     <p>What <code>worktrees</code> answers, for main, two stacked worktrees, two of their own, and a PR stack checked out at its top only (<code>m2</code> has no worktree):</p>
@@ -1352,10 +1385,19 @@ note: changed, but in no service's paths, so nothing runs here for them: package
     <h3 id="stacks-bare">Branches with no worktree</h3>
     <p>A PR stack is often checked out at its top only: <code>main ← schema ← core ← web</code>, with one worktree, for <code>web</code>. <code>web</code> runs <code>schema</code>'s and <code>core</code>'s code, so it is only as current as they are: if someone merged main straight into <code>web</code>, <code>web</code> is in step with main, but <code>schema</code> and <code>core</code> still lack main's commits, and the pull requests under <code>web</code> don't have them. hydra counts such branches as part of the chain:</p>
     <ul>
-      <li><b>Where it finds them.</b> First in the stacks the <code>gh stack</code> extension keeps (<code>.git/gh-stack</code>): a stack on main that holds a worktree's branch says what each branch sits on, up to the highest one checked out. Otherwise from ancestry: the local branches the worktree's branch contains that main doesn't, when they form a strict chain, each containing the one under it. A branch that only took merges since (its parent merged in) still counts. <code>backup/*</code>, branches merged into main (or its remote-tracking branch), a sibling with commits of its own (a prototype cut from <code>schema</code>), and branches merged in from elsewhere that make no chain never do. Only branches under a worktree's branch count: one nobody runs needs nothing. hydra never asks GitHub.</li>
+      <li><b>Where it finds them.</b> First in the stacks the <code>gh stack</code> extension keeps (<code>.git/gh-stack</code>): a stack on main that holds a worktree's branch says what each branch sits on, up to the highest one checked out. Otherwise from ancestry: the local branches the worktree's branch contains that main doesn't, when they form a strict chain, each containing the one under it. A branch that only took merges since (its parent merged in) still counts. <code>backup/*</code>, branches merged into main (or its remote-tracking branch), a sibling with commits of its own (a prototype cut from <code>schema</code>), and branches merged in from elsewhere that make no chain never do. Only branches under a worktree's branch count: one nobody runs needs nothing. Finding them never asks GitHub (only their <a href="#prs">PR status</a> does).</li>
       <li><b>Where you see them.</b> In <a href="#status"><code>hydra status --all</code></a>, in <a href="#json"><code>hydra status --json</code></a> (<code>branches</code>), in <a href="#dashboard">the dashboard</a> (<code>◇ no checkout</code>) and in the <a href="#mcp"><code>worktrees</code></a> tool, each against its parent. <code>web</code> is then "on <code>core</code>", and <code>hydra status</code> there warns when one of them is behind its parent.</li>
       <li><b>How they are updated.</b> <code>hydra update</code> goes parents first, main, <code>schema</code>, <code>core</code>, <code>web</code>, and merges a branch with no worktree without a checkout; <code>hydra update --branch NAME</code> does one. A conflict needs a checkout: a temporary worktree (see <a href="#update-branch">a branch with no checkout</a>).</li>
       <li><b>What runs doesn't change.</b> A branch with no worktree has no files of its own to run from, and what it changed is in <code>web</code>'s worktree, so it runs there as part of <code>web</code>'s layer.</li>
+    </ul>
+
+    <h3 id="prs">Pull requests</h3>
+    <p>With 20 worktrees, some run a branch whose pull request was merged days ago: nothing is left to do there, and its stack is memory spent on nothing. hydra shows each branch's PR, briefly, in <a href="#dashboard-prs">the dashboard</a>, <a href="#status"><code>hydra status</code></a>, <a href="#json"><code>hydra status --json</code></a> (<code>pr</code>) and the <a href="#mcp"><code>worktrees</code></a> tool, so they stand out. It only reads: it never pushes, comments on, edits or closes a PR, and never removes a worktree.</p>
+    <ul>
+      <li><b>From GitHub, with gh.</b> One <code>gh pr list --state all --search "head:a head:b …"</code> in the main checkout, for every branch shown (worktrees and branches with no worktree; one call per 25 branches), with the number, state, review and checks of each. A branch with several PRs gets its open one, else its newest; a fork's PR on a branch of the same name isn't counted. It needs <a href="https://cli.github.com">gh</a>, logged in (<code>gh auth login</code>), and a remote; it uses HTTPS, not SSH. It is optional: without it, there are no PR badges and nothing else changes.</li>
+      <li><b>From git, without GitHub.</b> A branch merged on GitHub with a merge commit is in <code>origin/main</code> after a fetch, off its first-parent line; hydra sees that alone (<code>mergedLocally</code>), offline. A branch just cut from main, with no commit of its own, doesn't count. A squash or rebase merge leaves no trace in git: only gh tells those.</li>
+      <li><b>How often.</b> The dashboard asks every 3 minutes, on <kbd>R</kbd>, and when a new branch shows up, in the background, giving up after 20 seconds. <code>hydra status</code> and the MCP tools use the answer when it is less than 3 minutes old, and otherwise ask, waiting up to 8 seconds. The answer is kept in the cache (<a href="#files">files hydra writes</a>). A failed ask keeps the PRs known before and says why.</li>
+      <li><b>Merged or closed.</b> The dashboard marks the row <code>PR merged: nothing to do</code> and counts it in the header; <code>hydra status</code> says <code>nothing left to do here</code>; the <code>worktrees</code> tool's <code>next</code> is <code>skip</code>, so the <code>update_all</code> workflow leaves it alone and reports it. <code>hydra update</code> itself still merges into it: it doesn't ask GitHub.</li>
     </ul>
   </section>
 
@@ -1878,7 +1920,8 @@ $ hydra plan --route web.api=local       # also starts api here
     <div class="table"><table>
       <tr><th>Variable</th><th>Meaning</th></tr>
       <tr><td><code>PC_PORT_NUM</code>, <code>PC_ADDRESS</code></td><td>process-compose's own: where the main checkout's process-compose listens (default localhost:8080). <code>-p</code> and <code>--address</code> on the command line win. hydra records the answer when main's stack starts.</td></tr>
-      <tr><td><code>HYDRA_CACHE_DIR</code></td><td>Where hydra writes the dashboard's script, instead of the user's cache directory.</td></tr>
+      <tr><td><code>HYDRA_CACHE_DIR</code></td><td>Where hydra writes the dashboard's script and the last PR status, instead of the user's cache directory.</td></tr>
+      <tr><td><code>HYDRA_GH</code></td><td>The gh hydra runs for <a href="#prs">PR status</a>, instead of <code>gh</code> on <code>PATH</code> (a fake one, in tests). <code>off</code> turns PR status off.</td></tr>
       <tr><td><code>HYDRA_TLS_DIR</code></td><td>Where hydra keeps its CA and certificate, instead of the user's config directory.</td></tr>
       <tr><td><code>HYDRA_JOURNAL</code></td><td>Set to <code>off</code>: this process writes nothing to <a href="#journal">the journal</a>.</td></tr>
       <tr><td><code>HYDRA_DRY_RUN</code></td><td>Set to anything: print the process-compose command instead of running it.</td></tr>
@@ -1931,6 +1974,7 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>.process-compose/supabase-seeded</code><span class="type">in a worktree</span></td><td>With <code>seed_from_main</code>: what the last copy of main's data did, which <code>hydra db reseed</code> prints.</td></tr>
       <tr><td><code>supabase/.temp/tmp/</code><span class="type">in a worktree</span></td><td>With a Supabase of its own: temporary files the Supabase CLI shares with its containers.</td></tr>
       <tr><td><code>~/Library/Caches/hydra/dashboard-&lt;hash&gt;.mjs</code></td><td>The dashboard: the Node.js script inside the hydra binary, written out the first time a build opens it, under a name that changes with its contents. Ones an earlier build wrote are deleted a day later. On Linux, <code>~/.cache/hydra/</code>; <code>HYDRA_CACHE_DIR</code> puts it elsewhere.</td></tr>
+      <tr><td><code>~/Library/Caches/hydra/prs-&lt;hash&gt;.json</code></td><td>The last <a href="#prs">PR status</a> gh gave for a repository (the hash is of the main checkout's path): when it was asked, which branches, their PRs, and why it failed if it did. The next dashboard starts with it, and <code>hydra status</code> uses it while it is less than 3 minutes old. Safe to delete.</td></tr>
       <tr><td><code>~/Library/Application Support/hydra/</code></td><td>With TLS fronts: hydra's local CA and certificate (<code>ca.pem</code>, <code>ca-key.pem</code>, <code>cert.pem</code>, <code>key.pem</code>). On Linux, <code>~/.config/hydra/</code>.</td></tr>
     </table></div>
     <p>Deleting <code>hydra-slots.json</code> or <code>hydra-baseline.json</code> while stacks run confuses hydra until they are restarted; with everything stopped, all of these can be deleted and are made again.</p>

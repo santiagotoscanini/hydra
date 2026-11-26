@@ -58,6 +58,27 @@ export interface Update {
 	conflicts?: string[];
 }
 
+/** A branch's pull request, read from GitHub with gh (absent from older
+ *  hydras, and when gh can't be asked). */
+export interface PR {
+	/** absent when only git says it is merged (mergedLocally) */
+	number?: number;
+	state: "open" | "draft" | "merged" | "closed";
+	review?: "approved" | "changes requested" | "review required";
+	checks?: "passing" | "failing" | "pending";
+	url?: string;
+	/** the branch it merges into */
+	base?: string;
+	/** its commits are in origin's main, merged with a merge commit */
+	mergedLocally?: boolean;
+}
+
+/** When gh was last asked for the PRs, and why it can't be. */
+export interface PRSource {
+	at?: string;
+	error?: string;
+}
+
 export interface WorktreeState {
 	root: string;
 	dir: string;
@@ -75,6 +96,7 @@ export interface WorktreeState {
 	memory: number;
 	problems: Problem[];
 	update?: Update;
+	pr?: PR;
 	/** Its stack isn't running because nobody used it for x-hydra idle_stop. */
 	idleStopped?: { at: string; after: string };
 	/** More than behind_warn commits behind main, or merging main conflicts. */
@@ -99,6 +121,7 @@ export interface Branch {
 	/** How hydra knows it is a stack branch. */
 	source: "gh-stack" | "ancestry";
 	update?: Update;
+	pr?: PR;
 	pending?: boolean;
 	gitAt: string;
 }
@@ -113,5 +136,6 @@ export interface Snapshot {
 	worktrees: WorktreeState[];
 	/** Stack branches with no checkout (absent from older hydras). */
 	branches?: Branch[];
+	prs?: PRSource;
 	error?: string;
 }

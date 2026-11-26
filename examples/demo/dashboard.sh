@@ -7,7 +7,9 @@
 #     branch that is behind), with the checkout it was started in chosen,
 #     and the chosen one's services and problems in a panel beside or below.
 #     A PR stack whose lower branches have no worktree shows them in their
-#     place, hollow and muted, with only m to offer.
+#     place, hollow and muted, with only m to offer. Each row has its PR
+#     (from a fake gh: the api's open, deeper's merged), and the header
+#     counts the worktrees on a merged PR.
 #  2. u starts a worktree's stack, ⏎ opens it (process-compose attach), and
 #     F10 or ctrl-c, then Yes, comes back to the dashboard with the stack
 #     still running. d stops it, after asking.
@@ -99,35 +101,53 @@ g worktree add -q -b deeper "$repo/deeper" stacked
 (cd "$repo/deeper" && put apps/web/deeper.tsx && g add -A && g commit -qm "web: deeper")
 "$H" up -D -L "$repo/main.log" >/dev/null
 
+# A fake gh (HYDRA_GH), so nothing reaches GitHub: the api's PR is open with
+# its checks passing, deeper's is merged. hydra asks only with a remote.
+g remote add origin https://example.invalid/demo/repo.git
+cat >"$repo/bin/gh" <<'SH'
+#!/bin/sh
+cat <<'JSON'
+[{"number":7,"state":"OPEN","isDraft":false,"headRefName":"api","baseRefName":"main","reviewDecision":"REVIEW_REQUIRED","url":"https://example.invalid/demo/repo/pull/7","statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]},
+ {"number":8,"state":"MERGED","isDraft":false,"headRefName":"deeper","baseRefName":"stacked","reviewDecision":"APPROVED","url":"https://example.invalid/demo/repo/pull/8","statusCheckRollup":[]}]
+JSON
+SH
+chmod +x "$repo/bin/gh"
+
 T new -d -s keep "sleep 100000"
 start() { # cols rows
   T kill-session -t d 2>/dev/null || true
   T new -d -s d -x "$1" -y "$2" -c "$repo/api" \
-    "env PC_PORT_NUM=$PC_PORT_NUM HYDRA_CACHE_DIR=$repo/cache $H; echo EXITED-\$?; sleep 600"
+    "env PC_PORT_NUM=$PC_PORT_NUM HYDRA_CACHE_DIR=$repo/cache HYDRA_GH=$repo/bin/gh $H; echo EXITED-\$?; sleep 600"
   waitfor 'Checkouts [0-9]'
   sleep 1
 }
 
 echo "--- 1. bare hydra in the api worktree"
 start 80 34
+waitfor '#7 ✓'
 screen "80 columns"
-T capture-pane -p -t d | grep -qE '▌├─○ api +down +1 behind main' || fail "the api worktree isn't chosen"
+T capture-pane -p -t d | grep -qE '▌├─○ api +down +#7 ✓ +1 behind main' || fail "the api worktree isn't chosen, with its open PR"
 T capture-pane -p -t d | grep -qE '● main +up +up to date' || fail "main isn't up"
 T capture-pane -p -t d | grep -qE '├─○ clash +down +1 behind main · 1 conflict' || fail "the conflict isn't shown"
 T capture-pane -p -t d | grep -qE '└─○ web +down +1 behind main' || fail "web, last on main, isn't drawn so"
 T capture-pane -p -t d | grep -qE '│ {3}└─○ stacked +down +↑ web is behind' || fail "the stack isn't under web, out of date through it"
-T capture-pane -p -t d | grep -qE '│ {5}└─○ deeper +down +↑ web is behind' || fail "the second level isn't under stacked, out of date through web"
+T capture-pane -p -t d | grep -qE '│ {5}└─○ deeper +down +#8 merged +PR merged: nothing to do' || fail "the second level isn't under stacked, marked as on a merged PR"
 T capture-pane -p -t d | grep -qE '├─◇ ring-schema +no checkout +1 behind main' || fail "the stack's bottom branch, with no checkout, isn't shown behind main"
 T capture-pane -p -t d | grep -qE '│ └─◇ ring-core +no checkout +↑ ring-schema is behind' || fail "the middle branch, with no checkout, isn't under ring-schema"
 T capture-pane -p -t d | grep -qE '│ {3}└─○ ring-web +down +↑ ring-schema is behind' || fail "ring-web merged main, but its stack didn't: it isn't out of date"
-T capture-pane -p -t d | grep -qE '0 of 6 worktrees up · 8 out of date' || fail "the header doesn't count what is out of date"
-T capture-pane -p -t d | grep -qE '◆ Runs here' || fail "the chosen worktree's services aren't shown"
+T capture-pane -p -t d | grep -qE '0 of 6 worktrees up · 8 out of date · 1 on a merged PR' || fail "the header doesn't count what is out of date, and on a merged PR"
+T capture-pane -p -t d | grep -qE '◎ PR  #7 open · review required · checks passing' || fail "the chosen worktree's PR isn't first in its detail"
+T capture-pane -p -t d | grep -qE '◆ Runs here, and why' || fail "the chosen worktree's services aren't shown"
 T capture-pane -p -t d | python3 -c 'import sys; sys.exit(any(len(l.rstrip("\n")) > 80 for l in sys.stdin))' || fail "a line is wider than 80 columns"
+T send-keys -t d '?'
+waitfor 'PR status from gh, read just now'
+T send-keys -t d Escape
+waitfor 'Checkouts [0-9]'
 T send-keys -t d j j
 waitfor '▌├─◇ ring-schema'
 screen "a branch with no checkout, chosen"
 T capture-pane -p -t d | grep -qE 'ring-schema · no checkout' || fail "the detail doesn't say it has no checkout"
-T capture-pane -p -t d | grep -qE 'No worktree has it checked out' || fail "the detail doesn't say nothing runs it"
+T capture-pane -p -t d | grep -qE 'nothing: no worktree has it checked out' || fail "the detail doesn't say nothing runs it"
 T capture-pane -p -t d | grep -qE '^ m merge main +U update all' || fail "the footer doesn't offer m alone"
 T send-keys -t d u
 waitfor 'ring-schema has no checkout: nothing runs it'

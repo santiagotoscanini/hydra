@@ -19,11 +19,15 @@ import {
 	chainText,
 	firstToUpdate,
 	labelBeside,
+	prColor,
+	prDone,
+	prLong,
+	prShort,
 	type Entry,
 	type Node,
 	type Staleness,
 } from "./model.js";
-import type { Service } from "./types.js";
+import type { PRSource, Service } from "./types.js";
 import { themeFor, type Theme } from "./theme.js";
 
 // ── Colours ───────────────────────────────────────────────────────────
@@ -181,11 +185,14 @@ export function ListRow({
 	width,
 	busy,
 	short,
+	prW = 0,
 }: {
 	node: Node;
 	selected: boolean;
 	width: number;
 	busy?: string;
+	/** The PR column's width; 0: no PR column (none known, or no room). */
+	prW?: number;
 	/** What tells it apart from branches with the same ticket ("schema"),
 	 *  shown after the ticket when the whole title doesn't fit. */
 	short?: string;
@@ -195,7 +202,7 @@ export function ListRow({
 	const st = stateOf(e, busy);
 	const badge = badgeOf(node);
 	const full = displayName(e);
-	const cols = rowColumns(width, len(node.lead));
+	const cols = rowColumns(width - (prW ? prW + 1 : 0), len(node.lead));
 	const n = full.id && short && len(full.id) + 1 + len(full.title) > cols.name ? { id: full.id, title: short } : full;
 	const bg = selected ? selectionBg : undefined;
 	// On the selection's background the words are the terminal's own text
@@ -224,6 +231,7 @@ export function ListRow({
 		...nameFit,
 		{ text: " ".repeat(cols.name - nameLen + 1) },
 		{ text: pad(st.word, cols.state), color: on(st.color), bold: !!bg },
+		...(prW ? [{ text: " " + pad(prShort(e.pr), prW), color: on(prColor(e.pr)), bold: !!bg || prDone(e.pr) }] : []),
 		{ text: " " + " ".repeat(Math.max(0, room - len(text))) },
 		...(badge.mark ? [{ text: badge.mark, color: "yellow" }] : []),
 		{ text, color: on(badge.color), bold: badge.bold || !!bg, dim: badge.dim && !bg },
@@ -242,7 +250,7 @@ function whereOf(s: Service): string {
 	return s.address ?? s.url ?? (s.port ? `:${s.port}` : "");
 }
 
-function serviceRow(s: Service, nameW: number, whereW: number, stateW: number, worktree: boolean): Seg[] {
+function serviceRow(s: Service, nameW: number, whereW: number, stateW: number): Seg[] {
 	const g = healthGlyph(s.health);
 	const where = pad(whereOf(s), whereW);
 	return [
@@ -252,7 +260,6 @@ function serviceRow(s: Service, nameW: number, whereW: number, stateW: number, w
 		{ text: pad(s.state, stateW), color: s.health === "failed" ? "red" : s.health === "up" ? "green" : undefined },
 		{ text: whereW ? " " + where : "", color: "cyan" },
 		{ text: s.memory ? `  ${bytes(s.memory)}` : "" },
-		{ text: worktree && s.why ? `  ${s.why}` : "" },
 	];
 }
 
@@ -269,24 +276,57 @@ export function detailTitle(e: Entry, busy?: string): Seg[] {
 	];
 }
 
-/** The detail as rows of segments, so the caller can show the ones that fit. */
+/** The detail as rows of segments, so the caller can show the ones that
+ *  fit: what runs in the checkout and why, in a fixed order. A worktree's:
+ *  its PR, its chain of branches up to main, what runs here and the files
+ *  that made it, what it takes from main, its problems. Main's: what it
+ *  runs, its upstream, its problems. A branch with no checkout's: its PR,
+ *  its chain, and that nothing runs it. */
 export function detailRows(
 	e: Entry,
 	width: number,
-	opts: { home?: string; busy?: string; problems?: boolean; node?: Node; staleOf?: (e: Entry) => Staleness } = {},
+	opts: {
+		home?: string;
+		busy?: string;
+		problems?: boolean;
+		node?: Node;
+		staleOf?: (e: Entry) => Staleness;
+		/** where the PRs come from: absent from older hydras */
+		prs?: PRSource;
+		/** the worktrees stacked on a branch with no checkout, which run its code */
+		via?: Entry[];
+	} = {},
 ): Seg[][] {
 	const out: Seg[][] = [];
 	const add = (...segs: Seg[]) => out.push(segs);
 	const blank = () => out.push([]);
 
 	// Who it is: its name and state are in the panel's title (detailTitle).
-	const stateSegs: Seg[] = [];
-	if (e.idleStopped && !e.up) stateSegs.push({ text: `nobody used it for ${e.idleStopped}, so hydra stopped it: u starts it`, color: "blue" });
-	else if (e.kind === "main" && !e.up && !e.pending && !opts.busy) stateSegs.push({ text: "not running: the worktrees that use main's services need it", color: "red" });
-	if (stateSegs.length) add(...stateSegs);
+	if (e.idleStopped && !e.up) add({ text: `nobody used it for ${e.idleStopped}, so hydra stopped it: u starts it`, color: "blue" });
+	else if (e.kind === "main" && !e.up && !e.pending && !opts.busy) add({ text: "not running: the worktrees that use main's services need it", color: "red" });
 	if (e.kind === "branch") add({ text: `${e.branch} · ` }, { text: "no checkout", dim: true });
 	else add({ text: `${e.branch} · ${tildePath(e.root, opts.home)}` }, { text: e.memory ? ` · ${bytes(e.memory)}` : "" });
 	if (e.commit) add({ text: e.commit + " ", bold: true }, { text: e.subject });
+
+	if (e.kind === "main") {
+		blank();
+		out.push(...mainServiceRows(e, width));
+		const parts: string[] = [];
+		if (e.behind > 0) parts.push(`${e.behind} commit${e.behind === 1 ? "" : "s"} behind its upstream (U pulls them)`);
+		if (e.dirty > 0) parts.push(`${e.dirty} file${e.dirty === 1 ? "" : "s"} with uncommitted changes`);
+		blank();
+		if (parts.length) add(...section("⇅", "Upstream", "yellow", [{ text: "  " + parts.join(" · "), color: "yellow" }]));
+		else add(...section("⇅", "Upstream", "cyan", [{ text: "  up to date", dim: true }]));
+		if (opts.problems) out.push(...problemSection(e, width));
+		return out;
+	}
+
+	// 1. Its PR.
+	const pr = prRows(e, opts.prs);
+	if (pr.length) {
+		blank();
+		out.push(...pr);
+	}
 	if (e.error) {
 		blank();
 		for (const l of wrap(`can't plan it: ${e.error}`, width)) add({ text: l, color: "red" });
@@ -298,125 +338,147 @@ export function detailRows(
 		return out;
 	}
 
-	// What is wrong comes first: it is what to act on.
-	if (opts.problems && e.kind !== "branch") {
-		blank();
-		if (e.problems.length) add(...section("!", e.problems.length === 1 ? "1 problem" : `${e.problems.length} problems`, problemsTitle(e).color));
-		out.push(...problemRows(e, width));
-	}
-
-	// Against main.
+	// 2. Its chain of branches up to main, and what to update first.
 	blank();
-	if (e.kind === "main") {
-		const parts: string[] = [];
-		if (e.behind > 0) parts.push(`${e.behind} commit${e.behind === 1 ? "" : "s"} behind its upstream (U pulls them)`);
-		if (e.dirty > 0) parts.push(`${e.dirty} file${e.dirty === 1 ? "" : "s"} with uncommitted changes`);
-		if (parts.length) add(...section("⇅", "Upstream", "yellow", [{ text: "  " + parts.join(" · "), color: "yellow" }]));
-		else out.pop();
-	} else {
-		const conflicts = conflictCount(e);
-		const counts: string[] = [];
-		if (e.behind > 0) counts.push(`${e.behind} behind`);
-		if (e.ahead > 0) counts.push(`${e.ahead} ahead`);
-		const vsMainText = counts.join(" · ") || "up to date";
-		const node = opts.node;
-		const s = node?.stale;
-		const color = conflicts ? "red" : s?.kind === "behind" || e.farBehind || e.outOfStep.length ? "yellow" : s?.kind === "inherits" ? "yellow" : "cyan";
-		const parent = e.parent && e.stack.length > 1 ? labelBeside(e.parent, e.branch) : undefined;
-		if (!parent) add(...section("⇅", "vs main", color, [{ text: "  " + vsMainText }]));
-		else {
-			const own = s?.kind === "behind" ? [s.behind ? `${s.behind} behind` : "", s.conflicts ? `${s.conflicts} conflict${s.conflicts === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ") : "in step";
-			add(...section("⇅", `vs ${parent}`, color, [{ text: "  " + own }, { text: `   vs main: ${vsMainText}`, dim: true }]));
-		}
-		if (node && node.chain.length > 1) {
-			for (const l of wrap(chainText(node, opts.staleOf ?? (() => ({ kind: "none" }))), width - 2)) add({ text: "  " + l });
-		}
-		// Which branch to bring up to date first: the top of the stale part.
-		const first = node && firstToUpdate(node);
-		if (first && first !== e) {
-			const name = labelBeside(first.branch, e.branch);
-			for (const l of wrap(`${name} is behind ${first.parent ? labelBeside(first.parent, first.branch) : "main"}: update it first (select it, m), or U updates every branch, parents first`, width - 2))
-				add({ text: "  " + l, color: "yellow" });
-		}
-		const u = e.update;
-		if (u) {
-			const c = u.hand ? (u.conflicts?.length ? "red" : "yellow") : undefined;
-			for (const l of wrap(`update: ${u.note}`, width - 2)) add({ text: "  " + l, color: c });
-		}
-		const files = u?.conflicts?.length ? u.conflicts : (e.farBehind?.conflicts ?? []);
-		const into = u?.conflicts?.length && parent ? parent : "main";
-		if (files.length) {
-			const shown = files.slice(0, 3).map((f) => f.slice(f.lastIndexOf("/") + 1));
-			add({ text: `  merging ${into} conflicts in ${files.length} file${files.length === 1 ? "" : "s"}: `, color: "red" }, { text: shown.join(", ") + (files.length > 3 ? ` +${files.length - 3}` : "") });
-		}
-		if (e.farBehind && !files.length) add({ text: `  far behind: ${e.farBehind.behind} commits, and the merge only gets harder`, color: "yellow" });
-		if (e.outOfStep.length && !files.length) {
-			add({ text: e.mainBehind ? `  main is older than this branch in: ${e.outOfStep.join(", ")}` : `  main changed what this uses from it: ${e.outOfStep.join(", ")}`, color: "yellow" });
-		}
-	}
+	out.push(...chainRows(e, width, opts.node, opts.staleOf));
 
+	// 3. What runs here, and why.
+	blank();
 	if (e.kind === "branch") {
-		blank();
-		for (const l of wrap("No worktree has it checked out, so nothing runs it; the branches stacked on it run its code. m merges its parent into it without a checkout (hydra update --branch).", width, ""))
-			add({ text: l, dim: true });
+		add(...section("◆", "Runs here", "gray", [{ text: "  nothing: no worktree has it checked out" }]));
+		const via = (opts.via ?? []).map((w) => labelBeside(w.branch, e.branch));
+		const text = via.length
+			? `${via.join(", ")}, stacked on it, run${via.length === 1 ? "s" : ""} its code. m merges its parent into it without a checkout (hydra update --branch).`
+			: "m merges its parent into it without a checkout (hydra update --branch).";
+		for (const l of wrap(text, width - 2, "")) add({ text: "  " + l, dim: true });
 		return out;
 	}
-
-	// Services.
-	blank();
-	if (e.kind === "main") {
-		const { on, off } = mainServices(e);
-		const p = progress(e);
-		add(...section("◆", "Services", "cyan", [{ text: e.up ? `  ${p.ready}/${p.total} ready` : `  ${on.length}, none running` }]));
-		const nameW = Math.min(20, Math.max(6, ...on.map((s) => len(s.name))));
-		const whereW = Math.max(0, ...on.map((s) => len(whereOf(s))));
-		const stateW = Math.min(24, Math.max(0, ...on.map((s) => len(s.state))));
-		for (const s of on) add(...serviceRow(s, nameW, whereW, stateW, false));
-		if (off.length) {
-			for (const [i, l] of wrap(off.map((s) => s.name).join(", "), width - 16, "").entries())
-				add({ text: i === 0 ? "  switched off: " : " ".repeat(16) }, { text: l });
-		}
-	} else {
-		const { shown, hidden } = detailServices(e);
-		const here = shown.filter((s) => s.runs === "here");
-		const fromMain = shown.filter((s) => s.runs !== "here");
-		const p = progress(e);
-		add(...section("◆", "Runs here", "cyan", [{ text: here.length ? (e.up ? `  ${p.ready}/${p.total} ready` : `  ${here.length}`) : "  nothing: everything comes from main" }]));
-		const nameW = Math.min(20, Math.max(6, ...here.map((s) => len(s.name))));
-		const whereW = Math.max(0, ...here.map((s) => len(whereOf(s))));
-		const stateW = Math.min(24, Math.max(0, ...here.map((s) => len(s.state))));
-		for (const s of here) add(...serviceRow(s, nameW, whereW, stateW, true));
-		if (fromMain.length || hidden) {
-			blank();
-			const items = fromMain.map((s) => {
-				const g = healthGlyph(s.health);
-				return { s, g, label: s.runs === "routed" ? `${s.name} (routed)` : s.name };
-			});
-			add(...section("◇", "From main", "gray", [{ text: hidden ? `  ${fromMain.length} used, ${hidden} more unused` : `  ${fromMain.length}` }]));
-			// As many per line as fit: "● api  ● supabase  ✓ migrate".
-			let line: Seg[] = [{ text: " " }];
-			let used = 1;
-			for (const it of items) {
-				const w = 3 + len(it.label);
-				if (used + w > width && line.length > 1) {
-					out.push(line);
-					line = [{ text: " " }];
-					used = 1;
-				}
-				line.push({ text: " " }, { text: it.g.glyph, color: it.g.color }, { text: " " + it.label });
-				used += w;
-			}
-			if (line.length > 1) out.push(line);
-		}
+	const { shown, hidden } = detailServices(e);
+	const here = shown.filter((s) => s.runs === "here");
+	const p = progress(e);
+	add(...section("◆", "Runs here, and why", "cyan", [{ text: here.length ? (e.up ? `  ${p.ready}/${p.total} ready` : `  ${here.length}`) : "  nothing: everything comes from main" }]));
+	const nameW = Math.min(20, Math.max(6, ...here.map((s) => len(s.name))));
+	const whereW = Math.max(0, ...here.map((s) => len(whereOf(s))));
+	const stateW = Math.min(24, Math.max(0, ...here.map((s) => len(s.state))));
+	for (const s of here) {
+		add(...serviceRow(s, nameW, whereW, stateW));
+		if (s.why) for (const l of wrap(s.why, width - 6, "")) add({ text: "    ↳ ", color: "gray" }, { text: l, dim: true });
 	}
 
-	const addresses = e.services.filter((s) => s.address);
-	if (addresses.length) {
-		blank();
-		add(...section("↗", "Addresses", "cyan", [{ text: "  o opens one", dim: true }]));
-		for (const s of addresses) add({ text: "  " + pad(s.name, 10) + " " }, { text: s.address!, color: "cyan" });
-	}
+	// 4. What it takes from main, on one line.
+	const fromMain = shown.filter((s) => s.runs !== "here");
+	if (fromMain.length || hidden) out.push(fromMainRow(fromMain, hidden, width));
 
+	// 5. What is wrong, with the keys that fix it.
+	if (opts.problems) out.push(...problemSection(e, width));
+	return out;
+}
+
+/** A branch's PR: its state, review and checks, and its link; when it is
+ *  merged or closed, that nothing is left to do. Nothing when gh can't be
+ *  asked (the help says why). */
+function prRows(e: Entry, prs?: PRSource): Seg[][] {
+	const pr = e.pr;
+	if (!pr) {
+		if (!prs?.at || prs.error) return [];
+		return [section("◎", "PR", "gray", [{ text: "  none for this branch", dim: true }])];
+	}
+	const color = prColor(pr);
+	const out: Seg[][] = [section("◎", "PR", color ?? "gray", [{ text: "  " + prLong(pr), color: wordColor(color), bold: prDone(pr) }])];
+	if (prDone(pr)) out.push([{ text: "  " }, { text: `PR ${pr.state}: nothing left to do here`, color: "magenta", bold: true }]);
+	if (pr.url) out.push([{ text: "  " }, { text: pr.url, color: "cyan" }, { text: "  p opens it", dim: true }]);
+	return out;
+}
+
+/** Where a branch stands against its parent, the chain up to main, and
+ *  what to update first. */
+function chainRows(e: Entry, width: number, node?: Node, staleOf?: (e: Entry) => Staleness): Seg[][] {
+	const out: Seg[][] = [];
+	const add = (...segs: Seg[]) => out.push(segs);
+	const conflicts = conflictCount(e);
+	const counts: string[] = [];
+	if (e.behind > 0) counts.push(`${e.behind} behind`);
+	if (e.ahead > 0) counts.push(`${e.ahead} ahead`);
+	const vsMainText = counts.join(" · ") || "up to date";
+	const s = node?.stale;
+	const color = conflicts ? "red" : s?.kind === "behind" || s?.kind === "inherits" || e.farBehind || e.outOfStep.length ? "yellow" : "cyan";
+	const parent = e.parent && e.stack.length > 1 ? labelBeside(e.parent, e.branch) : undefined;
+	if (!parent) add(...section("⇅", "vs main", color, [{ text: "  " + vsMainText }]));
+	else {
+		const own = s?.kind === "behind" ? [s.behind ? `${s.behind} behind` : "", s.conflicts ? `${s.conflicts} conflict${s.conflicts === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ") : "in step";
+		add(...section("⇅", `vs ${parent}`, color, [{ text: "  " + own }, { text: `   vs main: ${vsMainText}`, dim: true }]));
+	}
+	if (node && node.chain.length > 1) {
+		for (const l of wrap(chainText(node, staleOf ?? (() => ({ kind: "none" }))), width - 2)) add({ text: "  " + l });
+	}
+	// Which branch to bring up to date first: the top of the stale part.
+	const first = node && firstToUpdate(node);
+	if (first && first !== e) {
+		const name = labelBeside(first.branch, e.branch);
+		for (const l of wrap(`${name} is behind ${first.parent ? labelBeside(first.parent, first.branch) : "main"}: update it first (select it, m), or U updates every branch, parents first`, width - 2))
+			add({ text: "  " + l, color: "yellow" });
+	}
+	const u = e.update;
+	if (u) {
+		const c = u.hand ? (u.conflicts?.length ? "red" : "yellow") : undefined;
+		for (const l of wrap(`update: ${u.note}`, width - 2)) add({ text: "  " + l, color: c });
+	}
+	const files = u?.conflicts?.length ? u.conflicts : (e.farBehind?.conflicts ?? []);
+	const into = u?.conflicts?.length && parent ? parent : "main";
+	if (files.length) {
+		const shown = files.slice(0, 3).map((f) => f.slice(f.lastIndexOf("/") + 1));
+		add({ text: `  merging ${into} conflicts in ${files.length} file${files.length === 1 ? "" : "s"}: `, color: "red" }, { text: shown.join(", ") + (files.length > 3 ? ` +${files.length - 3}` : "") });
+	}
+	if (e.farBehind && !files.length) add({ text: `  far behind: ${e.farBehind.behind} commits, and the merge only gets harder`, color: "yellow" });
+	if (e.outOfStep.length && !files.length) {
+		add({ text: e.mainBehind ? `  main is older than this branch in: ${e.outOfStep.join(", ")}` : `  main changed what this uses from it: ${e.outOfStep.join(", ")}`, color: "yellow" });
+	}
+	return out;
+}
+
+/** Main's services: what it runs, and what is switched off. */
+function mainServiceRows(e: Entry, width: number): Seg[][] {
+	const out: Seg[][] = [];
+	const { on, off } = mainServices(e);
+	const p = progress(e);
+	out.push(section("◆", "Runs", "cyan", [{ text: e.up ? `  ${p.ready}/${p.total} ready` : `  ${on.length}, none running` }]));
+	const nameW = Math.min(20, Math.max(6, ...on.map((s) => len(s.name))));
+	const whereW = Math.max(0, ...on.map((s) => len(whereOf(s))));
+	const stateW = Math.min(24, Math.max(0, ...on.map((s) => len(s.state))));
+	for (const s of on) out.push(serviceRow(s, nameW, whereW, stateW));
+	if (off.length) {
+		for (const [i, l] of wrap(off.map((s) => s.name).join(", "), width - 16, "").entries())
+			out.push([{ text: i === 0 ? "  switched off: " : " ".repeat(16) }, { text: l }]);
+	}
+	return out;
+}
+
+/** What a worktree takes from main, on one line:
+ *  "◇ From main  ● api  ● db +3 · 12 unused". */
+function fromMainRow(fromMain: Service[], hidden: number, width: number): Seg[] {
+	const row: Seg[] = [{ text: "◇ ", color: "gray", bold: true }, { text: "From main", bold: true }];
+	let used = 11;
+	const tail = (rest: number) => (rest ? ` +${rest}` : "") + (hidden ? ` · ${hidden} unused` : "");
+	for (const [i, s] of fromMain.entries()) {
+		const g = healthGlyph(s.health);
+		const label = s.runs === "routed" ? `${s.name} (routed)` : s.name;
+		const w = 3 + len(label);
+		if (used + w + len(tail(fromMain.length - i - 1)) > width) {
+			row.push({ text: tail(fromMain.length - i), dim: true });
+			return row;
+		}
+		row.push({ text: "  " }, { text: g.glyph, color: g.color }, { text: " " + label });
+		used += w;
+	}
+	if (hidden) row.push({ text: tail(0), dim: true });
+	return row;
+}
+
+/** The problems under a heading, last in the narrow layout's detail. */
+function problemSection(e: Entry, width: number): Seg[][] {
+	const out: Seg[][] = [[]];
+	if (e.problems.length) out.push(section("!", e.problems.length === 1 ? "1 problem" : `${e.problems.length} problems`, problemsTitle(e).color));
+	out.push(...problemRows(e, width));
 	return out;
 }
 
@@ -529,6 +591,7 @@ export const KEYS: Array<[string, string]> = [
 	["r", "restart a service: hydra process restart NAME"],
 	["l", "follow a service's logs: hydra process logs NAME -f; ctrl-c ends"],
 	["o", "open a service's address by name in the browser (x-hydra hosts)"],
+	["p", "open its pull request in the browser"],
 	["f", "run the fix of one of its problems (asks first)"],
 	["m", "merge its parent (main, or the branch it is stacked on) into it: hydra update --here (asks first)"],
 	["", "  on a branch with no checkout (◇): hydra update --branch NAME"],
@@ -545,12 +608,24 @@ export const KEYS: Array<[string, string]> = [
 	["12 behind", "commits its parent has that it doesn't; bold: the chain goes stale here"],
 	["↑ X behind", "in step with its parent, but X above it is behind: update X first"],
 	["conflicts", "files merging its parent in would conflict in: merge and resolve by hand"],
+	["#12 ✓", "its PR, from gh: ✓ checks pass · ✗ checks or review · ◐ checks run · draft"],
+	["PR merged", "its PR is merged or closed: nothing left to do there"],
 ];
 
-export function HelpBody({ width, height }: { width: number; height: number }) {
+/** Where the PR column comes from, for the help: gh, or why there is none. */
+export function prSourceLine(prs?: PRSource, now = Date.now()): string {
+	if (!prs) return "no PR status: this hydra doesn't read PRs";
+	if (prs.error) return `no PR status: ${prs.error}`;
+	if (!prs.at) return "PR status: asking gh…";
+	const min = Math.max(0, Math.round((now - Date.parse(prs.at)) / 60000));
+	return `PR status from gh, read ${min ? `${min} min ago` : "just now"}; again every 3 minutes, and on R`;
+}
+
+export function HelpBody({ width, height, prs }: { width: number; height: number; prs?: PRSource }) {
 	return (
 		<Box flexDirection="column" height={height}>
-			{KEYS.slice(0, Math.max(0, height)).map(([k, what], i) => (
+			<Row width={width} segs={[{ text: prSourceLine(prs), dim: true }]} />
+			{KEYS.slice(0, Math.max(0, height - 1)).map(([k, what], i) => (
 				<Row key={i} width={width} segs={[{ text: pad(k, 11), color: "cyan", bold: true }, { text: what }]} />
 			))}
 		</Box>
@@ -562,8 +637,9 @@ export function HelpBody({ width, height }: { width: number; height: number }) {
 export function footerKeys(e: Entry | undefined): Array<[string, string]> {
 	const keys: Array<[string, string]> = [];
 	if (e?.kind === "branch") {
-		// Nothing to start, stop or look at: only its merge.
-		if (!e.pending && (e.behindParent > 0 || e.update?.action)) keys.push(["m", `merge ${e.parent ? labelBeside(e.parent, e.branch) : "main"}`]);
+		// Nothing to start, stop or look at: only its merge, and its PR.
+		if (!e.pending && !prDone(e.pr) && (e.behindParent > 0 || e.update?.action)) keys.push(["m", `merge ${e.parent ? labelBeside(e.parent, e.branch) : "main"}`]);
+		if (e.pr?.url) keys.push(["p", "PR"]);
 		return keys;
 	}
 	if (e && !e.pending && !e.error) {
@@ -572,8 +648,9 @@ export function footerKeys(e: Entry | undefined): Array<[string, string]> {
 		if (e.up || detailServices(e).shown.some((s) => s.runs !== "here" && s.health !== "off")) keys.push(["l", "logs"]);
 		if (e.services.some((s) => s.address)) keys.push(["o", "browse"]);
 		if (e.problems.some((p) => p.run)) keys.push(["f", "fix"]);
-		if (e.kind === "worktree" && (e.behindParent > 0 || e.update?.action))
+		if (e.kind === "worktree" && !prDone(e.pr) && (e.behindParent > 0 || e.update?.action))
 			keys.push(["m", `merge ${e.parent && e.stack.length > 1 ? labelBeside(e.parent, e.branch) : "main"}`]);
+		if (e.pr?.url) keys.push(["p", "PR"]);
 	}
 	return keys;
 }

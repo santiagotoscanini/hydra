@@ -76,14 +76,7 @@ func dashboardCmd() error {
 // that changes with its contents, and returns its path.
 func dashboardScript() (string, error) {
 	sum := sha256.Sum256(dashboardJS)
-	dir, err := os.UserCacheDir()
-	if err != nil {
-		dir = os.TempDir()
-	}
-	if d := os.Getenv("HYDRA_CACHE_DIR"); d != "" {
-		dir = d
-	}
-	path := filepath.Join(dir, "hydra", "dashboard-"+hex.EncodeToString(sum[:6])+".mjs")
+	path := filepath.Join(hydraCacheDir(), "dashboard-"+hex.EncodeToString(sum[:6])+".mjs")
 	if have, err := os.ReadFile(path); err == nil && sha256.Sum256(have) == sum {
 		return path, nil
 	}
