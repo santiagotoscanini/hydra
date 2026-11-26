@@ -133,7 +133,7 @@ Hydra's own commands:
                                  stop this checkout's stack (status, up, wait,
                                  logs, restart, down, update_here, main_status);
                                  the ones that change a stack refuse in main.
-                                 Register: claude mcp add hydra -- hydra mcp
+                                 Register: claude mcp add --scope user hydra -- hydra mcp
   hydra version                  which hydra this is, and which process-compose
 
 Flags for update:

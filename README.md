@@ -261,6 +261,8 @@ claude mcp add --scope user hydra -- hydra mcp   # Claude Code
 codex mcp add hydra -- hydra mcp                 # Codex
 ```
 
+In a project without an `x-hydra` block it lists no tools, so registering it for every project is safe.
+
 | Tool | Does | In main |
 |---|---|---|
 | `status` | `hydra status` as data: services, ports, URLs, states, problems and fixes | reads |

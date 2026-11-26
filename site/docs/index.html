@@ -959,6 +959,7 @@ $ claude mcp add --scope user hydra -- hydra mcp     # Claude Code, every projec
 $ codex mcp add hydra -- hydra mcp                   # Codex
 </pre>
     </div>
+    <p>Registered for every project, it stays out of the way in the ones that don't use hydra: where the checkout has no <code>process-compose.yaml</code> with an <code>x-hydra</code> block, it lists no tools.</p>
     <p>To set it up for everyone who works in one repository, commit a <code>.mcp.json</code> at its root. Claude Code reads it:</p>
     <div class="code">
       <div class="file">.mcp.json<button class="copy">copy</button></div>

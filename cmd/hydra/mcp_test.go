@@ -112,7 +112,8 @@ func toolText(t *testing.T, reply map[string]any) (string, bool) {
 }
 
 func TestMCPProtocol(t *testing.T) {
-	r, raw := session(t, t.TempDir(),
+	main, _ := mcpRepo(t)
+	r, raw := session(t, main,
 		request(1, "initialize", `{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}`),
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
 		request(2, "initialize", `{"protocolVersion":"2024-11-05"}`),
@@ -269,5 +270,20 @@ func TestMCPStdoutCarriesOnlyMessages(t *testing.T) {
 	}
 	if !strings.Contains(string(said), "a stray line") || !strings.Contains(string(said), "printed by a check") {
 		t.Errorf("the noise didn't go to stderr: %q", said)
+	}
+}
+
+// Registered for every project, the server offers nothing where hydra isn't
+// set up, instead of tools that only fail there.
+func TestMCPOffersNoToolsOutsideHydra(t *testing.T) {
+	r, _ := session(t, t.TempDir(),
+		request(1, "initialize", `{"protocolVersion":"2025-06-18"}`),
+		request(2, "tools/list", `{}`),
+	)
+	if tools := r["2"]["result"].(map[string]any)["tools"].([]any); len(tools) != 0 {
+		t.Errorf("tools outside a hydra checkout: %v", tools)
+	}
+	if ins, _ := r["1"]["result"].(map[string]any)["instructions"].(string); !strings.Contains(ins, "isn't set up for hydra") {
+		t.Errorf("instructions: %q", ins)
 	}
 }

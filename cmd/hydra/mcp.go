@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/gitx"
 	"github.com/santiagotoscanini/hydra/internal/pc"
 	"github.com/santiagotoscanini/hydra/internal/stack"
@@ -201,14 +202,16 @@ func (s *mcpServer) handle(line []byte) {
 			"protocolVersion": version,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": "hydra", "version": shortVersion()},
-			"instructions":    mcpInstructions,
+			"instructions":    s.instructions(),
 		})
 	case "ping":
 		s.reply(msg.ID, map[string]any{})
 	case "tools/list":
 		list := make([]map[string]any, 0, len(mcpTools))
-		for _, t := range mcpTools {
-			list = append(list, t.describe())
+		if s.servesHydra() {
+			for _, t := range mcpTools {
+				list = append(list, t.describe())
+			}
 		}
 		s.reply(msg.ID, map[string]any{"tools": list})
 	case "tools/call":
@@ -299,6 +302,25 @@ func (s *mcpServer) run(ctx context.Context, tool *mcpTool, raw json.RawMessage)
 		defer s.act.Unlock()
 	}
 	return tool.run(ctx, &mcpCall{server: s, co: co, args: raw})
+}
+
+// servesHydra says whether the server's checkout is set up for hydra. A
+// server registered for every project (user scope) then offers nothing in
+// the others, instead of tools that only fail there.
+func (s *mcpServer) servesHydra() bool {
+	co, err := gitx.Find(s.dir)
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(defaultFile(co))
+	return err == nil && config.HasHydra(data)
+}
+
+func (s *mcpServer) instructions() string {
+	if !s.servesHydra() {
+		return "This checkout isn't set up for hydra (no process-compose.yaml with an x-hydra block), so hydra offers no tools here."
+	}
+	return mcpInstructions
 }
 
 // errRefused is an action the server won't take where it was asked.
