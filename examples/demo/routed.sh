@@ -11,6 +11,10 @@
 #  in `docs`, which started with nothing to run, starts an api there; the
 #  edit after that restarts it.
 #
+#  On the way, each worktree's address by name: <worktree>.localhost:21900
+#  is its web (its own copy, or main's through its port), localhost:21900
+#  main's, and the same on :21910 for the api.
+#
 #  Last, a worktree whose branch sets `idle_stop: 6s`: requests through its
 #  port keep its stack up, and once they stop hydra stops it, says so in
 #  `hydra status` and `hydra status --json`, and `hydra up` starts it again.
@@ -83,10 +87,40 @@ echo "backend admin :$admin_b    $(chain "$admin_b")"
 echo "docs    web   :$web_d    $(chain "$web_d")"
 
 echo
+echo "--- the same, by name: <worktree>.localhost on the hosts ports"
+fail() { echo "FAILED: $*" >&2; exit 1; }
+byname() { # name port: what answers at http://NAME.localhost:PORT, resolved to 127.0.0.1 as a browser does
+  curl -s -m 5 --resolve "$1.localhost:$2:127.0.0.1" "http://$1.localhost:$2/"
+}
+expect() { # name port pattern
+  got="$(byname "$1" "$2" | python3 "$here/chain.py" 2>&1)" || true
+  grep -q "$3" <<<"$got" || fail "$1.localhost:$2: want '$3', got: $got $(byname "$1" "$2")"
+  printf '%-27s %s\n' "$1.localhost:$2" "$got"
+}
+expect main 21900 "^web(slot 0.*api(slot 0"
+expect backend 21900 "^web(slot 0.*api(slot $b"
+expect docs 21900 "^web(slot 0.*api(slot 0"
+expect backend 21910 "^api(slot $b"
+expect docs 21910 "^api(slot 0"
+got="$(curl -s -m 5 localhost:21900 | python3 "$here/chain.py")"
+grep -q "^web(slot 0.*api(slot 0" <<<"$got" || fail "localhost:21900: $got"
+printf '%-27s %s\n' "localhost:21900" "$got"
+out="$(cd "$repo/backend" && "$H" status 2>&1 || true)"
+grep -E '^address' <<<"$out"
+grep -q "^address   api http://backend.localhost:21910, web http://backend.localhost:21900$" <<<"$out" || fail "hydra status: $out"
+addr="$(cd "$main" && "$H" status --json | python3 -c '
+import json, sys
+w = {w["branch"]: w for w in json.load(sys.stdin)["worktrees"]}["docs"]
+print({s["name"]: s.get("address") for s in w["services"]}["web"])')"
+echo "hydra status --json, docs web: $addr"
+[ "$addr" = "http://docs.localhost:21900" ] || fail "status --json address: $addr"
+
+echo
 echo "--- backend edits the web: it gets its own copy on the same port"
 (cd "$repo/backend" && mkdir -p apps/web && echo edit >apps/web/page.tsx)
 wait_chain "$web_b" "web(slot $b"
 echo "backend web   :$web_b    $(chain "$web_b")"
+expect backend 21900 "^web(slot $b"
 
 echo
 echo "--- backend reverts that edit: main's copy serves it again"
@@ -118,10 +152,12 @@ echo "--- backend goes down: its port closes"
 (cd "$repo/backend" && "$H" down >/dev/null 2>&1)
 for _ in $(seq 50); do curl -s -m 1 "localhost:$web_b" >/dev/null 2>&1 || break; sleep 0.2; done
 curl -s -m 1 "localhost:$web_b" >/dev/null 2>&1 && echo "still answering on :$web_b" || echo "nothing listens on :$web_b"
+for _ in $(seq 50); do byname backend 21900 | grep -q 'no running worktree is called "backend"' && break; sleep 0.2; done
+echo "backend.localhost:21900     $(byname backend 21900)"
+byname backend 21900 | grep -q 'no running worktree is called "backend"' || fail "a stopped worktree's address"
 
 echo
 echo "--- idle: a branch with idle_stop: 6s"
-fail() { echo "FAILED: $*" >&2; exit 1; }
 g worktree add -q -b idle "$repo/idle" main
 cd "$repo/idle"
 awk '{print} /^  max_slots: 5$/{print "  idle_stop: 6s"}' process-compose.yaml >pc.tmp && mv pc.tmp process-compose.yaml

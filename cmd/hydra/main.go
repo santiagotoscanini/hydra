@@ -87,6 +87,11 @@ long (no request through hydra's router for it, no file of it changed) is
 stopped as hydra down would; hydra status says so, and hydra up starts it
 again. The main checkout's never stops.
 
+With x-hydra hosts: 3900 on a service, every worktree has an address by
+its folder's name that never changes: http://<worktree>.localhost:3900 is
+its copy (or what it uses instead), localhost:3900 main's. hydra status and
+hydra up print it, and the service gets it in HYDRA_URL_<SERVICE>.
+
 hydra status warns about a worktree more than x-hydra behind_warn (100)
 commits behind main, or whose merge of main would conflict (it names the
 files; git merge-tree tries it, and touches nothing).
@@ -498,7 +503,10 @@ func shortBranch(b string) string {
 
 func (t *target) render(p *plan.Plan, watch string) ([]byte, error) {
 	opt := render.Options{Dir: t.checkout.Root, Watch: watch}
-	if p.Slot == 0 && (t.stack.HasRouted() || t.stack.HasTLS()) {
+	if p.Slot > 0 {
+		opt.HostLabel = config.HostLabel(t.checkout.Root)
+	}
+	if p.Slot == 0 && (t.stack.HasRouted() || t.stack.HasTLS() || t.stack.HasHosts()) {
 		var err error
 		if opt.Router, err = routerCommand(t); err != nil {
 			return nil, err

@@ -235,6 +235,27 @@ export default function App({ backend, size: fixedSize, initial }: Props) {
 				);
 				return;
 			}
+			case "browse": {
+				const withAddress = e.services.filter((s) => s.address);
+				if (withAddress.length === 0) {
+					setMessage({ text: "no service has an address by name (x-hydra hosts)", color: "yellow" });
+					return;
+				}
+				pickService(
+					"Open whose address?",
+					withAddress.map((s) => `${s.name} ${s.address}`),
+					(label) => {
+						setOverlay(undefined);
+						const url = label.slice(label.indexOf(" ") + 1);
+						if (!e.up) setMessage({ text: `${e.name}'s stack isn't running, so ${url} won't answer: u starts it`, color: "yellow" });
+						void backend.browse(url).then((r) => {
+							if (r.code !== 0) setMessage({ text: r.output || `couldn't open ${url}`, color: "red" });
+							else if (e.up) setMessage({ text: `opened ${url}` });
+						});
+					},
+				);
+				return;
+			}
 			case "fix": {
 				const fixes = e.problems.filter((p): p is Problem & { run: string } => !!p.run);
 				if (fixes.length === 0) {
@@ -339,6 +360,7 @@ export default function App({ backend, size: fixedSize, initial }: Props) {
 			d: "down",
 			r: "restart",
 			l: "logs",
+			o: "browse",
 			f: "fix",
 			m: "merge",
 			U: "update",

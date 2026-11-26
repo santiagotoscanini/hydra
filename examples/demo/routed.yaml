@@ -5,6 +5,9 @@
 #   web    a Node server that knows nothing about hydra; `routed: node` loads
 #          hydra's hook into it, which passes the worktree tag along.
 #   admin  passes the X-Hydra-Worktree header on itself (`routed: true`).
+#
+# web and api also have a hosts port: <worktree>.localhost:21900 is that
+# worktree's web, whatever copy it uses, and localhost:21900 main's.
 version: "0.5"
 
 x-hydra:
@@ -23,6 +26,7 @@ processes:
           include: ["*.go"]
     x-hydra:
       port: 21010
+      hosts: 21910
       paths: ["apps/api/**"]
 
   web:
@@ -31,6 +35,7 @@ processes:
       api: { condition: process_started }
     x-hydra:
       port: 21000
+      hosts: 21900
       paths: ["apps/web/**"]
       routed: node
       upstreams:

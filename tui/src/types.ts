@@ -21,6 +21,8 @@ export interface Service {
 	health: Health;
 	port?: number;
 	url?: string;
+	/** Its address by checkout name (x-hydra hosts): http://<worktree>.localhost:PORT. */
+	address?: string;
 	why?: string;
 	memory?: number;
 }

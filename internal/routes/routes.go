@@ -30,9 +30,10 @@ type Entry struct {
 // File is one worktree's routes.
 type File struct {
 	Slot   int    `json:"slot"`
-	Name   string `json:"name"`   // branch, for messages
-	Root   string `json:"root"`   // worktree root
-	Socket string `json:"socket"` // its process-compose server; routes hold while it answers
+	Name   string `json:"name"`           // branch, for messages
+	Host   string `json:"host,omitempty"` // its name under .localhost (x-hydra hosts)
+	Root   string `json:"root"`           // worktree root
+	Socket string `json:"socket"`         // its process-compose server; routes hold while it answers
 	// Local maps each service this worktree runs to its port.
 	Local map[string]int `json:"local"`
 	// Entries maps each routed service the worktree didn't change to the

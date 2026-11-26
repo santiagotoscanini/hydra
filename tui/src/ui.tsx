@@ -171,6 +171,9 @@ export function detailLines(e: Entry, width: number, baseRef: string): React.Rea
 		}
 	}
 
+	const addresses = e.services.filter((s) => s.address).map((s) => `${s.name} ${s.address}`);
+	if (addresses.length) add("address", <Text>{`address: ${addresses.join(", ")}`}</Text>);
+
 	if (e.pending) {
 		add("blank1", " ");
 		add("pending", <Text dimColor>planning…</Text>);
@@ -336,6 +339,7 @@ export const KEYS: Array<[string, string]> = [
 	["d", "stop its stack: hydra down (asks first)"],
 	["r", "restart a service: hydra process restart NAME"],
 	["l", "follow a service's logs: hydra process logs NAME -f; ctrl-c ends"],
+	["o", "open a service's address by name in the browser (x-hydra hosts)"],
 	["f", "run the fix of one of its problems (asks first)"],
 	["m", "merge main into this worktree: hydra update --here (asks first)"],
 	["U", "update all: hydra update, which pulls main (dry run, then asks)"],

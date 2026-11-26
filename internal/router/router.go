@@ -8,6 +8,9 @@
 //   - One port per service that routed services call (the api). A call there
 //     goes to the tagged worktree's copy of that service if the worktree
 //     runs one, and to the baseline's otherwise.
+//   - A hosts port for a service that asks for one: <worktree>.localhost on
+//     it reaches that worktree's copy (or what the worktree uses instead),
+//     plain localhost main's.
 //   - A TLS front for a baseline service that asks for one: TLS is accepted
 //     there and the bytes go on, as they are, to the service's plain port.
 //
@@ -56,6 +59,9 @@ type Service struct {
 	Port     int
 	Dispatch int  // port for calls to it from routed services; 0 = none
 	Probe    bool // routed with hydra's hook: check that it passes the tag on
+	// Hosts is a port where each worktree's copy is served by name:
+	// <worktree>.localhost:Hosts, and main's at localhost:Hosts. 0 = none.
+	Hosts int
 }
 
 // Entry is a routed service behind a worktree's port.
@@ -68,6 +74,7 @@ type Entry struct {
 type Worktree struct {
 	Name    string
 	Root    string           // its checkout; for Router.Activity
+	Host    string           // its name under .localhost on a hosts port
 	Local   map[string]int   // service -> port of the copy it runs
 	Entries map[string]Entry // routed service -> its port in this worktree
 }
@@ -184,6 +191,13 @@ func (r *Router) Reconcile() {
 			name, port := name, s.Dispatch
 			want[fmt.Sprintf("dispatch %s :%d", name, port)] = opener{port, fmt.Sprintf("calls to %s from routed services", name),
 				func() (*listener, error) { return listen(st.Host, port, r.dispatch(name)) }}
+		}
+	}
+	for name, s := range st.Services {
+		if s.Hosts != 0 {
+			name, port := name, s.Hosts
+			want[fmt.Sprintf("hosts %s :%d", name, port)] = opener{port, fmt.Sprintf("%s by worktree name (<worktree>.localhost:%d)", name, port),
+				func() (*listener, error) { return listen(st.Host, port, r.hosts(name)) }}
 		}
 	}
 	for tag, wt := range st.Worktrees {

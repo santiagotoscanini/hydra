@@ -224,7 +224,8 @@ you open  localhost:3400         slot 2's port for web. hydra's router answers,
       <li>A call that can't be routed, such as a queue name read once at start, makes the frontend run in the worktree after all.</li>
       <li>If a worktree's API is down, its calls fail. They never fall back to main's API.</li>
     </ol>
-    <p style="margin-top:14px"><a href="docs/#routed">How routing works, and its limits</a>.</p>
+    <p style="margin-top:14px">Ports move with the slot, so a name is easier to keep: with <code>hosts: 3900</code> on <code>web</code>, <code>api-paging.localhost:3900</code> is always that worktree's frontend, whichever copy serves it, and <code>localhost:3900</code> is main's.</p>
+    <p><a href="docs/#routed">How routing works, and its limits</a>, and <a href="docs/#hosts">an address per worktree</a>.</p>
   </div>
 </section>
 

@@ -24,6 +24,11 @@ export class FakeBackend implements Backend {
 		this.runs.push({ args, cwd });
 		return Promise.resolve(this.results[args.join(" ")] ?? { code: 0, output: "ok\n" });
 	}
+	browsed: string[] = [];
+	browse(url: string) {
+		this.browsed.push(url);
+		return Promise.resolve({ code: 0, output: "" });
+	}
 	terminal(cmd: TerminalCommand) {
 		this.terminals.push(cmd);
 		return 0;

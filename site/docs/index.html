@@ -52,6 +52,7 @@
   <a href="#instep">In step with main</a>
   <a href="#stacks">Stacked branches</a>
   <a href="#routed">One copy for every worktree</a>
+  <a href="#hosts">An address per worktree</a>
   <a href="#supabase">A database per worktree</a>
   <a href="#temporal">Temporal workers</a>
   <a href="#tls">HTTPS in front of a service</a>
@@ -379,6 +380,15 @@ hydra: web is main's copy, serving this worktree at http://localhost:3400
 </pre>
     </div>
     <p>Opening <code>localhost:3400</code> shows main's frontend talking to this worktree's API on 8480.</p>
+    <p>A port that changes with the slot is hard to keep in your head. With <a href="#hosts"><code>hosts</code></a> on <code>web</code>, each worktree also has an address by its folder's name, which never changes, and <code>hydra up</code> and <code>hydra status</code> print it:</p>
+    <div class="code">
+<pre data-lang="sh">
+$ hydra up -D
+hydra: slot 2, running here: api
+hydra: web is main's copy, serving this worktree at http://localhost:3400
+hydra: this worktree's address: web http://shop-notes.localhost:3900
+</pre>
+    </div>
 
     <h3>When it won't start</h3>
     <p>Before it starts anything in a worktree, hydra runs the checks of <a href="#status"><code>hydra status</code></a> against the main checkout. If one fails it starts nothing, says why, and gives the command that fixes it:</p>
@@ -452,7 +462,7 @@ web      main, routed  3400  ready
 </pre>
     </div>
     <ul>
-      <li>The first two lines say where main and this worktree are: commit, branch, slot, and whether each stack is up. If main's upstream has commits it doesn't have yet, a line under it says how many.</li>
+      <li>The first two lines say where main and this worktree are: commit, branch, slot, and whether each stack is up. If main's upstream has commits it doesn't have yet, a line under it says how many. With <a href="#hosts"><code>hosts</code></a>, an <code>address</code> line gives the worktree's addresses by name: <code>address   web http://shop-notes.localhost:3900</code>; in the main checkout it gives main's.</li>
       <li>The table lists what runs here and what this worktree takes from main, each with its state right now. Services of main that nothing here calls or waits for are counted, not listed.</li>
       <li>A line marked <b>✗</b> is an error: the command exits 1, and <code>hydra up</code> won't start the worktree. A line marked <b>!</b> is a note: worth knowing, exit 0. Each comes with the command that fixes it.</li>
       <li>With nothing to report, the last line starts with <code>ok:</code> and the command exits 0.</li>
@@ -499,6 +509,8 @@ ok: main's stack is up and runs what main has checked out.
       <div><p class="said">! main's stack was started from an older process-compose.yaml (or an older hydra) than the one there now.</p><p>The stack file changed, or hydra was upgraded, since main's stack started. <code>hydra update</code> reloads it; <code>hydra update --dry-run</code> first says which processes that changes.</p></div>
       <div><p class="said">! hydra has no record of the commit main's stack runs …</p><p>It was started by an older hydra, or by process-compose directly. <code>hydra update</code> restarts every process that lists <code>paths</code> once, and records the commit.</p></div>
       <div><p class="said">✗ main's stack has no api (…): it was started from an older process-compose.yaml.</p><p>The service was added to the stack file after main's stack started. <code>hydra update</code> adds it.</p></div>
+      <div><p class="said">! hydra's router isn't answering on :3900, so web's addresses by worktree name (&lt;worktree&gt;.localhost:3900) don't work.</p><p>Nothing answers on the <a href="#hosts"><code>hosts</code></a> port. <code>hydra process restart hydra-router</code> in the main checkout; its log says why it couldn't listen. The stack itself runs fine.</p></div>
+      <div><p class="said">! another program answers on :3900, x-hydra.hosts of web, so its addresses by worktree name don't work.</p><p>Something other than hydra's router holds the port. <code>lsof -nP -iTCP:3900 -sTCP:LISTEN</code> names it: stop it, or move <code>hosts</code> to a free port.</p></div>
       <div><p class="said">✗ main's TLS front for supabase isn't listening on :54421 (hydra-router opens it).</p><p><code>hydra process restart hydra-router</code> in the main checkout. See <a href="#tls">HTTPS in front of a service</a>.</p></div>
       <div><p class="said">✗ main's PgBouncer for supabase isn't listening on :6432, and worktrees reach main's database through it (x-hydra.pool).</p><p>The <a href="#pool">pool</a> in front of main's database is down, so a worktree that takes the database from main can't reach it. The fix line restarts it: <code>hydra process restart hydra-pgbouncer</code> in the main checkout, after <code>brew install pgbouncer</code> when it isn't installed. If main's stack was started before <code>pool</code> was added, <code>hydra update</code> there adds it. Its own output is in <code>hydra process logs hydra-pgbouncer</code>.</p></div>
       <div><p class="said">! this machine doesn't trust the certificate of main's TLS fronts, so a browser refuses their https addresses.</p><p><code>hydra trust</code>, once per machine.</p></div>
@@ -598,7 +610,7 @@ ok: main's stack is up and runs what main has checked out.
       <tr><td><code>RUNS HERE</code></td><td>What runs in the worktree. For main: how many of its processes are fine, <code>4/4 ok</code>.</td></tr>
       <tr><td><code>VS MAIN</code></td><td><code>2↓</code> commits behind main, <code>1↑</code> ahead. <code>behind in api</code>: main changed a service this worktree takes from it (see <a href="#instep">in step with main</a>). <code>conflicts(1)</code>: <code>hydra update</code> (or merging main) would conflict in one file. A leading <code>!</code>: <a href="#far-behind">far behind main</a>, past <code>behind_warn</code> or with a conflicting merge; the detail says which files. <code>on cart</code>: stacked on the branch <code>cart</code>. <code>landed</code>: everything on the branch is in main already. For main: commits its upstream has that it doesn't, and uncommitted files.</td></tr>
     </table></div>
-    <p>At 110 columns or wider a <code>BRANCH</code> column shows too. The bottom half is the chosen checkout: its branch, slot and memory; the commit; how far it is from main, and what <a href="#updating"><code>hydra update</code></a> would do to it (a conflict names the files); then each service it runs here and each of main's it uses, with port and state. <code>main, routed</code> is main's copy answering on this worktree's port. Last come the problems <a href="#status"><code>hydra status</code></a> finds, the same texts as <a href="#messages">every message</a>, each with its fix. <code>(f runs it)</code> marks a fix that is a hydra command.</p>
+    <p>At 110 columns or wider a <code>BRANCH</code> column shows too. The bottom half is the chosen checkout: its branch, slot and memory; the commit; how far it is from main, and what <a href="#updating"><code>hydra update</code></a> would do to it (a conflict names the files); its <a href="#hosts">addresses by name</a>, with <code>hosts</code>; then each service it runs here and each of main's it uses, with port and state. <code>main, routed</code> is main's copy answering on this worktree's port. Last come the problems <a href="#status"><code>hydra status</code></a> finds, the same texts as <a href="#messages">every message</a>, each with its fix. <code>(f runs it)</code> marks a fix that is a hydra command.</p>
 
     <h3>The keys</h3>
     <p>Each key runs the hydra command an agent would type, in the chosen checkout. Anything that stops a stack, runs a fix or moves a branch asks first.</p>
@@ -610,6 +622,7 @@ ok: main's stack is up and runs what main has checked out.
       <tr><td><kbd>d</kbd></td><td>Stop its stack: <code>hydra down</code>. Asks first; for main, it says that worktrees lose what they take from it.</td></tr>
       <tr><td><kbd>r</kbd></td><td>Restart a service: <code>hydra process restart NAME</code>. With more than one, it asks which.</td></tr>
       <tr><td><kbd>l</kbd></td><td>Follow a service's output: <code>hydra process logs NAME -f</code>, one of this worktree's or of main's it uses. ctrl-c comes back.</td></tr>
+      <tr><td><kbd>o</kbd></td><td>Open a service's <a href="#hosts">address by name</a> in the browser (<code>open</code>, or <code>xdg-open</code> on Linux). With more than one, it asks which. Only with <code>hosts</code>.</td></tr>
       <tr><td><kbd>f</kbd></td><td>Run the fix of one of its problems. Shows the problem and the command, and asks.</td></tr>
       <tr><td><kbd>m</kbd></td><td>In a worktree: merge main into it, <a href="#update-here"><code>hydra update --here</code></a>. Shows the dry run, then asks.</td></tr>
       <tr><td><kbd>U</kbd></td><td>Update everything: <a href="#updating"><code>hydra update</code></a>, which pulls main. Shows the dry run, then asks.</td></tr>
@@ -685,6 +698,7 @@ ok: main's stack is up and runs what main has checked out.
       <tr><td><code>version</code></td><td>Changes when a field changes meaning or goes away. New fields don't change it.</td></tr>
       <tr><td><code>current</code></td><td>The checkout the command ran in.</td></tr>
       <tr><td><code>runs</code></td><td><code>here</code>, <code>main</code> (this worktree uses main's copy) or <code>routed</code> (main's copy, on this worktree's port). <code>used</code>: main's, and something here calls it or waits for it. <code>off</code>: listed here, but off until started.</td></tr>
+      <tr><td><code>address</code></td><td>With <a href="#hosts"><code>hosts</code></a>: the service's address by name in this checkout, <code>http://shop-notes.localhost:3900</code> (main's: <code>http://localhost:3900</code>). There whether or not the stack runs; it answers while it does.</td></tr>
       <tr><td><code>health</code></td><td><code>up</code>, <code>done</code>, <code>starting</code>, <code>off</code>, <code>failed</code> or <code>unknown</code>. <code>state</code> is the same in words.</td></tr>
       <tr><td><code>problems</code></td><td>What <code>hydra status</code> prints, one object each. <code>blocks</code>: marked ✗. <code>fix</code>: the fix line. <code>run</code>: the fix as a command to run in that checkout, when it is a hydra command; absent when it is advice.</td></tr>
       <tr><td><code>slot</code></td><td>0: the worktree never ran a stack, so it holds none.</td></tr>
@@ -1246,6 +1260,38 @@ const queue = globalThis.__hydra?.upstream('JOBS_QUEUE') ?? process.env.JOBS_QUE
     <p>Not routed: HTTP/2 and gRPC between services, work that no request is behind (a timer started at boot, a webhook from outside), and unchanged services that aren't marked <code>routed</code>, which keep calling main's copies.</p>
   </section>
 
+  <section id="hosts">
+    <h2>An address per worktree</h2>
+    <p>A worktree's ports depend on its slot, so <code>fla-709</code>'s web is on 3400 today and on 3200 after its next start. <code>hosts</code> on a service gives every worktree an address by name that never changes while the worktree exists:</p>
+    <div class="code">
+<pre data-lang="yaml">
+  web:
+    x-hydra:
+      port: 3000
+      hosts: 3900          # http://&lt;worktree&gt;.localhost:3900
+</pre>
+    </div>
+    <div class="table wrap"><table>
+      <tr><th>You open</th><th>You get</th></tr>
+      <tr><td><code>localhost:3900</code>, <code>main.localhost:3900</code></td><td>Main's <code>web</code>.</td></tr>
+      <tr><td><code>fla-709.localhost:3900</code>, the worktree runs <code>web</code></td><td>Its own copy, on whichever slot it has.</td></tr>
+      <tr><td>The same, <code>web</code> is <a href="#routed">routed</a> and the worktree didn't change it</td><td>Main's copy, serving that worktree: exactly what the worktree's own port for <code>web</code> does, its calls to the worktree's API included.</td></tr>
+      <tr><td>The same, <code>web</code> isn't routed and the worktree doesn't run it</td><td>Main's copy, as is: what the worktree takes from main.</td></tr>
+      <tr><td><code>fla-709.localhost:3900</code>, its stack isn't running</td><td>404 from hydra: <code>no running worktree is called "fla-709" (running: …)</code>. Never main's page under the worktree's name.</td></tr>
+    </table></div>
+    <p><code>localhost:3000</code> stays main's, and slot ports keep working. hydra's router listens on <code>hosts</code>, in main, and picks the copy by the request's <code>Host</code> header. It passes the header on as it came, so the app builds its links for the address the browser is on, a redirect to the copy's own port is turned back into the name address, and websockets go through: a dev server's hot reload works.</p>
+    <ul>
+      <li><b>The name</b> is the worktree folder's name, lowercased, with anything that isn't a letter or a digit made a hyphen (<code>FLA_709 fix</code> → <code>fla-709-fix</code>), at most 63 characters. Not the branch's: a branch can be renamed or switched in the same folder, and the address would move. Two running worktrees whose folders have the same name, in different directories, get a 409 that names both; a folder called <code>main</code> is main's address.</li>
+      <li><b>Its own port,</b> not 3000. Main's <code>web</code> listens on 3000 itself; for the router to take that port, main's process would have to move to another and every request to main would go through the router, and main's <code>web</code> would be gone whenever the router is. A TLS front takes a port of its own for the same reason.</li>
+      <li><b>Where it resolves.</b> <code>*.localhost</code> is this machine (RFC 6761). Chrome, Firefox, Safari and curl resolve it to 127.0.0.1 and ::1 by themselves, and so does macOS for every program that asks the system: Node's <code>fetch</code> and <code>dns.lookup</code>, and Go's default resolver on macOS. Not everything does: Go's pure resolver (<code>CGO_ENABLED=0</code>, the <code>netgo</code> tag, the usual Linux build) and Node's <code>dns.resolve*</code> ask a DNS server, which knows no such name. For those, use <code>localhost:3900</code> with the header, <code>curl -H 'Host: fla-709.localhost:3900' localhost:3900</code>, or <code>curl --resolve fla-709.localhost:3900:127.0.0.1</code>. Services keep calling each other by port; the names are for people and browsers.</li>
+      <li><b>Dev servers</b> check the host they are asked for. Next.js allows <code>localhost</code> and names under it for its dev resources by default (<code>allowedDevOrigins</code> only needs names outside it), and Vite allows them too (<code>server.allowedHosts</code>). A server that checks against a fixed list needs <code>.localhost</code> added.</li>
+      <li><b>Cookies</b> belong to a host name, not a port. Every worktree's slot port shares the cookies of <code>localhost</code>; at its name address each worktree has its own, so signing in to one doesn't sign you out of another.</li>
+      <li><b>Sign-in redirects.</b> An auth server only redirects back to addresses it knows, and hydra changes neither the app nor its configuration. For Supabase, in <code>supabase/config.toml</code>: <code>additional_redirect_urls = ["http://*.localhost:3900/**"]</code> under <code>[auth]</code>, then restart main's Supabase. An app that builds its own address (a callback URL) can read <code>HYDRA_URL_WEB</code>, below.</li>
+      <li><b><code>HYDRA_URL_&lt;SERVICE&gt;</code>.</b> The service's own process gets its address in that checkout: <code>HYDRA_URL_WEB=http://fla-709.localhost:3900</code> in fla-709, <code>http://localhost:3900</code> in main. Main's copy of a routed service has main's, also while it serves a worktree; take the request's <code>Host</code> header there. Adding <code>hosts</code> changes that one process's environment, so the next <code>hydra update</code> restarts it in main.</li>
+      <li>A request at a worktree's address counts as using it, for <a href="#idle"><code>idle_stop</code></a>. <code>hydra status</code>, <code>hydra up</code>, <code>hydra status --json</code> (<code>address</code>) and the dashboard (<kbd>o</kbd> opens it) show the address.</li>
+    </ul>
+  </section>
+
   <section id="supabase">
     <h2>A database per worktree</h2>
     <p>Mark a local Supabase <code>kind: supabase</code>, with <code>paths</code> covering what makes up its schema. The main checkout runs it exactly as written. A worktree that changed its schema files gets a Supabase of its own; every other worktree uses main's.</p>
@@ -1564,6 +1610,7 @@ supabase:
       <tr><td><code>follow</code><span class="type">boolean</span></td><td class="def">false</td><td>Run in a worktree whenever a service there depends on it.</td></tr>
       <tr><td><code>prepare</code><span class="type">string</span></td><td class="def">none</td><td>A shell command run once before the service starts in a worktree, for example to create the queue or namespace named by <code>url</code>.</td></tr>
       <tr><td><code>tls</code><span class="type">integer or map</span></td><td class="def">none</td><td>A port where the router accepts TLS for the main checkout's copy and passes it on to <code>port</code>: <code>tls: 8443</code>, or <code>tls: { port: 8443, alpn: h2 }</code> for a service that speaks HTTP/2 in the clear. See <a href="#tls">HTTPS in front of a service</a>.</td></tr>
+      <tr><td><code>hosts</code><span class="type">integer</span></td><td class="def">none</td><td>A port where the router serves each worktree's copy by name, <code>http://&lt;worktree&gt;.localhost:PORT</code>, and main's at <code>localhost:PORT</code>; a worktree that doesn't run the service gets what it uses instead. Needs <code>port</code> and an HTTP <code>url</code>; not on a <code>shared</code> service. See <a href="#hosts">an address per worktree</a>.</td></tr>
       <tr><td><code>pool</code><span class="type">integer or map</span></td><td class="def">none</td><td>On a database's service: a port where one <a href="#pool">PgBouncer</a> in main stands in front of main's copy, and every worktree that takes the database from main connects through it. <code>pool: 6432</code>, or <code>pool: { port: 6432, size: 40, of: db }</code>: <code>size</code> is how many connections it keeps to Postgres for all worktrees together (20), <code>of</code> the named port it stands in front of (<code>db</code> when the service has one, else <code>port</code>). One service per stack. Needs <code>pgbouncer</code> installed.</td></tr>
       <tr><td><code>seed_from_main</code><span class="type">boolean</span></td><td class="def">false</td><td>On a <code>kind: supabase</code> service: a worktree's own database starts from main's data instead of the seed files, and the branch's migrations run on it. See <a href="#supabase-data">main's data in a worktree</a>.</td></tr>
       <tr><td><code>baseline_command</code><span class="type">string</span></td><td class="def">none</td><td>Replaces the process's <code>command</code> in the main checkout, where the code only changes on <code>hydra update</code>: a production build, say, where worktrees run a dev server.</td></tr>
@@ -1700,6 +1747,7 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>HYDRA_SERVICE</code></td><td>The service's name.</td></tr>
       <tr><td><code>HYDRA_SLOT</code></td><td>The slot number. 0 in the main checkout.</td></tr>
       <tr><td><code>HYDRA_UPSTREAMS</code></td><td>The names of its upstream variables, comma-separated.</td></tr>
+      <tr><td><code>HYDRA_URL_&lt;SERVICE&gt;</code></td><td>With <a href="#hosts"><code>hosts</code></a>, on that service alone: its address by name in this checkout (<code>HYDRA_URL_WEB=http://fla-709.localhost:3900</code>; main's is <code>http://localhost:3900</code>).</td></tr>
     </table></div>
     <p>And the variables it takes away: those that mark an AI agent's shell (<code>AI_AGENT</code>, <code>CLAUDECODE</code>, <code>CLAUDE_CODE*</code>, <code>CLAUDE_AGENT_SDK_VERSION</code>, <code>CURSOR_AGENT</code>, <code>CURSOR_TRACE_ID</code>, <code>CODEX_SANDBOX*</code>, <code>CODEX_THREAD_ID</code>, <code>GEMINI_CLI</code>, <code>AUGMENT_AGENT</code>, <code>OPENCODE_CLIENT</code>, <code>REPL_ID</code>) are not passed on to process-compose.</p>
   </section>
@@ -1718,7 +1766,7 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>.hydra.local.yaml</code><span class="type">in a worktree</span></td><td>Yours, and optional: <a href="#local">per-worktree settings</a>. hydra only reads it.</td></tr>
       <tr><td><code>hydra-slots.json</code><span class="type">shared .git</span></td><td>Which worktree holds which slot.</td></tr>
       <tr><td><code>hydra-baseline.json</code><span class="type">shared .git</span></td><td>The commit main's stack was last brought to, and where its process-compose listens. Written when main's stack starts and after a successful <code>hydra update</code>.</td></tr>
-      <tr><td><code>hydra-routes/slot-N.json</code><span class="type">shared .git</span></td><td>What a running worktree runs, for main's router.</td></tr>
+      <tr><td><code>hydra-routes/slot-N.json</code><span class="type">shared .git</span></td><td>What a running worktree runs, and its name for <a href="#hosts"><code>hosts</code></a>, for main's router.</td></tr>
       <tr><td><code>hydra-journal/YYYY-MM-DD.jsonl</code><span class="type">shared .git</span></td><td><a href="#journal">The journal</a>: one JSON object per line, from every checkout. Files older than 30 days are deleted.</td></tr>
       <tr><td><code>hydra-journal/reports/*.md</code><span class="type">shared .git</span></td><td>What <code>hydra report</code> wrote. Never deleted by hydra.</td></tr>
       <tr><td><code>hydra-hook.cjs</code><span class="type">shared .git</span></td><td>The Node preload behind <code>routed: node</code>.</td></tr>

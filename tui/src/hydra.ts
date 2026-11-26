@@ -24,6 +24,8 @@ export interface Backend {
 	/** Hands the terminal to a command and returns when it ends. pause waits
 	 *  for a key first, so its output can be read. */
 	terminal(cmd: TerminalCommand): number;
+	/** Opens an address in the browser. */
+	browse(url: string): Promise<Result>;
 }
 
 export interface TerminalCommand {
@@ -99,6 +101,14 @@ export function realBackend(exe: string, cwd: string): Backend {
 		},
 		terminal(cmd) {
 			return handOver(exe, cmd);
+		},
+		browse(url) {
+			const opener = process.platform === "darwin" ? "open" : "xdg-open";
+			return new Promise((resolve) => {
+				const p = spawn(opener, [url], { stdio: "ignore", detached: true });
+				p.on("error", (e) => resolve({ code: 127, output: `can't run ${opener}: ${e.message}` }));
+				p.on("close", (code) => resolve({ code: code ?? 1, output: "" }));
+			});
 		},
 	};
 }

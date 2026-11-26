@@ -36,6 +36,9 @@ type Options struct {
 	// that is given a front's address gets it as NODE_EXTRA_CA_CERTS, so
 	// Node accepts the front.
 	CAFile string
+	// HostLabel is the checkout's name under .localhost, for the address a
+	// service with a hosts port is given (HYDRA_URL_<SERVICE>); "" in main.
+	HostLabel string
 }
 
 const idle = "while :; do sleep 3600; done"
@@ -259,6 +262,15 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 		if row.Port != 0 && st.Services[source].Kind != config.KindSupabase { // the CLI takes its ports from SUPABASE_*_PORT
 			env = append(env, row.PortEnv+"="+strconv.Itoa(row.Port))
 		}
+		if p.Slot == 0 || opt.HostLabel != "" { // a folder with no letters in its name has no address
+			label := opt.HostLabel
+			if p.Slot == 0 {
+				label = ""
+			}
+			if u := st.HostsURL(st.Services[source], label); u != "" {
+				env = append(env, HostsEnv(source)+"="+u)
+			}
+		}
 		var names []string
 		for _, u := range row.Upstreams {
 			env = append(env, u.Env+"="+u.Value)
@@ -414,6 +426,20 @@ func Render(st *config.Stack, p *plan.Plan, opt Options) ([]byte, error) {
 		return nil, err
 	}
 	return append([]byte(header), body...), nil
+}
+
+// HostsEnv is the variable that hands a service with a hosts port its own
+// address: HYDRA_URL_WEB for web.
+func HostsEnv(service string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(service) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	return "HYDRA_URL_" + b.String()
 }
 
 // routedOrigins lists the router addresses a routed service calls, which is

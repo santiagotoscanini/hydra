@@ -53,6 +53,17 @@ test("the detail lists what runs here, what comes from main, and the problems wi
 	unmount();
 });
 
+test("o opens the checkout's address by name in the browser", async () => {
+	const { backend, stdin, frame, unmount } = app(100, 40);
+	await tick();
+	assert.match(frame(), /address: web http:\/\/cart\.localhost:3900/);
+	stdin.write("o");
+	await tick();
+	assert.deepEqual(backend.browsed, ["http://cart.localhost:3900"]);
+	assert.match(frame(), /opened http:\/\/cart\.localhost:3900/);
+	unmount();
+});
+
 test("detail lines of a conflicting and of a stacked worktree", () => {
 	const list = entries(fixture());
 	const text = (i: number) =>

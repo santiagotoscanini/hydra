@@ -277,6 +277,11 @@ type Service struct {
 	BaselineCommand string `yaml:"baseline_command"`
 	// TLS puts a TLS front before the baseline's copy (see TLSFront).
 	TLS *TLSFront `yaml:"tls"`
+	// Hosts is a port where hydra's router serves each worktree's copy of
+	// the service by name, <worktree>.localhost:Hosts, and main's at
+	// localhost:Hosts. A worktree that doesn't run the service reaches what
+	// it uses instead: main's copy, through its own port when routed.
+	Hosts int `yaml:"hosts"`
 	// Pool puts one PgBouncer in front of the baseline's Postgres, through
 	// which every worktree that uses the baseline's copy connects, so they
 	// share a few connections instead of each opening its own pools. The
@@ -483,6 +488,54 @@ func (st *Stack) HasTLS() bool {
 		}
 	}
 	return false
+}
+
+// HasHosts reports whether any service has a hosts port.
+func (st *Stack) HasHosts() bool {
+	for _, s := range st.Services {
+		if s.Hosts != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// HostsURL is the address of s's copy in the checkout whose name is label
+// ("" for main's): http://<label>.localhost:<hosts>, http://localhost:<hosts>
+// for main.
+func (st *Stack) HostsURL(s *Service, label string) string {
+	if s == nil || s.Hosts == 0 {
+		return ""
+	}
+	host := "localhost"
+	if label != "" {
+		host = label + ".localhost"
+	}
+	return fmt.Sprintf("http://%s:%d", host, s.Hosts)
+}
+
+// HostLabel is a worktree's name under .localhost: its folder's name,
+// lowercased, with anything a host name can't hold made a hyphen, and cut
+// to the 63 characters a DNS label holds. "" when nothing is left.
+func HostLabel(root string) string {
+	base := root
+	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
+		base = base[i+1:]
+	}
+	var b strings.Builder
+	for _, r := range strings.ToLower(base) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	label := strings.Trim(b.String(), "-")
+	if len(label) > 63 {
+		label = strings.TrimRight(label[:63], "-")
+	}
+	return label
 }
 
 // HasRouted reports whether any service is routed.
@@ -697,6 +750,16 @@ func (st *Stack) validate() error {
 				return fmt.Errorf("%s: tls.alpn: want http/1.1 or h2, got %q", name, s.TLS.ALPN)
 			}
 		}
+		if s.Hosts != 0 {
+			switch {
+			case s.Port == 0:
+				return fmt.Errorf("%s: hosts needs x-hydra.port, the port each copy listens on", name)
+			case s.Shared:
+				return fmt.Errorf("%s: hosts gives each worktree's copy an address, and a shared service only has main's", name)
+			case !strings.HasPrefix(s.URL, "http"):
+				return fmt.Errorf("%s: hosts serves HTTP by name, and %s's url is %q", name, name, s.URL)
+			}
+		}
 		for _, env := range s.UpstreamEnvs() {
 			u := s.Upstreams[env]
 			t, ok := st.Services[u.Service]
@@ -777,6 +840,17 @@ func (st *Stack) checkPorts() error {
 			return fmt.Errorf("port %d: %s collides with %s; change it, slot_stride, max_slots or the base ports", s.TLS.Port, who, prev)
 		}
 		owner[s.TLS.Port] = who
+	}
+	for _, name := range st.Names() {
+		s := st.Services[name]
+		if s.Hosts == 0 {
+			continue
+		}
+		who := name + "'s hosts port"
+		if prev, taken := owner[s.Hosts]; taken {
+			return fmt.Errorf("port %d: %s collides with %s; change it, slot_stride, max_slots or the base ports", s.Hosts, who, prev)
+		}
+		owner[s.Hosts] = who
 	}
 	if s := st.Pooled(); s != nil {
 		who := s.Name + "'s pool (PgBouncer)"
