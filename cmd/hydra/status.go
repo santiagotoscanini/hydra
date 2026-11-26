@@ -68,6 +68,7 @@ func statusCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	ws.Far = farBehindNow(ms, ws)
 	printMainLine(ms)
 	down := "stack not started"
 	if n := readIdleNote(ws.target.checkout.Root); n != nil {
@@ -338,6 +339,7 @@ func statusAll(co gitx.Checkout, ms *mainState, waited time.Duration) error {
 			if l.ws, l.err = loadWorktree(wco); l.err != nil {
 				return
 			}
+			l.ws.Far = farBehindNow(ms, l.ws)
 			l.problems = worktreeProblems(ms, l.ws, l.ws.Up)
 			l.counts = behindAhead(l.root, ms.Head)
 		}(l)
@@ -376,6 +378,12 @@ func statusAll(co gitx.Checkout, ms *mainState, waited time.Duration) error {
 			}
 			if l.counts != "" {
 				vs += "  (" + l.counts + ")"
+			}
+			if f := ws.Far; f != nil {
+				vs = "! " + vs
+				if len(f.Conflicts) > 0 {
+					vs += fmt.Sprintf(", merging main conflicts in %d file%s", len(f.Conflicts), plural(len(f.Conflicts)))
+				}
 			}
 			state := upText(ws.Up, "up", "-")
 			if n := readIdleNote(l.root); n != nil && !ws.Up {
@@ -444,6 +452,21 @@ func enabledLocal(ws *wtState) []string {
 		}
 	}
 	return out
+}
+
+// farBehindNow is farBehindOf for a worktree that was just loaded.
+func farBehindNow(ms *mainState, ws *wtState) *farBehind {
+	root := ws.target.checkout.Root
+	out, err := gitOut(root, "rev-list", "--count", "HEAD.."+ms.Head)
+	if err != nil {
+		return nil
+	}
+	behind, _ := strconv.Atoi(strings.TrimSpace(out))
+	head, err := gitx.Head(root)
+	if err != nil {
+		return nil
+	}
+	return farBehindOf(root, head, ms.Head, behind, ws.target.stack.Hydra.BehindWarn)
 }
 
 // behindAhead counts the commits main has that the worktree lacks, and the

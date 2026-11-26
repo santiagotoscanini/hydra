@@ -288,6 +288,11 @@ started from a newer commit than main is on (a worktree cut from
 fixes it. Either way `hydra up` refuses to start and `hydra status` says
 which services and files.
 
+Past `behind_warn` commits behind main (100), or as soon as merging main
+would conflict (git tries it in memory, `git merge-tree`), `hydra status`
+and the dashboard warn too, and name the conflicting files: a `!` that
+refuses nothing, since the merge only gets harder.
+
 Services the worktree runs itself don't count, however old the branch:
 they run the branch's code. Neither do two services that both run in main.
 

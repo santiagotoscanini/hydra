@@ -58,6 +58,10 @@ type Global struct {
 	// that changed. The main checkout's never stops. 0 (unset, `0` or
 	// `off`) never stops one.
 	IdleStop Idle `yaml:"idle_stop"`
+	// BehindWarn is how many commits behind main a worktree may fall before
+	// `hydra status` warns that it is far behind (default 100). Merging main
+	// into it conflicting warns at any count.
+	BehindWarn int `yaml:"behind_warn"`
 
 	// Exe is the hydra binary that generated steps call (a kind's prepare
 	// step). Set by the caller; "hydra" when empty.
@@ -556,6 +560,12 @@ func Parse(data []byte) (*Stack, error) {
 	}
 	if g.Host == "" {
 		g.Host = "127.0.0.1"
+	}
+	if g.BehindWarn == 0 {
+		g.BehindWarn = 100
+	}
+	if g.BehindWarn < 0 {
+		return nil, fmt.Errorf("behind_warn: %d is not a number of commits", g.BehindWarn)
 	}
 	if g.PortEnv == "" {
 		g.PortEnv = "PORT"

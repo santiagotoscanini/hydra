@@ -485,7 +485,7 @@ shop-search    search    -     -      api        behind main in web  (4 behind, 
 ok: main's stack is up and runs what main has checked out.
 </pre>
     </div>
-    <p><code>SLOT -</code> is a worktree that never started a stack. <code>STACK</code> is <code>up</code>, <code>up, 1 problem</code> (run <code>hydra status</code> there for it), <code>idle-stopped</code> (<a href="#idle">stopped for being unused</a>) or <code>-</code>. <code>VS MAIN</code> says whether the branch and main are <a href="#instep">in step</a>, then how many commits each side has that the other lacks.</p>
+    <p><code>SLOT -</code> is a worktree that never started a stack. <code>STACK</code> is <code>up</code>, <code>up, 1 problem</code> (run <code>hydra status</code> there for it), <code>idle-stopped</code> (<a href="#idle">stopped for being unused</a>) or <code>-</code>. <code>VS MAIN</code> says whether the branch and main are <a href="#instep">in step</a>, then how many commits each side has that the other lacks. It starts with <code>!</code> when the branch is <a href="#far-behind">far behind main</a>, and then ends with <code>merging main conflicts in N files</code> when it would.</p>
 
     <h3 id="messages">Every message, and what to do</h3>
     <p><b>About main's stack.</b> These show in every worktree that uses it.</p>
@@ -509,6 +509,8 @@ ok: main's stack is up and runs what main has checked out.
     <p><b>About the branch and main.</b> See <a href="#instep">in step with main</a>.</p>
     <div class="msgs">
       <div><p class="said">✗ this branch is behind main: main changed these since the branch left it, and this worktree uses main's copy: …</p><p>Main moved on in a service this worktree takes from it. <code>hydra update</code> merges main into every worktree it can; <a href="#update-here"><code>hydra update --here</code></a> does it for this one alone and restarts what the merge touched.</p></div>
+      <div><p class="said">! 312 commits behind main (more than behind_warn, 100): the longer it waits, the harder the merge.</p><p>A warning: the stack still runs, and may well be <a href="#instep">in step</a>. The branch is more than <a href="#config"><code>behind_warn</code></a> commits behind the main checkout, and merging main in would be clean today. <code>hydra update --here</code> does it and restarts what the merge touched; <code>hydra update</code> does it for every worktree.</p></div>
+      <div><p class="said">! 312 commits behind main; merging it conflicts in 4 files: apps/api/users.go, apps/web/cart.tsx, go.sum and 1 more</p><p>Merging main into this branch now would conflict in those files, however few commits behind it is (git tries the merge in memory, <code>git merge-tree</code>, and touches nothing). <code>hydra update</code> never resolves a conflict, so this is yours: <code>git merge main</code> in the worktree, resolve them, commit. The sooner, the fewer. Its fix line says the same.</p></div>
       <div><p class="said">✗ main is older than the commit this branch started from, and this worktree uses main's copy of: …</p><p>The worktree was cut from a newer commit (a freshly fetched <code>origin/main</code>) than the main checkout has. <code>hydra update</code> brings main there.</p></div>
     </div>
     <p><b>About this worktree's stack.</b></p>
@@ -581,7 +583,7 @@ ok: main's stack is up and runs what main has checked out.
       <tr><td><code>SLOT</code></td><td>Its <a href="#slots">slot</a>, which decides its ports. <code>-</code>: it never ran a stack, so it holds none.</td></tr>
       <tr><td><code>STACK</code></td><td><code>up</code>; <code>down</code>; <code>idle-off</code> (hydra stopped it, <a href="#idle">unused</a>); <code>starting</code>; <code>failing</code> (a process here failed); <code>up ✗2</code> (up, with two problems marked ✗). Main's reads <code>DOWN</code> when it isn't running.</td></tr>
       <tr><td><code>RUNS HERE</code></td><td>What runs in the worktree. For main: how many of its processes are fine, <code>4/4 ok</code>.</td></tr>
-      <tr><td><code>VS MAIN</code></td><td><code>2↓</code> commits behind main, <code>1↑</code> ahead. <code>behind in api</code>: main changed a service this worktree takes from it (see <a href="#instep">in step with main</a>). <code>conflicts(1)</code>: <code>hydra update</code> would conflict in one file. <code>on cart</code>: stacked on the branch <code>cart</code>. <code>landed</code>: everything on the branch is in main already. For main: commits its upstream has that it doesn't, and uncommitted files.</td></tr>
+      <tr><td><code>VS MAIN</code></td><td><code>2↓</code> commits behind main, <code>1↑</code> ahead. <code>behind in api</code>: main changed a service this worktree takes from it (see <a href="#instep">in step with main</a>). <code>conflicts(1)</code>: <code>hydra update</code> (or merging main) would conflict in one file. A leading <code>!</code>: <a href="#far-behind">far behind main</a>, past <code>behind_warn</code> or with a conflicting merge; the detail says which files. <code>on cart</code>: stacked on the branch <code>cart</code>. <code>landed</code>: everything on the branch is in main already. For main: commits its upstream has that it doesn't, and uncommitted files.</td></tr>
     </table></div>
     <p>At 110 columns or wider a <code>BRANCH</code> column shows too. The bottom half is the chosen checkout: its branch, slot and memory; the commit; how far it is from main, and what <a href="#updating"><code>hydra update</code></a> would do to it (a conflict names the files); then each service it runs here and each of main's it uses, with port and state. <code>main, routed</code> is main's copy answering on this worktree's port. Last come the problems <a href="#status"><code>hydra status</code></a> finds, the same texts as <a href="#messages">every message</a>, each with its fix. <code>(f runs it)</code> marks a fix that is a hydra command.</p>
 
@@ -675,6 +677,7 @@ ok: main's stack is up and runs what main has checked out.
       <tr><td><code>slot</code></td><td>0: the worktree never ran a stack, so it holds none.</td></tr>
       <tr><td><code>stack</code></td><td>The branches it is stacked on, bottom first, when it sits on another worktree's branch.</td></tr>
       <tr><td><code>outOfStep</code></td><td>The services where the branch and main disagree, each with why and the files. <code>mainBehind</code>: main is the older side.</td></tr>
+      <tr><td><code>farBehind</code></td><td>The branch is <a href="#far-behind">far behind main</a>: <code>behind</code> (commits), <code>limit</code> (<code>behind_warn</code>) and <code>conflicts</code> (the files merging main into it conflicts in, when it does). Absent otherwise.</td></tr>
       <tr><td><code>update</code></td><td>What <code>hydra update</code> would do to it now: <code>parent</code> (what is merged in), <code>action</code> (<code>merge</code>, <code>fast-forward</code>, or absent when it is left alone), <code>note</code> (the update's line for it), <code>hand</code> (someone has to step in) and <code>conflicts</code>.</td></tr>
       <tr><td><code>idleStopped</code></td><td>The stack isn't running because nobody used it for <a href="#idle"><code>idle_stop</code></a>: <code>at</code> (when hydra stopped it) and <code>after</code> (the <code>idle_stop</code>, <code>"2h"</code>). Absent otherwise.</td></tr>
       <tr><td><code>pending</code></td><td>Not planned yet: the first seconds of a watch.</td></tr>
@@ -1044,6 +1047,13 @@ note: changed, but in no service's paths, so nothing runs here for them: package
     </table></div>
     <p>Not counted: services the worktree runs itself, however old the branch, since they run the branch's code. And two services that both run in main are in step with each other whatever the branch did. So a branch that is 300 commits behind, where main only changed other things, is in step.</p>
     <p>Nothing is started or stopped because of this. hydra reports it and <code>hydra up</code> refuses to build on it; bringing the two sides together is a merge, which is yours to make or to hand to <code>hydra update</code>.</p>
+    <h3 id="far-behind">Far behind main</h3>
+    <p>In step or not, a branch that stays behind gets harder to merge. <code>hydra status</code>, <code>hydra status --all</code>, <code>hydra status --json</code> and the dashboard warn (a <code>!</code>, not a <code>✗</code>: nothing is refused) when:</p>
+    <ul>
+      <li>the branch is more than <code>behind_warn</code> commits (100) behind the main checkout, or</li>
+      <li>merging main into it would conflict, at any count. hydra tries the merge in memory with <code>git merge-tree</code> (git 2.38 or later), which touches neither the worktree nor its index, and names the files.</li>
+    </ul>
+    <p>The merge is tried once per pair of commits (the branch's and main's): the dashboard keeps the answer until one of them moves. <code>hydra up</code> doesn't try it.</p>
   </section>
 
   <section id="stacks">
@@ -1371,6 +1381,7 @@ supabase:
       <tr><td><code>max_slots</code><span class="type">integer</span></td><td class="def">20</td><td>How many worktrees can hold a slot. Port collisions are checked for all of them. Slots where a browser would refuse a port, or where another program already answers on one (macOS's AirPlay Receiver holds 5000 and 7000), aren't handed out, so a few fewer may be usable. With routed services, run <code>hydra update</code> in main after changing it: the router's own ports sit one stride past the last slot, and main's services only learn the new ones on that reload.</td></tr>
       <tr><td><code>reserved_ports</code><span class="type">list of integers</span></td><td class="def">[]</td><td>Ports used by shared services or anything else on the machine. No slot may land on one.</td></tr>
       <tr><td><code>idle_stop</code><span class="type">duration</span></td><td class="def">off</td><td>Stops a worktree's stack once nobody has used it for this long (<code>2h</code>, <code>90m</code>, <code>30s</code>): no request through hydra's router for it, and no file in it changed. <code>0</code> or <code>off</code> never stops one. Main's stack never stops. See <a href="#idle">when nobody uses a worktree</a>.</td></tr>
+      <tr><td><code>behind_warn</code><span class="type">integer</span></td><td class="def">100</td><td>How many commits behind the main checkout a worktree may fall before <code>hydra status</code> <a href="#messages">warns</a> that it is far behind. A merge of main that would conflict warns at any count.</td></tr>
       <tr><td><code>host</code><span class="type">string</span></td><td class="def">127.0.0.1</td><td>The host used to build upstream addresses.</td></tr>
       <tr><td><code>port_env</code><span class="type">string</span></td><td class="def">PORT</td><td>The variable a service reads its port from, unless the process sets its own.</td></tr>
       <tr><td><code>global_paths</code><span class="type">list of globs</span></td><td class="def">[]</td><td>Files that count as a change to every service that declares <code>paths</code>, such as a lockfile.</td></tr>

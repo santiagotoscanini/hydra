@@ -285,3 +285,20 @@ test("a worktree hydra stopped for being idle says so", () => {
 	const detail = plain(render(<>{detailLines(e, 80, "main")}</>).lastFrame() ?? "");
 	assert.match(detail, /stopped after 2h idle/);
 });
+
+test("a worktree far behind main is marked, and the row still fits 80 columns", () => {
+	const snap = fixture();
+	const w = snap.worktrees[0]!;
+	w.behind = 312;
+	w.farBehind = { behind: 312, limit: 100, conflicts: ["apps/api/users.go", "apps/web/cart.tsx"] };
+	const e = entries(snap)[1]!;
+	assert.deepEqual(vsMain(e), { text: "! conflicts(2) 312↓ 1↑", color: "red" });
+	const row = plain(render(<ListRow e={e} selected={false} cols={columns(80)} />).lastFrame());
+	noLineWiderThan(row, 80);
+	assert.match(row, /! conflicts\(2\)/);
+	const detail = plain(render(<>{detailLines(e, 80, "main")}</>).lastFrame() ?? "");
+	assert.match(detail, /! far behind main: merging it conflicts in apps\/api\/users.go, apps\/web\/cart.tsx/);
+
+	w.farBehind = { behind: 312, limit: 100 };
+	assert.deepEqual(vsMain(entries(snap)[1]!), { text: "! behind in api 312↓ 1↑", color: "yellow" });
+});

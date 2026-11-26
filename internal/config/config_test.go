@@ -353,3 +353,18 @@ func TestIdleStop(t *testing.T) {
 		}
 	}
 }
+
+func TestBehindWarn(t *testing.T) {
+	for in, want := range map[string]int{"": 100, "behind_warn: 30": 30} {
+		st, err := Parse([]byte("x-hydra: {" + in + "}\nprocesses: {}\n"))
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if st.Hydra.BehindWarn != want {
+			t.Errorf("%q: behind_warn %d, want %d", in, st.Hydra.BehindWarn, want)
+		}
+	}
+	if _, err := Parse([]byte("x-hydra: { behind_warn: -1 }\nprocesses: {}\n")); err == nil {
+		t.Error("behind_warn: -1 was accepted")
+	}
+}

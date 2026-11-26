@@ -292,6 +292,21 @@ stopped because of this check. It used to be that a worktree behind main's
 migrations got a database of its own; one update of main would then have
 started a database, an API and a frontend in every running worktree.
 
+**Far behind.** In step or not, a branch that stays behind gets harder to
+merge. Past `behind_warn` commits behind M (100), or as soon as merging M
+would conflict, `hydra status` warns, naming the files. The conflict comes
+from `git merge-tree --write-tree --name-only HEAD M` (git 2.38), which
+merges in memory and touches neither the worktree nor its index; it exits 1
+on a conflict, but also on a commit it can't read, so only output that
+starts with a tree counts as an answer. On a large repository it takes
+seconds, so its answer is cached by the pair of commits, which it can never
+change for: the snapshot works it out on its slow git tier and keeps it
+while neither commit moves (its two-minute look for uncommitted work reuses
+it). `hydra update`'s own merge-tree is skipped for a worktree with
+uncommitted work, which every agent's has, so this one is separate. It is a
+warning, not a refusal: the stack runs fine on a branch that is merely old,
+and `hydra up` doesn't pay for the merge.
+
 ## Updating main
 
 Worktrees take the baseline's running services, so main moves only through
@@ -401,6 +416,7 @@ x-hydra:
   global_paths: [go.work] # affect every service that declares paths
   ignore: ["docs/**", ".github/**"]  # belong to no service; other unlisted changes are reported
   idle_stop: 2h           # stop a worktree's stack nobody used for 2h (default off; see Idle worktrees)
+  behind_warn: 100        # warn past this many commits behind main (default 100)
 
 processes:
   api:

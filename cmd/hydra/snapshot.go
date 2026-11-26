@@ -128,11 +128,20 @@ type snapWorktree struct {
 	// IdleStopped: its stack isn't running because nobody used it for
 	// x-hydra idle_stop, and hydra stopped it.
 	IdleStopped *snapIdle `json:"idleStopped,omitempty"`
+	// FarBehind: more than behind_warn commits behind main, or merging main
+	// conflicts.
+	FarBehind *snapFarBehind `json:"farBehind,omitempty"`
 	// Pending: not planned yet (the first seconds of a watch).
 	Pending   bool      `json:"pending,omitempty"`
 	PlannedAt time.Time `json:"plannedAt"`
 	GitAt     time.Time `json:"gitAt"`
 	Error     string    `json:"error,omitempty"`
+}
+
+type snapFarBehind struct {
+	Behind    int      `json:"behind"`
+	Limit     int      `json:"limit"`               // behind_warn
+	Conflicts []string `json:"conflicts,omitempty"` // files merging main into it conflicts in
 }
 
 type snapIdle struct {
@@ -185,6 +194,7 @@ type wtGit struct {
 	behind, ahead   int
 	stack           []string
 	update          *snapUpdate
+	far             *farBehind
 	at              time.Time
 	// The commits it was worked out at: the worktree's, main's, and the
 	// one of the branch it is stacked on.
@@ -336,8 +346,9 @@ func (s *snapshotter) refresh(wait, force bool, only string) {
 		}
 	}
 	var base, mainRoot string
+	limit := 0
 	if s.ms != nil {
-		base = s.ms.target.stack.Hydra.BaseRef
+		base, limit = s.ms.target.stack.Hydra.BaseRef, s.ms.target.stack.Hydra.BehindWarn
 	}
 	mainRoot = s.main.Root
 	s.mu.Unlock()
@@ -359,7 +370,7 @@ func (s *snapshotter) refresh(wait, force bool, only string) {
 				p = planWorktree(j.wt, mainHead)
 			}
 			if j.git && base != "" {
-				g = gitState(j.wt, mainRoot, base, mainHead)
+				g = gitState(j.wt, mainRoot, base, mainHead, limit)
 				g.parentHead = heads[g.update.Parent]
 			}
 			s.mu.Lock()
@@ -431,7 +442,7 @@ func planWorktree(wt stack.Worktree, mainHead string) *wtPlan {
 
 // gitState works out where a worktree stands against main, and what
 // `hydra update` would do to it.
-func gitState(wt stack.Worktree, mainRoot, base, mainHead string) *wtGit {
+func gitState(wt stack.Worktree, mainRoot, base, mainHead string, limit int) *wtGit {
 	g := &wtGit{at: time.Now(), head: wt.Head, mainHead: mainHead}
 	if out, err := gitOut(wt.Root, "log", "-1", "--abbrev=9", "--format=%h%x09%s"); err == nil {
 		g.commit, g.subject, _ = strings.Cut(out, "\t")
@@ -442,6 +453,9 @@ func gitState(wt stack.Worktree, mainRoot, base, mainHead string) *wtGit {
 			g.ahead, _ = strconv.Atoi(f[1])
 		}
 	}
+	// Cached by the pair of commits (mainConflicts): a look every two
+	// minutes for uncommitted work doesn't merge again.
+	g.far = farBehindOf(wt.Root, wt.Head, mainHead, g.behind, limit)
 	u := &wtUpdate{root: wt.Root, name: wt.Branch}
 	u.inspect(nil, base)
 	u.decide(mainRoot, base, mainHead, true)
@@ -672,6 +686,10 @@ func snapWorktreeOf(ms *mainState, wt stack.Worktree, p *wtPlan, g *wtGit, mem f
 		return w
 	}
 	ws := p.ws
+	if g != nil && g.far != nil {
+		ws.Far = g.far
+		w.FarBehind = &snapFarBehind{Behind: g.far.Behind, Limit: g.far.Limit, Conflicts: g.far.Conflicts}
+	}
 	w.Slot, w.Up, w.MainBehind = ws.Slot, ws.Up, ws.Plan.MainBehind
 	if n := readIdleNote(wt.Root); n != nil && !ws.Up {
 		w.IdleStopped = &snapIdle{At: n.At, After: n.After}

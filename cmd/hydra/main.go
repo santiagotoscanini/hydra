@@ -83,6 +83,10 @@ long (no request through hydra's router for it, no file of it changed) is
 stopped as hydra down would; hydra status says so, and hydra up starts it
 again. The main checkout's never stops.
 
+hydra status warns about a worktree more than x-hydra behind_warn (100)
+commits behind main, or whose merge of main would conflict (it names the
+files; git merge-tree tries it, and touches nothing).
+
 Hydra's own commands:
   hydra status [--all] [--wait]  is everything this checkout uses up and in step
                                  with main? (exit 1 if not; --all: every worktree;
