@@ -315,7 +315,8 @@ row stays put when its stack starts. The snapshot gives each worktree's
 parent and how far behind it it is (`update.parent`, `update.behind`), so
 the dashboard draws the tree without asking git. A PR stack's branch that
 no worktree has checked out is a row too, in its place in the chain
-(`◇`, muted, `no checkout`), with the same staleness rules: in
+(`⎇`, muted, `branch only`; a worktree is `▣`, its files on disk), with the
+same staleness rules: in
 `main ← schema ← core ← web` with only web checked out and main merged
 straight into web, schema is "10 behind main" and core and web are
 "↑ schema is behind", which is the truth about what web runs. Such a row

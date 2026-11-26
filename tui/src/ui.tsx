@@ -226,7 +226,7 @@ export function ListRow({
 	const segs: Seg[] = [
 		{ text: selected ? "▌" : " ", color: "cyan" },
 		{ text: node.lead, color: "gray" },
-		st.spin ? { text: "", spin: true, color: st.color } : { text: st.glyph, color: st.color },
+		st.spin ? { text: "", spin: true, color: st.color } : { text: onDisk(e, st.glyph), color: st.color },
 		{ text: " " },
 		...nameFit,
 		{ text: " ".repeat(cols.name - nameLen + 1) },
@@ -237,6 +237,13 @@ export function ListRow({
 		{ text, color: on(badge.color), bold: badge.bold || !!bg, dim: badge.dim && !bg },
 	];
 	return <Row segs={segs} width={width} bg={bg} />;
+}
+
+/** The list's glyph: a worktree (or main) is a box, its files on disk, in
+ *  the colour of its state; a branch with no worktree is ⎇. Failing,
+ *  planning and can't plan keep their own glyphs. */
+export function onDisk(e: Entry, glyph: string): string {
+	return e.kind !== "branch" && (glyph === "●" || glyph === "○" || glyph === "◌") ? "▣" : glyph;
 }
 
 // ── The detail of the selected checkout ───────────────────────────────
@@ -304,7 +311,7 @@ export function detailRows(
 	// Who it is: its name and state are in the panel's title (detailTitle).
 	if (e.idleStopped && !e.up) add({ text: `nobody used it for ${e.idleStopped}, so hydra stopped it: u starts it`, color: "blue" });
 	else if (e.kind === "main" && !e.up && !e.pending && !opts.busy) add({ text: "not running: the worktrees that use main's services need it", color: "red" });
-	if (e.kind === "branch") add({ text: `${e.branch} · ` }, { text: "no checkout", dim: true });
+	if (e.kind === "branch") add({ text: `${e.branch} · ` }, { text: "branch only: no worktree, no files on disk", dim: true });
 	else add({ text: `${e.branch} · ${tildePath(e.root, opts.home)}` }, { text: e.memory ? ` · ${bytes(e.memory)}` : "" });
 	if (e.commit) add({ text: e.commit + " ", bold: true }, { text: e.subject });
 
@@ -490,7 +497,7 @@ export function problemRows(e: Entry, width: number): Seg[][] {
 		if (!e.pending && !e.error)
 			add(
 				{ text: "✓ ", color: "green", bold: true },
-				{ text: e.up || e.kind === "main" ? "nothing wrong" : e.kind === "branch" ? "nothing runs it: no checkout" : "nothing in the way: u starts it", color: "green" },
+				{ text: e.up || e.kind === "main" ? "nothing wrong" : e.kind === "branch" ? "nothing runs it: branch only, no worktree" : "nothing in the way: u starts it", color: "green" },
 			);
 		return out;
 	}
@@ -594,15 +601,16 @@ export const KEYS: Array<[string, string]> = [
 	["p", "open its pull request in the browser"],
 	["f", "run the fix of one of its problems (asks first)"],
 	["m", "merge its parent (main, or the branch it is stacked on) into it: hydra update --here (asks first)"],
-	["", "  on a branch with no checkout (◇): hydra update --branch NAME"],
+	["", "  on a branch with no worktree (⎇): hydra update --branch NAME"],
 	["U", "update all: hydra update, which pulls main (dry run, then asks)"],
 	["R", "read everything again now"],
 	["pgup pgdn", "scroll the detail"],
 	["?", "this help"],
 	["q", "quit; every stack keeps running"],
-	["● ○ ◌", "up · down · stopped by hydra, unused for x-hydra idle_stop"],
+	["▣", "a worktree: its files on disk, where its services run"],
+	["", "  green up · grey down · blue stopped by hydra, unused for x-hydra idle_stop"],
 	["⠋ ✗", "starting (ready/total) or another action under way · failing"],
-	["◇", "a stack's branch with no checkout: nothing runs it, only m applies"],
+	["⎇", "branch only: a stack's branch with no worktree; nothing runs it, only m applies"],
 	["├─ └─", "a branch under the one it is stacked on; main is the root"],
 	["in step", "has every commit of its parent, and so does every branch above it"],
 	["12 behind", "commits its parent has that it doesn't; bold: the chain goes stale here"],

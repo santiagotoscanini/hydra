@@ -204,7 +204,7 @@ export interface StateView {
 export function stateOf(e: Entry, busy?: string): StateView {
 	if (e.kind === "branch") {
 		if (busy) return { glyph: "", spin: true, word: `${busy}…`, color: "yellow" };
-		return { glyph: "◇", spin: false, word: "no checkout", color: "gray" };
+		return { glyph: "⎇", spin: false, word: "branch only", color: "gray" };
 	}
 	if (e.error) return { glyph: "✗", spin: false, word: "can't plan", color: "red" };
 	if (e.pending) return { glyph: "…", spin: true, word: "planning", color: "gray" };

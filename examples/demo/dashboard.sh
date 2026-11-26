@@ -126,15 +126,15 @@ echo "--- 1. bare hydra in the api worktree"
 start 80 34
 waitfor '#7 ✓'
 screen "80 columns"
-T capture-pane -p -t d | grep -qE '▌├─○ api +down +#7 ✓ +1 behind main' || fail "the api worktree isn't chosen, with its open PR"
-T capture-pane -p -t d | grep -qE '● main +up +up to date' || fail "main isn't up"
-T capture-pane -p -t d | grep -qE '├─○ clash +down +1 behind main · 1 conflict' || fail "the conflict isn't shown"
-T capture-pane -p -t d | grep -qE '└─○ web +down +1 behind main' || fail "web, last on main, isn't drawn so"
-T capture-pane -p -t d | grep -qE '│ {3}└─○ stacked +down +↑ web is behind' || fail "the stack isn't under web, out of date through it"
-T capture-pane -p -t d | grep -qE '│ {5}└─○ deeper +down +#8 merged +PR merged: nothing to do' || fail "the second level isn't under stacked, marked as on a merged PR"
-T capture-pane -p -t d | grep -qE '├─◇ ring-schema +no checkout +1 behind main' || fail "the stack's bottom branch, with no checkout, isn't shown behind main"
-T capture-pane -p -t d | grep -qE '│ └─◇ ring-core +no checkout +↑ ring-schema is behind' || fail "the middle branch, with no checkout, isn't under ring-schema"
-T capture-pane -p -t d | grep -qE '│ {3}└─○ ring-web +down +↑ ring-schema is behind' || fail "ring-web merged main, but its stack didn't: it isn't out of date"
+T capture-pane -p -t d | grep -qE '▌├─▣ api +down +#7 ✓ +1 behind main' || fail "the api worktree isn't chosen, with its open PR"
+T capture-pane -p -t d | grep -qE '▣ main +up +up to date' || fail "main isn't up"
+T capture-pane -p -t d | grep -qE '├─▣ clash +down +1 behind main · 1 conflict' || fail "the conflict isn't shown"
+T capture-pane -p -t d | grep -qE '└─▣ web +down +1 behind main' || fail "web, last on main, isn't drawn so"
+T capture-pane -p -t d | grep -qE '│ {3}└─▣ stacked +down +↑ web is behind' || fail "the stack isn't under web, out of date through it"
+T capture-pane -p -t d | grep -qE '│ {5}└─▣ deeper +down +#8 merged +PR merged: nothing to do' || fail "the second level isn't under stacked, marked as on a merged PR"
+T capture-pane -p -t d | grep -qE '├─⎇ ring-schema +branch only +1 behind main' || fail "the stack's bottom branch, with no checkout, isn't shown behind main"
+T capture-pane -p -t d | grep -qE '│ └─⎇ ring-core +branch only +↑ ring-schema is behind' || fail "the middle branch, with no checkout, isn't under ring-schema"
+T capture-pane -p -t d | grep -qE '│ {3}└─▣ ring-web +down +↑ ring-schema is behind' || fail "ring-web merged main, but its stack didn't: it isn't out of date"
 T capture-pane -p -t d | grep -qE '0 of 6 worktrees up · 8 out of date · 1 on a merged PR' || fail "the header doesn't count what is out of date, and on a merged PR"
 T capture-pane -p -t d | grep -qE '◎ PR  #7 open · review required · checks passing' || fail "the chosen worktree's PR isn't first in its detail"
 T capture-pane -p -t d | grep -qE '◆ Runs here, and why' || fail "the chosen worktree's services aren't shown"
@@ -144,13 +144,13 @@ waitfor 'PR status from gh, read just now'
 T send-keys -t d Escape
 waitfor 'Checkouts [0-9]'
 T send-keys -t d j j
-waitfor '▌├─◇ ring-schema'
+waitfor '▌├─⎇ ring-schema'
 screen "a branch with no checkout, chosen"
-T capture-pane -p -t d | grep -qE 'ring-schema · no checkout' || fail "the detail doesn't say it has no checkout"
+T capture-pane -p -t d | grep -qE 'ring-schema · branch only' || fail "the detail doesn't say it has no checkout"
 T capture-pane -p -t d | grep -qE 'nothing: no worktree has it checked out' || fail "the detail doesn't say nothing runs it"
 T capture-pane -p -t d | grep -qE '^ m merge main +U update all' || fail "the footer doesn't offer m alone"
 T send-keys -t d u
-waitfor 'ring-schema has no checkout: nothing runs it'
+waitfor 'ring-schema is a branch only, with no worktree: nothing runs it'
 start 150 24
 screen "150 columns"
 T capture-pane -p -t d | grep -qE '╭─ Checkouts.*╭─ api' || fail "a wide terminal shows the detail beside the list"
@@ -174,7 +174,7 @@ T send-keys -t d u
 waitfor 'starting'
 screen "u: the row and the panel say it is starting"
 waitfor '✓ hydra up -D in api'
-waitfor '● api +up'
+waitfor '▣ api +up'
 screen "u started the api worktree's stack"
 T resize-window -t d -x 100 -y 32
 sleep 1
@@ -203,7 +203,7 @@ echo "the same after ctrl-c: $(procs "$repo/api")"
 T send-keys -t d d
 waitfor "Stop api's stack"
 T send-keys -t d y
-waitfor '○ api +down'
+waitfor '▣ api +down'
 [ -z "$(procs "$repo/api")" ] || fail "d left the stack running"
 echo "d, y: stopped"
 

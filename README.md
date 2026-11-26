@@ -235,8 +235,9 @@ parent, as a tree: main at the root, each stacked branch under the one it
 is stacked on. A branch under one that is behind is out of date too
 (`↑ web is behind`), and the first stale branch of each chain stands out,
 so you see where to update first. A PR stack's branch that no worktree has
-checked out is a row in its place (`◇`, muted, `no checkout`): nothing to
-start or stop there, only `m`. Each row has its branch's PR, briefly
+checked out is a row in its place (`⎇`, muted, `branch only`): nothing to
+start or stop there, only `m`. A worktree, with its files on disk, is `▣`,
+in the colour of its state. Each row has its branch's PR, briefly
 (`#7 ✓`, `#10265 draft`, `#10265 ✗ checks`), read with `gh` every 3
 minutes in the background; one whose PR is merged or closed says `PR
 merged: nothing to do`, and the header counts them, so worktrees still
@@ -251,15 +252,15 @@ the terminal switches while it runs.
 ```
  hydra  main   main up · 0 of 6 worktrees up · 8 out of date · 1 on a merged PR
 ╭─ Checkouts 9 ────────────────────────────────────────────────────────────────╮
-│ ● main                    up                                      up to date │
-│▌├─○ api                   down          #7 ✓                   1 behind main │
-│ ├─○ clash                 down                    1 behind main · 1 conflict │
-│ ├─◇ ring-schema           no checkout                          1 behind main │
-│ │ └─◇ ring-core           no checkout                ↑ ring-schema is behind │
-│ │   └─○ ring-web          down                       ↑ ring-schema is behind │
-│ └─○ web                   down                                 1 behind main │
-│   └─○ stacked             down                               ↑ web is behind │
-│     └─○ deeper            down          #8 merged   PR merged: nothing to do │
+│ ▣ main                    up                                      up to date │
+│▌├─▣ api                   down          #7 ✓                   1 behind main │
+│ ├─▣ clash                 down                    1 behind main · 1 conflict │
+│ ├─⎇ ring-schema           branch only                          1 behind main │
+│ │ └─⎇ ring-core           branch only                ↑ ring-schema is behind │
+│ │   └─▣ ring-web          down                       ↑ ring-schema is behind │
+│ └─▣ web                   down                                 1 behind main │
+│   └─▣ stacked             down                               ↑ web is behind │
+│     └─▣ deeper            down          #8 merged   PR merged: nothing to do │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ api  ○ down ────────────────────────────────────────────────────────────────╮
 │ api · ~/code/shop/api                                                        │

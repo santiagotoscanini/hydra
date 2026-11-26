@@ -220,7 +220,7 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 		// A branch with no checkout: nothing runs there, so only m, U and p
 		// do anything.
 		if (e.kind === "branch" && key !== "merge" && key !== "update" && key !== "pr") {
-			setMessage({ text: `${called(e)} has no checkout: nothing runs it. m merges its parent into it; the worktrees stacked on it run its code`, color: "yellow" });
+			setMessage({ text: `${called(e)} is a branch only, with no worktree: nothing runs it. m merges its parent into it; the worktrees stacked on it run its code`, color: "yellow" });
 			return;
 		}
 		switch (key) {

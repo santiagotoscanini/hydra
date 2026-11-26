@@ -51,10 +51,10 @@ test("the list shows main and every worktree, with where each stands", async () 
 	const { frame, unmount } = app();
 	await tick();
 	const f = frame();
-	assert.match(f, /● main\s+up\s+2 behind upstream/);
+	assert.match(f, /▣ main\s+up\s+2 behind upstream/);
 	assert.match(f, /▌├─✗ cart-checkout\s+failing\s+3 behind main/, "the checkout hydra ran in is chosen");
-	assert.match(f, /│ └─○ more\s+down\s+↑ cart-checkout is behind/, "under the branch it is stacked on");
-	assert.match(f, /├─○ clash\s+down\s+1 behind main · 1 conflict/);
+	assert.match(f, /│ └─▣ more\s+down\s+↑ cart-checkout is behind/, "under the branch it is stacked on");
+	assert.match(f, /├─▣ clash\s+down\s+1 behind main · 1 conflict/);
 	assert.match(f, /└─. fresh\s+planning/);
 	assert.match(f, /main up, 2 behind upstream \(U\) · 1 of 4 worktrees up · 3 out of date/);
 	assert.doesNotMatch(f, /read now|SLOT|CHECKOUT/);
@@ -361,10 +361,10 @@ test("keys typed together all count", async () => {
 	await tick();
 	stdin.write("jj");
 	await tick();
-	assert.match(frame(), /▌├─○ clash/, "down the tree as it reads: more, under cart-checkout, then clash");
+	assert.match(frame(), /▌├─▣ clash/, "down the tree as it reads: more, under cart-checkout, then clash");
 	stdin.write("kkk");
 	await tick();
-	assert.match(frame(), /▌● main/);
+	assert.match(frame(), /▌▣ main/);
 	unmount();
 });
 
@@ -376,7 +376,7 @@ test("a worktree hydra stopped for being idle says so", () => {
 	assert.equal(stateOf(e).word, "idle-stopped");
 	const row = once(<ListRow node={n} selected={false} width={78} />);
 	noLineWiderThan(row, 78);
-	assert.match(row, /◌ more\s+idle-stopped\s+↑ cart-checkout is behind/);
+	assert.match(row, /▣ more\s+idle-stopped\s+↑ cart-checkout is behind/);
 	assert.match(rows(detailRows(e, 80)), /nobody used it for 2h, so hydra stopped it: u starts it/);
 });
 
@@ -461,8 +461,8 @@ test("a stack four deep nests each branch under its parent", () => {
 	);
 	const lines = drawn(snap);
 	lines.forEach((l) => noLineWiderThan(l, 78));
-	assert.match(lines[1]!, /^ └─○ fla-709 an advisor splits a so… down\s+in step$/);
-	assert.match(lines[4]!, /^ {7}└─○ fla-712 the fourth layer…\s+down\s+in step$/, "the title gives way, not the columns");
+	assert.match(lines[1]!, /^ └─▣ fla-709 an advisor splits a so… down\s+in step$/);
+	assert.match(lines[4]!, /^ {7}└─▣ fla-712 the fourth layer…\s+down\s+in step$/, "the title gives way, not the columns");
 	assert.match(lines[4]!, /…/);
 	for (const n of nodes) assert.ok(n.stale.kind === "current" || n.e.kind === "main");
 });
@@ -470,10 +470,10 @@ test("a stack four deep nests each branch under its parent", () => {
 test("siblings share their parent's line, sorted by name", () => {
 	const snap = snapOf([wt("zeta", "main", 0), wt("beta", "alpha", 0), wt("alpha", "main", 0), wt("gamma", "alpha", 0)]);
 	const lines = drawn(snap);
-	assert.match(lines[1]!, /^ ├─○ alpha/);
-	assert.match(lines[2]!, /^ │ ├─○ beta/);
-	assert.match(lines[3]!, /^ │ └─○ gamma/);
-	assert.match(lines[4]!, /^ └─○ zeta/);
+	assert.match(lines[1]!, /^ ├─▣ alpha/);
+	assert.match(lines[2]!, /^ │ ├─▣ beta/);
+	assert.match(lines[3]!, /^ │ └─▣ gamma/);
+	assert.match(lines[4]!, /^ └─▣ zeta/);
 	// Starting a stack doesn't move its row.
 	snap.worktrees[0]!.up = true;
 	assert.match(drawn(snap)[4]!, /zeta/);
@@ -484,9 +484,9 @@ test("a stale parent makes its in-step child out of date too, and says where it 
 	const nodes = tree(entries(snap));
 	assert.deepEqual(nodes.map((n) => n.stale.kind), ["none", "behind", "inherits", "inherits"]);
 	const lines = drawn(snap);
-	assert.match(lines[1]!, /└─○ a\s+down\s+12 behind main$/);
-	assert.match(lines[2]!, /└─○ b\s+down\s+↑ a is behind$/);
-	assert.match(lines[3]!, /└─○ c\s+down\s+↑ a is behind$/, "the start of the stale part, not the parent");
+	assert.match(lines[1]!, /└─▣ a\s+down\s+12 behind main$/);
+	assert.match(lines[2]!, /└─▣ b\s+down\s+↑ a is behind$/);
+	assert.match(lines[3]!, /└─▣ c\s+down\s+↑ a is behind$/, "the start of the stale part, not the parent");
 	assert.equal(badgeOf(nodes[1]!).bold, true, "where it goes stale is drawn strong");
 	assert.equal(badgeOf(nodes[2]!).dim, true, "what inherits it, weaker");
 	const f = await framed(snap);
@@ -498,9 +498,9 @@ test("an in-step parent with a stale child: only the child is out of date", asyn
 	const nodes = tree(entries(snap));
 	assert.deepEqual(nodes.map((n) => n.stale.kind), ["none", "current", "behind", "inherits"]);
 	const lines = drawn(snap);
-	assert.match(lines[1]!, /└─○ a\s+down\s+in step$/);
-	assert.match(lines[2]!, /└─○ b\s+down\s+4 behind a · 1 conflict$/);
-	assert.match(lines[3]!, /└─○ c\s+down\s+↑ b is behind$/);
+	assert.match(lines[1]!, /└─▣ a\s+down\s+in step$/);
+	assert.match(lines[2]!, /└─▣ b\s+down\s+4 behind a · 1 conflict$/);
+	assert.match(lines[3]!, /└─▣ c\s+down\s+↑ b is behind$/);
 	const f = await framed(snap);
 	assert.match(f, /0 of 3 worktrees up · 2 out of date/);
 });
@@ -509,8 +509,8 @@ test("a whole chain in step says so, and main behind its upstream is said once, 
 	const snap = snapOf([wt("a", "main", 0), wt("b", "a", 0)], 10);
 	const f = await framed(snap);
 	assert.match(f, /main up, 10 behind upstream \(U\) · 0 of 2 worktrees up · all in step/);
-	assert.match(f, /└─○ a\s+down\s+in step/);
-	assert.match(f, /└─○ b\s+down\s+in step/);
+	assert.match(f, /└─▣ a\s+down\s+in step/);
+	assert.match(f, /└─▣ b\s+down\s+in step/);
 	assert.equal(f.match(/behind upstream/g)!.length, 2, "the header and main's row, not the worktrees'");
 });
 
@@ -535,8 +535,8 @@ test("a deep, wide tree fits 80 columns without a wrap", async () => {
 	}
 	const lines = drawn(snap);
 	lines.forEach((l) => noLineWiderThan(l, 78));
-	assert.match(lines[1]!, /├─○ fla-701 .*69 behind · 5 conflicts$/);
-	assert.match(lines[5]!, /^ │ │ {5}└─○ fla-705 /);
+	assert.match(lines[1]!, /├─▣ fla-701 .*69 behind · 5 conflicts$/);
+	assert.match(lines[5]!, /^ │ │ {5}└─▣ fla-705 /);
 	assert.match(lines[5]!, /↑ fla-701 is behind$/);
 	assert.match(lines[2]!, /7 behind fla-701$/, "behind its own parent too, after the one above it");
 	assert.equal(badgeOf(tree(entries(snap))[2]!).bold, false, "not where the chain goes stale");
@@ -592,9 +592,9 @@ test("a stack's branches with no checkout are rows in their place in the chain",
 	);
 	const lines = drawn(snap);
 	lines.forEach((l) => noLineWiderThan(l, 78));
-	assert.match(lines[1]!, /^ └─◇ scrm-264 app ring schema\s+no checkout\s+10 behind main$/);
-	assert.match(lines[2]!, /^ {3}└─◇ scrm-264 app ring core\s+no checkout\s+↑ schema is behind$/);
-	assert.match(lines[3]!, /^ {5}└─○ scrm-264 app ring web\s+down\s+↑ schema is behind$/, "web merged main, but its stack didn't");
+	assert.match(lines[1]!, /^ └─⎇ scrm-264 app ring schema\s+branch only\s+10 behind main$/);
+	assert.match(lines[2]!, /^ {3}└─⎇ scrm-264 app ring core\s+branch only\s+↑ schema is behind$/);
+	assert.match(lines[3]!, /^ {5}└─▣ scrm-264 app ring web\s+down\s+↑ schema is behind$/, "web merged main, but its stack didn't");
 	assert.equal(badgeOf(nodes[1]!).bold, true, "where the chain goes stale is drawn strong");
 	const f = await framed(snap);
 	assert.match(f, /0 of 1 worktree up · 3 out of date/, "the header counts worktrees; what is out of date counts every branch");
@@ -602,28 +602,28 @@ test("a stack's branches with no checkout are rows in their place in the chain",
 	// Narrow (a wide terminal's left column): the ticket, then what tells
 	// the branches apart, rather than three cut-off titles alike.
 	const wide = await framed(snap, 120, 30);
-	assert.match(wide, /└─◇ scrm-264 schema +no checkout/);
-	assert.match(wide, /└─◇ scrm-264 core +no checkout/);
-	assert.match(wide, /└─○ scrm-264 w(eb|…) +down/);
+	assert.match(wide, /└─⎇ scrm-264 schema +branch only/);
+	assert.match(wide, /└─⎇ scrm-264 core +branch only/);
+	assert.match(wide, /└─▣ scrm-264 w(eb|…) +down/);
 });
 
 test("a branch with no checkout: its detail, and only m in the footer", () => {
 	const es = entries(ring());
 	const schema = es.find((e) => e.branch.endsWith("schema"))!;
 	const core = es.find((e) => e.branch.endsWith("core"))!;
-	assert.equal(stateOf(schema).word, "no checkout");
+	assert.equal(stateOf(schema).word, "branch only");
 	assert.deepEqual(footerKeys(schema), [["m", "merge main"]]);
 	assert.deepEqual(footerKeys(core), [], "in step with schema: nothing to merge yet");
 	const nodes = tree(es);
 	const node = nodes.find((n) => n.e === core)!;
 	const text = rows(detailRows(core, 80, { node, staleOf: (e) => nodes.find((n) => n.e === e)!.stale }));
-	assert.match(text, /santiago\/scrm-264-app-ring-core · no checkout/);
+	assert.match(text, /santiago\/scrm-264-app-ring-core · branch only: no worktree, no files on disk/);
 	assert.match(text, /vs schema +in step/);
 	assert.match(text, /main → schema \(10 behind\) → core/);
 	assert.match(text, /schema is behind main: update it first/);
 	assert.match(text, /◆ Runs here {2}nothing: no worktree has it checked out/);
 	assert.doesNotMatch(text, /From main/);
-	assert.match(once(<>{problemRows(core, 60).map((s, i) => <Row key={i} segs={s} width={60} />)}</>), /nothing runs it: no checkout/);
+	assert.match(once(<>{problemRows(core, 60).map((s, i) => <Row key={i} segs={s} width={60} />)}</>), /nothing runs it: branch only, no worktree/);
 });
 
 test("m on a branch with no checkout merges without one, from main's checkout; other keys say why not", async () => {
@@ -638,10 +638,10 @@ test("m on a branch with no checkout merges without one, from main's checkout; o
 	await tick();
 	r.stdin.write(DOWN);
 	await tick();
-	assert.match(plain(r.lastFrame()), /▌└─◇ scrm-264 app ring schema/);
+	assert.match(plain(r.lastFrame()), /▌└─⎇ scrm-264 app ring schema/);
 	r.stdin.write("u");
 	await tick();
-	assert.match(plain(r.lastFrame()), /has no checkout: nothing runs it/);
+	assert.match(plain(r.lastFrame()), /is a branch only, with no worktree: nothing runs it/);
 	assert.equal(backend.runs.length, 0);
 	r.stdin.write("m");
 	await tick();
@@ -672,8 +672,8 @@ test("each row has its PR in a few columns, and a merged one says nothing is lef
 	const nodes = tree(entries(snap));
 	const lines = nodes.map((n) => once(<ListRow node={n} selected={false} width={78} prW={13} />));
 	lines.forEach((l) => noLineWiderThan(l, 78));
-	assert.match(lines[1]!, /◇ \S.*no checkout +#10264 merged +PR merged: nothing to do$/);
-	assert.match(lines[2]!, /no checkout +#10265 draft +↑ schema is behind$/);
+	assert.match(lines[1]!, /⎇ \S.*branch only +#10264 merged +PR merged: nothing to do$/);
+	assert.match(lines[2]!, /branch only +#10265 draft +↑ schema is behind$/);
 	assert.match(lines[3]!, /down +#10266 ✓ +↑ schema is behind$/);
 	// The whole dashboard, at 80 columns: the PR column fits beside the
 	// tree and the staleness, the header counts the merged PR, no wraps.
