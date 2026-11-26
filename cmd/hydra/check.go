@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -435,6 +436,7 @@ func mainProblems(ms *mainState) []problem {
 			Fix:  "hydra update"})
 	}
 	out = append(out, tlsProblems(ms)...)
+	out = append(out, hostsProblems(ms)...)
 	if p := poolProblem(ms); p != nil {
 		out = append(out, *p)
 	}
@@ -519,6 +521,45 @@ func tlsProblems(ms *mainState) []problem {
 		pr := problem{Text: "this machine doesn't trust the certificate of main's TLS fronts, so a browser refuses their https addresses.", Fix: "hydra trust"}
 		if !files.Own {
 			pr.Fix = "trust the CA that signed " + files.Cert + " (mkcert -install, if mkcert made it)"
+		}
+		out = append(out, pr)
+	}
+	return out
+}
+
+// hostsProblems checks main's hosts ports: hydra's router has to answer on
+// each, or the name-based addresses don't work. A note: the stack itself
+// runs fine without them.
+func hostsProblems(ms *mainState) []problem {
+	st := ms.target.stack
+	client := &http.Client{Timeout: time.Second}
+	var out []problem
+	for _, name := range st.Names() {
+		s := st.Services[name]
+		if s.Hosts == 0 {
+			continue
+		}
+		u := "http://" + net.JoinHostPort(st.Hydra.Host, strconv.Itoa(s.Hosts)) + router.StatusPath
+		resp, err := client.Get(u)
+		if err == nil {
+			var ans struct {
+				Router  bool   `json:"router"`
+				Service string `json:"service"`
+				Hosts   bool   `json:"hosts"`
+			}
+			ok := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&ans) == nil && ans.Router && ans.Hosts && ans.Service == name
+			resp.Body.Close()
+			if ok {
+				continue
+			}
+		}
+		pr := problem{
+			Text: fmt.Sprintf("hydra's router isn't answering on :%d, so %s's addresses by worktree name (<worktree>.localhost:%d) don't work.", s.Hosts, name, s.Hosts),
+			Fix:  "cd " + shQuote(ms.target.checkout.Root) + " && hydra process restart hydra-router",
+		}
+		if err == nil {
+			pr.Text = fmt.Sprintf("another program answers on :%d, x-hydra.hosts of %s, so its addresses by worktree name don't work.", s.Hosts, name)
+			pr.Fix = "lsof -nP -iTCP:" + strconv.Itoa(s.Hosts) + " -sTCP:LISTEN names it; stop it, or move x-hydra.hosts"
 		}
 		out = append(out, pr)
 	}

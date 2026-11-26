@@ -764,19 +764,17 @@ func (u *wtUpdate) decide(main, base, mainCommit string, dry bool) {
 		u.action, u.note = "fast-forward", fmt.Sprintf("%sfast-forwarded to %s (%s; it has none of its own)", would, u.parent, commits(behind))
 		return
 	}
-	cmd := exec.Command("git", "-C", u.root, "merge-tree", "--write-tree", "--name-only", "--no-messages", theirs, "HEAD")
-	out, err := cmd.Output()
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	var exit *exec.ExitError
+	tree, files, err := mergeTree(u.root, theirs, "HEAD")
 	switch {
-	case err == nil:
-		if tree, _ := gitOut(u.root, "rev-parse", theirs+"^{tree}"); len(lines) > 0 && lines[0] == tree {
+	case err != nil:
+		u.note, u.hand = fmt.Sprintf("left alone: %v", err), true
+	case len(files) == 0:
+		if t, _ := gitOut(u.root, "rev-parse", theirs+"^{tree}"); tree == t {
 			u.note = fmt.Sprintf("left alone: everything on it is already in %s (merged upstream?); it can be removed", u.parent)
 			return
 		}
 		u.action, u.note = "merge", fmt.Sprintf("%s %smerged in (%s)", u.parent, would, commits(behind))
-	case errors.As(err, &exit) && exit.ExitCode() == 1:
-		files := lines[1:]
+	default:
 		u.note, u.hand = fmt.Sprintf("CONFLICTS with %s in %d file%s (%s behind)", u.parent, len(files), plural(len(files)), commits(behind)), true
 		const show = 4
 		for i, f := range files {
@@ -787,8 +785,6 @@ func (u *wtUpdate) decide(main, base, mainCommit string, dry bool) {
 			u.detail = append(u.detail, "conflict: "+f)
 		}
 		u.detail = append(u.detail, fmt.Sprintf("resolve:  git -C %s merge %s", shQuote(u.root), u.parent))
-	default:
-		u.note, u.hand = fmt.Sprintf("left alone: git merge-tree failed (%v)", err), true
 	}
 }
 

@@ -23,7 +23,7 @@ export function fixture(): Snapshot {
 			processes: [
 				{ name: "api", runs: "here", state: "ready", health: "up", port: 8080 },
 				{ name: "db", runs: "here", state: "ready", health: "up", port: 5432 },
-				{ name: "web", runs: "here", state: "running", health: "up", port: 3000 },
+				{ name: "web", runs: "here", state: "running", health: "up", port: 3000, address: "http://localhost:3900" },
 				{ name: "seed", runs: "here", state: "disabled", health: "off" },
 			],
 			memory: 512 << 20,
@@ -49,7 +49,7 @@ export function fixture(): Snapshot {
 				ahead: 1,
 				outOfStep: [{ service: "api", why: "web here calls it", files: ["apps/api/users.go"] }],
 				services: [
-					{ name: "web", runs: "here", state: "running", health: "up", port: 3100, why: "changed: apps/web/cart.tsx" },
+					{ name: "web", runs: "here", state: "running", health: "up", port: 3100, address: "http://cart.localhost:3900", why: "changed: apps/web/cart.tsx" },
 					{ name: "worker", runs: "here", state: "exited with code 1", health: "failed", port: 8120 },
 					{ name: "api", runs: "main", used: true, state: "ready", health: "up", port: 8080 },
 					{ name: "db", runs: "main", used: true, state: "ready", health: "up", port: 5432 },

@@ -240,7 +240,8 @@ hydra  main up · 2/4 worktrees up · read now  /Users/me/code/shop
 
 Each key runs the hydra command an agent would type, in the chosen
 checkout: `u` `hydra up -D`, `d` `hydra down`, `r` `hydra process restart`,
-`l` `hydra process logs -f`, `f` a problem's fix, `m` `hydra update --here`,
+`l` `hydra process logs -f`, `o` opens an address by name (`hosts`) in
+the browser, `f` a problem's fix, `m` `hydra update --here`,
 `U` `hydra update` (both after their dry run), `R` reads everything again,
 `?` lists the keys, `q` quits and leaves every stack running. `⏎` opens the
 stack in `process-compose attach`; F10 or ctrl-c, then Yes, comes back with
@@ -537,6 +538,34 @@ Two rules keep this from quietly testing the wrong code:
 
 `./examples/demo/routed.sh` shows it with a Node frontend that knows nothing
 about Hydra.
+
+### An address per worktree
+
+A worktree's ports move with its slot. `hosts` on a service gives each
+worktree an address by its folder's name that doesn't:
+
+```yaml
+  web:
+    x-hydra:
+      port: 3000
+      hosts: 3900       # http://fla-709.localhost:3900; localhost:3900 is main's
+```
+
+Hydra's router listens on `hosts` in main and picks the copy by the `Host`
+header: the worktree's own `web`, or what it uses instead (main's copy,
+through the worktree's routed port when `web` is routed). A worktree whose
+stack isn't running gets a 404, never main's page. The `Host` header is
+passed on, so websockets (a dev server's hot reload) and redirects work.
+
+- It is a port of its own, like a TLS front: main's `web` keeps 3000.
+- `*.localhost` is 127.0.0.1 in browsers, curl and anything that asks macOS;
+  Go's pure resolver and Node's `dns.resolve` don't know it (use
+  `curl -H 'Host: fla-709.localhost:3900' localhost:3900`).
+- Each name gets its own cookies. Sign-in redirects need the pattern in the
+  auth server, e.g. `additional_redirect_urls = ["http://*.localhost:3900/**"]`
+  in `supabase/config.toml`; hydra edits no project file.
+- The service is told its address in `HYDRA_URL_WEB`. `hydra status`,
+  `hydra up`, `status --json` (`address`) and the dashboard (`o`) show it.
 
 ### Kinds
 

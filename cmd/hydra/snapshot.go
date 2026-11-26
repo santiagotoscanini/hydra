@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/gitx"
 	"github.com/santiagotoscanini/hydra/internal/pc"
 	"github.com/santiagotoscanini/hydra/internal/stack"
@@ -73,8 +74,11 @@ type snapService struct {
 	Health string `json:"health"`         // up, done, starting, off, failed, unknown
 	Port   int    `json:"port,omitempty"`
 	URL    string `json:"url,omitempty"`
-	Why    string `json:"why,omitempty"`
-	Memory int64  `json:"memory,omitempty"` // bytes: the process and its children
+	// Address is the name-based address of the service in this checkout
+	// (x-hydra hosts): http://<worktree>.localhost:PORT, main's at localhost.
+	Address string `json:"address,omitempty"`
+	Why     string `json:"why,omitempty"`
+	Memory  int64  `json:"memory,omitempty"` // bytes: the process and its children
 }
 
 // snapStray is a program that holds a port of the checkout's stack and is
@@ -732,6 +736,7 @@ func snapMainOf(ms *mainState, mem func(int) int64) *snapMain {
 		if s := ms.target.stack.Services[name]; s != nil {
 			svc.Port = s.Port
 			svc.URL = serviceURL(ms, name, s.Port)
+			svc.Address = ms.target.stack.HostsURL(s, "")
 		}
 		if p.IsRunning {
 			svc.Memory = mem(p.Pid)
@@ -806,6 +811,10 @@ func snapWorktreeOf(ms *mainState, wt stack.Worktree, p *wtPlan, g *wtGit, mem f
 					svc.State, svc.Health = proc.Describe(), healthName(proc.Health())
 				}
 			}
+		}
+		if label := config.HostLabel(wt.Root); label != "" {
+			// Stable for as long as the worktree exists, slot or not.
+			svc.Address = ws.target.stack.HostsURL(ws.target.stack.Services[row.Source], label)
 		}
 		if ws.Slot == 0 && svc.Runs != "main" {
 			// It never ran, so it has no slot and no ports yet: the plan

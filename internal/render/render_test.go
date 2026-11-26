@@ -632,3 +632,58 @@ processes:
 		t.Errorf("the worktree's api doesn't go through the pool:\n%s", data)
 	}
 }
+
+func TestAServiceWithAHostsPortIsToldItsAddress(t *testing.T) {
+	st, err := config.Parse([]byte(`
+processes:
+  web:
+    command: web
+    x-hydra: { port: 3000, hosts: 3900, paths: ["web/**"] }
+  api:
+    command: api
+    x-hydra: { port: 8080, paths: ["api/**"] }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	envOf := func(p *plan.Plan, opt Options) map[string]string {
+		t.Helper()
+		data, err := Render(st, p, opt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			Processes map[string]struct {
+				Environment []string `yaml:"environment"`
+			} `yaml:"processes"`
+		}
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]string{}
+		for name, p := range doc.Processes {
+			out[name] = strings.Join(p.Environment, ",")
+		}
+		return out
+	}
+	base := envOf(plan.BaselinePlan(st), Options{Dir: "/repo", Router: "exec hydra router"})
+	if !strings.Contains(base["web"], "HYDRA_URL_WEB=http://localhost:3900") {
+		t.Errorf("main's web: %s", base["web"])
+	}
+	if strings.Contains(base["api"], "HYDRA_URL") {
+		t.Errorf("only the service itself is told: api has %s", base["api"])
+	}
+	p, err := plan.Build(st, plan.Request{Slot: 2, Changed: []string{"web/page.tsx"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := envOf(p, Options{Dir: "/wt/fla-709", HostLabel: "fla-709"})["web"]; !strings.Contains(got, "HYDRA_URL_WEB=http://fla-709.localhost:3900") {
+		t.Errorf("the worktree's web: %s", got)
+	}
+	if got := envOf(p, Options{Dir: "/wt/___"})["web"]; strings.Contains(got, "HYDRA_URL") {
+		t.Errorf("a worktree with no name has no address: %s", got)
+	}
+	if HostsEnv("my-web.app") != "HYDRA_URL_MY_WEB_APP" {
+		t.Errorf("HostsEnv = %s", HostsEnv("my-web.app"))
+	}
+}

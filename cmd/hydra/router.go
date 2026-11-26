@@ -132,7 +132,7 @@ func routerState(commonDir, file, startedFrom string) (*router.State, error) {
 		if s.Port == 0 {
 			continue
 		}
-		svc := router.Service{Port: s.Port, Probe: s.Routed == config.RoutedNode}
+		svc := router.Service{Port: s.Port, Probe: s.Routed == config.RoutedNode, Hosts: s.Hosts}
 		if dispatched[name] {
 			svc.Dispatch = st.DispatchPort(s)
 		}
@@ -146,7 +146,7 @@ func routerState(commonDir, file, startedFrom string) (*router.State, error) {
 		if !f.Live() {
 			continue
 		}
-		wt := router.Worktree{Name: f.Name, Root: f.Root, Local: f.Local, Entries: map[string]router.Entry{}}
+		wt := router.Worktree{Name: f.Name, Root: f.Root, Host: f.Host, Local: f.Local, Entries: map[string]router.Entry{}}
 		for name, e := range f.Entries {
 			// The stack file may have changed since the worktree wrote this.
 			if s := st.Services[name]; s != nil && s.Routed != config.NotRouted {
@@ -174,11 +174,12 @@ func warnOnce(key, msg string) {
 // take: the worktree's port for a routed service is the router's until that
 // service starts running here.
 func publishRoutes(t *target, p *plan.Plan) error {
-	if p.Slot == 0 || !t.stack.HasRouted() {
+	if p.Slot == 0 || !(t.stack.HasRouted() || t.stack.HasHosts()) {
 		return nil
 	}
 	f := routes.File{
 		Slot: p.Slot, Root: t.checkout.Root, Socket: socketPath(t.checkout), Name: filepath.Base(t.checkout.Root),
+		Host:  config.HostLabel(t.checkout.Root),
 		Local: map[string]int{}, Entries: map[string]routes.Entry{},
 	}
 	if n := len(p.Layers); n > 0 && p.Layers[n-1].Name != "" {
@@ -224,11 +225,15 @@ func publishRoutes(t *target, p *plan.Plan) error {
 	return nil
 }
 
-// routedNote lists the routed services a worktree uses, with their address.
+// routedNote lists the routed services a worktree uses, with their address,
+// and the address of each service with a hosts port.
 func routedNote(t *target, p *plan.Plan) {
 	for _, row := range p.Services {
 		if row.Routed {
 			fmt.Fprintf(os.Stderr, "hydra: %s is main's copy, serving this worktree at http://%s:%d\n", row.Name, browserHost(t.stack.Hydra.Host), row.Port)
 		}
+	}
+	if a := addresses(t.stack, config.HostLabel(t.checkout.Root)); len(a) > 0 {
+		fmt.Fprintf(os.Stderr, "hydra: this worktree's address: %s\n", strings.Join(a, ", "))
 	}
 }

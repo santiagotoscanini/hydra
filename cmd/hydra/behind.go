@@ -72,21 +72,9 @@ func mainConflicts(root, head, mainHead string) ([]string, error) {
 	if ok {
 		return files, nil
 	}
-	out, err := exec.Command("git", "-C", root, "merge-tree", "--write-tree", "--name-only", "--no-messages", head, mainHead).Output()
-	// The first line is the merged tree, then the conflicting files. Exit 1
-	// is a conflict only with a tree: git also exits 1 for a commit it
-	// doesn't know.
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	var exit *exec.ExitError
-	switch {
-	case !isObjectID(lines[0]):
-		return nil, fmt.Errorf("git merge-tree: %v: %s", err, lastLine(stderrOf(err)))
-	case err == nil:
-		files = []string{}
-	case errors.As(err, &exit) && exit.ExitCode() == 1:
-		files = append([]string{}, lines[1:]...)
-	default:
-		return nil, fmt.Errorf("git merge-tree: %w", err)
+	_, files, err := mergeTree(root, head, mainHead)
+	if err != nil {
+		return nil, err
 	}
 	mergeTrees.Lock()
 	if len(mergeTrees.m) > 1000 { // twenty worktrees, each at many commits over a long watch
@@ -95,6 +83,33 @@ func mainConflicts(root, head, mainHead string) ([]string, error) {
 	mergeTrees.m[key] = files
 	mergeTrees.Unlock()
 	return files, nil
+}
+
+// mergeTree merges theirs into ours in memory, with git merge-tree (git
+// 2.38 or later), and returns the merged tree and the files that conflict
+// (empty, not nil, when none do). The first line of its output is the tree,
+// then the conflicting files. Exit 1 is a conflict only with a tree: git
+// also exits 1 for a commit it can't read, which is an error here, never a
+// conflict in no files.
+func mergeTree(root, ours, theirs string) (tree string, conflicts []string, err error) {
+	out, err := exec.Command("git", "-C", root, "merge-tree", "--write-tree", "--name-only", "--no-messages", ours, theirs).Output()
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var exit *exec.ExitError
+	switch {
+	case !isObjectID(lines[0]) && err == nil:
+		return "", nil, fmt.Errorf("git merge-tree: no tree in what it printed: %q", lastLine(out))
+	case !isObjectID(lines[0]):
+		if msg := lastLine(stderrOf(err)); msg != "" {
+			return "", nil, fmt.Errorf("git merge-tree: %v: %s", err, msg)
+		}
+		return "", nil, fmt.Errorf("git merge-tree: %v", err)
+	case err == nil:
+		return lines[0], []string{}, nil
+	case errors.As(err, &exit) && exit.ExitCode() == 1:
+		return lines[0], append([]string{}, lines[1:]...), nil
+	default:
+		return "", nil, fmt.Errorf("git merge-tree: %w", err)
+	}
 }
 
 func isObjectID(s string) bool {

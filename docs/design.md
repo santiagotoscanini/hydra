@@ -276,7 +276,9 @@ Three layers, each doing one thing:
 - **Every key is the command an agent would type**, in the checkout it is
   about: `u` `hydra up -D`, `d` `hydra down`, `r` `hydra process restart
   NAME`, `l` `hydra process logs NAME -f`, `f` a problem's `run`, `m`
-  `hydra update --here`, `U` `hydra update`, `⏎` `hydra attach`. So the
+  `hydra update --here`, `U` `hydra update`, `⏎` `hydra attach`. (`o`
+  opens an address by name, `hosts`, in the browser: what a person
+  types into one.) So the
   dashboard can do nothing a person or an agent can't do without it, and a
   fix to a command reaches both. What stops a stack, runs a fix or moves a
   branch asks first; `m` and `U` show their dry run as the question. After
@@ -425,7 +427,10 @@ no cron. Fetching is fine (it moves `origin/main` only).
    it conflicts (files and command are printed), when tracked files have
    uncommitted changes, when a merge or rebase is in progress, when no
    branch is checked out, or when the merged tree equals the parent's (the
-   branch is already in main, squash-merged for instance). After a merge in
+   branch is already in main, squash-merged for instance). merge-tree exits
+   1 on a conflict and also on a commit it can't read, so only output that
+   starts with a tree is a conflict; anything else leaves the worktree alone
+   with git's error, never as "CONFLICTS in 0 files". After a merge in
    a worktree whose stack runs, the processes whose `paths` match the merged
    files are restarted there, in the same way as in main.
 
@@ -511,6 +516,7 @@ processes:
     x-hydra:
       port: 3000
       routed: node                # main's copy serves every worktree that didn't change it (see below)
+      hosts: 3900                 # http://<worktree>.localhost:3900, main's at localhost:3900 (see Hosts)
       upstreams:
         GO_BACKEND_URL: api
         TEMPORAL_NAMESPACE: worker  # switched per request on a routed service
@@ -956,6 +962,73 @@ Two things learned on the monorepo this was built for:
   port, so the browser would insist on https for every port on localhost.
   Fronts are for the services a page talks to; the page itself can stay on
   http, where `'self'` covers it. (An IP address is never pinned.)
+
+## Hosts
+
+A worktree's ports move with its slot: the slot it gets on the next start
+may not be today's. `hosts` on a service is a port where the router serves
+every checkout's copy by name, `http://<worktree>.localhost:<hosts>`, and
+main's at `localhost` (or `main.localhost`):
+
+```yaml
+web:
+  x-hydra: { port: 3000, hosts: 3900 }
+```
+
+- **Which copy.** The router reads the name from the `Host` header and
+  answers for that worktree the way the worktree's own wiring would: its
+  own copy when it runs the service (on whatever slot), main's copy through
+  the worktree's routed entry when the service is routed (tag, per-request
+  values, the health check: the entry's handler itself), and main's copy
+  untagged otherwise, which is what the worktree takes from main. A name no
+  running worktree has is a 404 that lists the running ones, and a worktree
+  whose own copy isn't accepting connections a 503: never main's page under
+  a worktree's name, for the reason routed calls never fall back. A Host
+  that isn't `localhost` or a name under it is a 404 too.
+- **The name** is the worktree folder's (`config.HostLabel`): lowercased,
+  every character outside `[a-z0-9]` a hyphen, trimmed, at most 63 (a DNS
+  label). The branch was the other candidate; it is renamed and switched in
+  place, and the address would move with it, while a folder stays for the
+  worktree's life. The worktree puts it in its routes file. Two running
+  worktrees with one name (folders of the same name in different
+  directories) are a 409 naming both, rather than a guess.
+- **Its own port, like a TLS front.** The router never takes main's own
+  ports. Serving names on 3000 would mean moving main's process to an inner
+  port: a change to main's render for every service with it, a hop through
+  the router for every request to main, and main's web gone whenever the
+  router is. A separate port leaves main's ports and wiring alone. It is
+  opt-in all the same, because it takes a port and changes one process's
+  environment (below).
+- **The Host header goes through unchanged**, so the app builds links for
+  the address the browser is on and a dev server's origin checks see it. A
+  `Location` that points at the copy's own port is rewritten to the name.
+  The proxy is `httputil.ReverseProxy`, which carries an `Upgrade` request
+  (a dev server's hot-reload websocket) through: `TestHostsPortPassesAWebsocketUpgrade`
+  checks that the 101 and both directions after it arrive. Next.js allows
+  `**.localhost` for its dev resources by default (`blockCrossSiteDEV`,
+  checked on 16.4), Vite allows `.localhost` hosts too.
+- **Resolution** is the client's. RFC 6761 reserves `localhost`; browsers
+  and curl answer `*.localhost` with loopback themselves, and macOS's
+  resolver does for every program that asks it (Node's `dns.lookup` and
+  `fetch`, Go's default resolver on macOS: `::1` then `127.0.0.1`, which is
+  why the router listens on both families). Go's pure resolver (`netgo`,
+  `CGO_ENABLED=0`) and Node's `dns.resolve*` query DNS and fail. So the names
+  are for people and browsers; services keep wiring by port.
+- **Cookies and sign-in.** Cookies are per host name, so each name has its
+  own jar, where every slot port shares `localhost`'s. An auth server
+  redirects back only to addresses it knows: the project adds the pattern
+  (`additional_redirect_urls = ["http://*.localhost:3900/**"]` for Supabase).
+  hydra changes no app code or project file. The service's own process gets
+  `HYDRA_URL_<SERVICE>` with its address in that checkout (main's copy of a
+  routed service has main's, also while serving a worktree, so it should
+  use the request's Host there). Only that process: other processes'
+  environments stay as they were, so adding the key restarts one process in
+  main on the next `hydra update`.
+- **`hydra status`** prints an `address` line per checkout, and notes (`!`)
+  when the router isn't the one answering on the port. `hydra up` prints
+  the worktree's address, `status --json` has `address` on each service,
+  and the dashboard shows it and opens it (`o`). A request at a worktree's
+  name is activity, for `idle_stop`.
 
 ## Slots
 

@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/santiagotoscanini/hydra/internal/config"
 	"github.com/santiagotoscanini/hydra/internal/gitx"
 	"github.com/santiagotoscanini/hydra/internal/pc"
 	"github.com/santiagotoscanini/hydra/internal/slots"
@@ -75,6 +76,7 @@ func statusCmd(args []string) error {
 		down = "stack stopped after " + n.After + " idle"
 	}
 	fmt.Printf("worktree  %s  %s  %s\n", ws.target.checkout.Root, slotText(ws), upText(ws.Up, "stack up", down))
+	printAddresses(ws.target.stack, config.HostLabel(ws.target.checkout.Root), "")
 	fmt.Println()
 	printWorktreeTable(ms, ws)
 
@@ -227,6 +229,26 @@ func printMainLine(ms *mainState) {
 	}
 }
 
+// printAddresses lists the name-based address of each service with a hosts
+// port, in the checkout whose name is label ("" for main).
+func printAddresses(st *config.Stack, label, more string) {
+	if parts := addresses(st, label); len(parts) > 0 {
+		fmt.Printf("address   %s%s\n", strings.Join(parts, ", "), more)
+	}
+}
+
+// addresses is "web http://fla-709.localhost:3100" for each service with a
+// hosts port, in the checkout whose name is label ("" for main).
+func addresses(st *config.Stack, label string) []string {
+	var out []string
+	for _, name := range st.Names() {
+		if u := st.HostsURL(st.Services[name], label); u != "" {
+			out = append(out, name+" "+u)
+		}
+	}
+	return out
+}
+
 func plural(n int) string {
 	if n == 1 {
 		return ""
@@ -289,6 +311,7 @@ func mainProcState(ms *mainState, name string) string {
 // statusAll prints the main checkout's stack and one line per worktree.
 func statusAll(co gitx.Checkout, ms *mainState, waited time.Duration) error {
 	printMainLine(ms)
+	printAddresses(ms.target.stack, "", "; a worktree's: <worktree>.localhost")
 	bad := false
 	if ms.Up {
 		fmt.Println()

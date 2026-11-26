@@ -369,3 +369,54 @@ func TestBehindWarn(t *testing.T) {
 		t.Error("behind_warn: -1 was accepted")
 	}
 }
+
+func TestHosts(t *testing.T) {
+	st, err := Parse([]byte(`
+x-hydra: { slot_stride: 100, max_slots: 5 }
+processes:
+  web: { command: web, x-hydra: { port: 3000, hosts: 3900 } }
+  api: { command: api, x-hydra: { port: 8080 } }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.HasHosts() {
+		t.Error("HasHosts should be true")
+	}
+	if got := st.HostsURL(st.Services["web"], "fla-709"); got != "http://fla-709.localhost:3900" {
+		t.Errorf("worktree address = %s", got)
+	}
+	if got := st.HostsURL(st.Services["web"], ""); got != "http://localhost:3900" {
+		t.Errorf("main's address = %s", got)
+	}
+	if got := st.HostsURL(st.Services["api"], "x"); got != "" {
+		t.Errorf("api has no hosts port, got %s", got)
+	}
+	for name, tc := range map[string]struct{ yaml, want string }{
+		"needs the port each copy listens on": {`processes: { web: { command: x, x-hydra: { hosts: 3900 } } }`, "hosts needs x-hydra.port"},
+		"a shared service has one copy":       {`processes: { db: { command: x, x-hydra: { shared: true, port: 5432, hosts: 3900 } } }`, "shared service"},
+		"only HTTP":                           {`processes: { db: { command: x, x-hydra: { port: 5432, url: "postgres://{host}:{port}", hosts: 3900 } } }`, "serves HTTP"},
+		"its port is taken like any other": {`x-hydra: { slot_stride: 100, max_slots: 3 }
+processes:
+  web: { command: x, x-hydra: { port: 3000, hosts: 3100 } }`, "collides with"},
+	} {
+		if _, err := Parse([]byte(tc.yaml)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+		}
+	}
+}
+
+func TestHostLabel(t *testing.T) {
+	for in, want := range map[string]string{
+		"/wt/fla-709":                    "fla-709",
+		"/wt/FLA_709 fix":                "fla-709-fix",
+		"/wt/t3-eb4c00f2":                "t3-eb4c00f2",
+		"/wt/--x--":                      "x",
+		"/wt/___":                        "",
+		"/wt/" + strings.Repeat("a", 70): strings.Repeat("a", 63),
+	} {
+		if got := HostLabel(in); got != want {
+			t.Errorf("HostLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
