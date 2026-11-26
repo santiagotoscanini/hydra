@@ -2,20 +2,22 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import type { Backend, Result } from "./hydra.js";
 import { onRedraw } from "./hydra.js";
-import { detailServices, entries, fixCommand, runsHere, type Entry } from "./model.js";
+import { detailServices, displayName, entries, fixCommand, runsHere, type Entry } from "./model.js";
 import type { Problem, Snapshot } from "./types.js";
 import {
-	Confirm,
+	ConfirmBody,
 	Footer,
-	Help,
-	Line,
-	ListHeader,
+	HelpBody,
 	ListRow,
-	Output,
-	Picker,
-	Spinner,
-	columns,
-	detailLines,
+	OutputBody,
+	Panel,
+	PickerBody,
+	Row,
+	detailRows,
+	detailTitle,
+	problemRows,
+	problemsTitle,
+	type Seg,
 } from "./ui.js";
 
 type Overlay =
@@ -24,7 +26,9 @@ type Overlay =
 	| { kind: "pick"; title: string; items: string[]; index: number; onPick: (i: number) => void }
 	| { kind: "output"; title: string; code: number; text: string };
 
+/** An action the dashboard runs in a checkout: "starting", "stopping". */
 interface Busy {
+	verb: string;
 	what: string;
 }
 
@@ -34,6 +38,9 @@ interface Props {
 	size?: { columns: number; rows: number };
 	/** A snapshot to start from (tests). */
 	initial?: Snapshot;
+	/** The selected row's background, for the terminal's light or dark theme. */
+	selectionBg?: string;
+	home?: string;
 }
 
 function useSize(fixed?: { columns: number; rows: number }) {
@@ -51,20 +58,22 @@ function useSize(fixed?: { columns: number; rows: number }) {
 	return size;
 }
 
-function ago(at: string, now: number): string {
-	const s = Math.max(0, Math.round((now - Date.parse(at)) / 1000));
-	return s < 2 ? "now" : `${s}s ago`;
+/** What a checkout is called in a message: its ticket id, or its branch. */
+function called(e: Entry): string {
+	const n = displayName(e);
+	return n.id ?? n.title;
 }
 
-export default function App({ backend, size: fixedSize, initial }: Props) {
+export default function App({ backend, size: fixedSize, initial, selectionBg = "#1e3a5f", home }: Props) {
 	const { exit } = useApp();
 	const size = useSize(fixedSize);
 	const [snap, setSnap] = useState<Snapshot | undefined>(initial);
 	const [error, setError] = useState<string>();
 	const [selRoot, setSelRoot] = useState<string>();
 	const [overlay, setOverlay] = useState<Overlay>();
-	const [busy, setBusy] = useState<Busy>();
+	const [busy, setBusy] = useState<Record<string, Busy>>({});
 	const [message, setMessage] = useState<{ text: string; color?: string }>();
+	const [reading, setReading] = useState(false);
 	const [scroll, setScroll] = useState(0);
 	const [blank, setBlank] = useState(false);
 	const preselected = useRef(false);
@@ -81,6 +90,7 @@ export default function App({ backend, size: fixedSize, initial }: Props) {
 			(s) => {
 				setSnap(s);
 				setError(undefined);
+				setReading(false);
 			},
 			(msg) => setError(msg),
 		);
@@ -106,23 +116,38 @@ export default function App({ backend, size: fixedSize, initial }: Props) {
 		}
 	};
 
-	/** Runs hydra in the background and says how it went. */
+	// A success says so for a while, then makes room.
+	useEffect(() => {
+		if (message?.color !== "green") return;
+		const t = setTimeout(() => setMessage((m) => (m === message ? undefined : m)), 8000);
+		return () => clearTimeout(t);
+	}, [message]);
+
+	/** Runs hydra in the background in a checkout, shows it under way in
+	 *  its row and panel, and says how it went. */
 	const runQuiet = useCallback(
-		(args: string[], cwd: string, name: string, after?: (r: Result) => void) => {
-			if (busy) {
-				setMessage({ text: `wait: ${busy.what} is still running`, color: "yellow" });
+		(args: string[], cwd: string, name: string, verb: string, after?: (r: Result) => void) => {
+			const now = busy[cwd];
+			if (now) {
+				setMessage({ text: `wait: ${now.what} is still running`, color: "yellow" });
 				return;
 			}
 			const what = `hydra ${args.join(" ")}` + (name ? ` in ${name}` : "");
-			setBusy({ what });
+			setBusy((b) => ({ ...b, [cwd]: { verb, what } }));
 			setMessage(undefined);
 			void backend.run(args, cwd).then((r) => {
-				setBusy(undefined);
+				setBusy((b) => {
+					const { [cwd]: _, ...rest } = b;
+					return rest;
+				});
 				backend.refresh(cwd === mainRoot ? undefined : cwd);
 				if (after) return after(r);
 				const last = r.output.trim().split("\n").filter(Boolean).pop() ?? "";
 				if (r.code === 0) setMessage({ text: `✓ ${what}${last ? `: ${last}` : ""}`, color: "green" });
-				else setOverlay({ kind: "output", title: what, code: r.code, text: r.output });
+				else {
+					setMessage({ text: `✗ ${what} failed (exit ${r.code})`, color: "red" });
+					setOverlay({ kind: "output", title: what, code: r.code, text: r.output });
+				}
 			});
 		},
 		[backend, busy, mainRoot],
@@ -137,7 +162,7 @@ export default function App({ backend, size: fixedSize, initial }: Props) {
 
 	/** A dry run first, then a confirmation with what it printed. */
 	const dryThenDo = (dryArgs: string[], realArgs: string[], cwd: string, title: string, refreshRoot?: string) => {
-		runQuiet(dryArgs, cwd, "", (r) => {
+		runQuiet(dryArgs, cwd, "", "checking", (r) => {
 			const lines = r.output.replace(/\s+$/, "").split("\n");
 			if (r.code !== 0 && r.code !== 1) {
 				setOverlay({ kind: "output", title: `hydra ${dryArgs.join(" ")}`, code: r.code, text: r.output });
@@ -169,7 +194,7 @@ export default function App({ backend, size: fixedSize, initial }: Props) {
 		switch (key) {
 			case "open":
 				if (!e.up) {
-					setMessage({ text: `${e.name}'s stack isn't running: u starts it`, color: "yellow" });
+					setMessage({ text: `${called(e)}'s stack isn't running: u starts it`, color: "yellow" });
 					return;
 				}
 				inTerminal(
@@ -183,23 +208,23 @@ export default function App({ backend, size: fixedSize, initial }: Props) {
 				);
 				return;
 			case "up":
-				runQuiet(["up", "-D"], e.root, e.name);
+				runQuiet(["up", "-D"], e.root, called(e), "starting");
 				return;
 			case "down":
 				if (!e.up) {
-					setMessage({ text: `${e.name}'s stack isn't running`, color: "yellow" });
+					setMessage({ text: `${called(e)}'s stack isn't running`, color: "yellow" });
 					return;
 				}
 				setOverlay({
 					kind: "confirm",
-					title: `Stop ${e.kind === "main" ? "main's" : `${e.name}'s`} stack? (hydra down)`,
+					title: `Stop ${called(e)}'s stack? (hydra down)`,
 					lines:
 						e.kind === "main"
 							? ["Every worktree that takes a service from main loses it until main is up again."]
 							: [`It runs: ${runsHere(e).map((s) => s.name).join(", ") || "nothing"}.`],
 					onYes: () => {
 						setOverlay(undefined);
-						runQuiet(["down"], e.root, e.name);
+						runQuiet(["down"], e.root, called(e), "stopping");
 					},
 				});
 				return;
@@ -208,12 +233,12 @@ export default function App({ backend, size: fixedSize, initial }: Props) {
 					(s) => s.name,
 				);
 				if (!e.up) {
-					setMessage({ text: `${e.name}'s stack isn't running: u starts it`, color: "yellow" });
+					setMessage({ text: `${called(e)}'s stack isn't running: u starts it`, color: "yellow" });
 					return;
 				}
-				pickService(`Restart which of ${e.name}'s services?`, names, (n) => {
+				pickService(`Restart which of ${called(e)}'s services?`, names, (n) => {
 					setOverlay(undefined);
-					runQuiet(["process", "restart", n], e.root, e.name);
+					runQuiet(["process", "restart", n], e.root, called(e), `restarting ${n}`);
 				});
 				return;
 			}
@@ -247,7 +272,7 @@ export default function App({ backend, size: fixedSize, initial }: Props) {
 					(label) => {
 						setOverlay(undefined);
 						const url = label.slice(label.indexOf(" ") + 1);
-						if (!e.up) setMessage({ text: `${e.name}'s stack isn't running, so ${url} won't answer: u starts it`, color: "yellow" });
+						if (!e.up) setMessage({ text: `${called(e)}'s stack isn't running, so ${url} won't answer: u starts it`, color: "yellow" });
 						void backend.browse(url).then((r) => {
 							if (r.code !== 0) setMessage({ text: r.output || `couldn't open ${url}`, color: "red" });
 							else if (e.up) setMessage({ text: `opened ${url}` });
@@ -265,7 +290,7 @@ export default function App({ backend, size: fixedSize, initial }: Props) {
 				const confirmFix = (p: Problem & { run: string }) =>
 					setOverlay({
 						kind: "confirm",
-						title: `Run in ${e.name}: ${p.run}`,
+						title: `Run in ${called(e)}: ${p.run}`,
 						lines: p.text.split("\n"),
 						onYes: () =>
 							inTerminal(
@@ -292,7 +317,7 @@ export default function App({ backend, size: fixedSize, initial }: Props) {
 					["update", "--here", "--dry-run"],
 					["update", "--here"],
 					e.root,
-					`Merge ${e.update?.parent ?? "main"} into ${e.name}? (hydra update --here)`,
+					`Merge ${e.update?.parent ?? "main"} into ${called(e)}? (hydra update --here)`,
 					e.root,
 				);
 				return;
@@ -350,7 +375,7 @@ export default function App({ backend, size: fixedSize, initial }: Props) {
 		if (input === "?") return setOverlay({ kind: "help" });
 		if (input === "R") {
 			backend.refresh();
-			setMessage({ text: "reading everything again…" });
+			setReading(true);
 			return;
 		}
 		if (key.escape) return setMessage(undefined);
@@ -373,93 +398,160 @@ export default function App({ backend, size: fixedSize, initial }: Props) {
 	// One row short of the terminal: a frame as tall as the screen makes Ink
 	// clear the whole terminal on every change, which flickers.
 	const width = size.columns;
-	const rows = Math.max(8, size.rows - 1);
-	const cols = columns(width);
-	const listRoom = Math.max(3, Math.min(list.length + 1, Math.floor((rows - 4) * 0.45)));
-	const visible = listRoom - 1;
+	const rows = Math.max(10, size.rows - 1);
+	const busyList = Object.values(busy);
+	let status: Seg[] = [];
+	if (error) status = [{ text: "✗ " + error, color: "red" }];
+	else if (snap?.error) status = [{ text: "✗ " + snap.error, color: "red" }];
+	else if (busyList.length)
+		status = [{ text: "", spin: true, color: "yellow" }, { text: " " + busyList.map((b) => b.what).join(" · ") + "…" }];
+	else if (message) status = [{ text: message.text, color: message.color }];
+	// The header, the footer, and a status line only while there is news.
+	const body = rows - 2 - (status.length ? 1 : 0);
+	// Wide: the list and the selection's problems on the left, its detail on
+	// the right. Narrow: the list above the detail, which leads with the
+	// problems.
+	const wide = width >= 120;
+	const listW = wide ? Math.min(84, Math.max(60, Math.floor(width * 0.42))) : width;
+	const listH = wide
+		? Math.min(list.length + 2, Math.max(5, Math.floor(body * 0.6)))
+		: Math.min(list.length + 2, Math.max(5, Math.floor(body * 0.4)));
+	const detailW = wide ? width - listW : width;
+	const detailH = wide ? body : body - listH;
+	const listInner = listW - 2;
+	const detailInner = Math.max(10, detailW - 4); // borders and a column of padding each side
+	const detailRoom = Math.max(1, detailH - 2);
+	const visible = Math.max(1, listH - 2);
 	const start = Math.max(0, Math.min(index - Math.floor(visible / 2), list.length - visible));
-	const detailRoom = Math.max(0, rows - 1 - listRoom - 1 - 1 - 1);
+	const verbOf = (e: Entry) => busy[e.root]?.verb;
 
-	const mainUp = snap?.main?.up;
 	const wtUp = snap ? snap.worktrees.filter((w) => w.up).length : 0;
+	const anyPending = !!snap?.worktrees.some((w) => w.pending);
 
-	let bottom: React.ReactNode;
-	if (overlay?.kind === "help") bottom = <Help height={detailRoom} />;
-	else if (overlay?.kind === "confirm")
-		bottom = <Confirm title={overlay.title} lines={overlay.lines} height={detailRoom} width={width} />;
-	else if (overlay?.kind === "pick")
-		bottom = <Picker title={overlay.title} items={overlay.items} index={overlay.index} height={detailRoom} />;
-	else if (overlay?.kind === "output")
-		bottom = <Output title={overlay.title} code={overlay.code} text={overlay.text} height={detailRoom} width={width} />;
-	else if (sel) {
-		const lines = detailLines(sel, width, snap?.baseRef || "main");
+	// The detail panel, or an overlay in its place.
+	let title: Seg[];
+	let color = "gray";
+	let content: React.ReactNode;
+	if (overlay?.kind === "help") {
+		title = [{ text: "Keys", bold: true }];
+		color = "cyan";
+		content = <HelpBody width={detailInner} height={detailRoom} />;
+	} else if (overlay?.kind === "confirm") {
+		title = [{ text: overlay.title, bold: true }];
+		color = "yellow";
+		content = <ConfirmBody lines={overlay.lines} width={detailInner} height={detailRoom} />;
+	} else if (overlay?.kind === "pick") {
+		title = [{ text: overlay.title, bold: true }];
+		color = "cyan";
+		content = <PickerBody items={overlay.items} index={overlay.index} width={detailInner} height={detailRoom} selectionBg={selectionBg} />;
+	} else if (overlay?.kind === "output") {
+		title = [{ text: overlay.code === 0 ? "✓ " : `✗ exit ${overlay.code}: `, bold: true }, { text: overlay.title, bold: true }];
+		color = overlay.code === 0 ? "green" : "red";
+		content = <OutputBody text={overlay.text} width={detailInner} height={detailRoom} />;
+	} else if (sel) {
+		const lines = detailRows(sel, detailInner, { home, busy: verbOf(sel), problems: !wide });
 		const max = Math.max(0, lines.length - detailRoom);
 		const from = Math.min(scroll, max);
 		const shown = lines.slice(from, from + detailRoom);
 		if (lines.length > from + detailRoom && shown.length > 0) {
-			shown[shown.length - 1] = (
-				<Line key="more">
-					<Text dimColor>{`… ${lines.length - from - detailRoom + 1} more lines (pgdn)`}</Text>
-				</Line>
-			);
+			shown[shown.length - 1] = [{ text: `… ${lines.length - from - detailRoom + 1} more lines (pgdn)`, dim: true }];
 		}
-		bottom = (
-			<Box flexDirection="column" height={detailRoom}>
-				{shown}
-			</Box>
-		);
+		title = detailTitle(sel, verbOf(sel));
+		content = shown.map((segs, i) => <Row key={i} segs={segs} width={detailInner} />);
 	} else {
-		bottom = (
-			<Box height={detailRoom}>
-				<Text dimColor>{error ? "" : "reading the repository…"}</Text>
+		title = [];
+		content = null;
+	}
+
+	const listPanel = (
+		<Panel
+			title={[{ text: "Checkouts", bold: true, color: undefined }, { text: snap ? ` ${list.length}` : "", dim: true }]}
+			color="cyan"
+			width={listW}
+			height={listH}
+		>
+			{snap ? (
+				list
+					.slice(start, start + visible)
+					.map((e) => (
+						<ListRow key={e.root} e={e} selected={e.root === sel?.root} width={listInner} busy={verbOf(e)} selectionBg={selectionBg} />
+					))
+			) : (
+				<Row width={listInner} segs={error ? [] : [{ text: " " }, { text: "", spin: true, color: "cyan" }, { text: " reading the repository…", dim: true }]} />
+			)}
+		</Panel>
+	);
+	const detailPanel = (
+		<Panel title={title} color={color} width={detailW} height={detailH}>
+			<Box flexDirection="column" paddingX={1}>
+				{content}
 			</Box>
+		</Panel>
+	);
+
+	// Wide: the selection's problems under the list.
+	let problemsPanel: React.ReactNode = null;
+	if (wide) {
+		const h = body - listH;
+		const inner = listW - 4;
+		const pt = sel ? problemsTitle(sel) : { title: [], color: "gray" };
+		const rowsP = sel ? problemRows(sel, inner) : [];
+		const room = Math.max(1, h - 2);
+		const shownP = rowsP.slice(0, room);
+		if (rowsP.length > room) shownP[room - 1] = [{ text: `… ${rowsP.length - room + 1} more lines`, dim: true }];
+		problemsPanel = (
+			<Panel title={pt.title} color={pt.color} width={listW} height={h}>
+				<Box flexDirection="column" paddingX={1}>
+					{shownP.map((segs, i) => (
+						<Row key={i} segs={segs} width={inner} />
+					))}
+				</Box>
+			</Panel>
 		);
 	}
 
 	if (blank) return <Box />;
 	return (
 		<Box flexDirection="column" width={width} height={rows}>
-			<Line>
-				<Text bold color="magenta">
-					hydra
-				</Text>
-				{snap?.main ? (
-					<>
-						<Text>{"  main "}</Text>
-						<Text color={mainUp ? "green" : "red"}>{mainUp ? "up" : "DOWN"}</Text>
-						<Text>{` · ${wtUp}/${snap.worktrees.length} worktree${snap.worktrees.length === 1 ? "" : "s"} up`}</Text>
-						<Text dimColor>{` · read ${ago(snap.at, Date.now())}`}</Text>
-					</>
-				) : null}
-				<Text dimColor>{snap ? `  ${snap.repo}` : ""}</Text>
-			</Line>
-			<Box flexDirection="column" height={listRoom}>
-				<ListHeader cols={cols} />
-				{list.slice(start, start + visible).map((e) => (
-					<ListRow key={e.root} e={e} selected={e.root === sel?.root} cols={cols} />
-				))}
-			</Box>
-			<Line>
-				<Text dimColor>{"─".repeat(Math.max(0, width))}</Text>
-			</Line>
-			{bottom}
-			<Line>
-				{busy ? (
-					<>
-						<Spinner />
-						<Text>{` ${busy.what}…`}</Text>
-					</>
-				) : error ? (
-					<Text color="red">{error}</Text>
-				) : snap?.error ? (
-					<Text color="red">{snap.error}</Text>
-				) : message ? (
-					<Text color={message.color}>{message.text}</Text>
-				) : (
-					<Text> </Text>
-				)}
-			</Line>
-			<Footer kind={sel?.kind} width={width} />
+			<Row
+				width={width}
+				segs={[
+					{ text: " hydra", bold: true, color: "magenta" },
+					{ text: snap ? "  " + snap.repo.slice(snap.repo.lastIndexOf("/") + 1) : "", bold: true },
+					...(snap?.main
+						? [
+								{ text: "   main ", dim: true },
+								{ text: snap.main.up ? "up" : "down", color: snap.main.up ? "green" : "red", bold: true },
+								{ text: ` · ${wtUp} of ${snap.worktrees.length} worktree${snap.worktrees.length === 1 ? "" : "s"} up`, dim: true },
+							]
+						: []),
+					...(reading || anyPending
+						? [{ text: "   " }, { text: "", spin: true, color: "cyan" }, { text: reading ? " reading everything again" : " planning", dim: true }]
+						: []),
+				]}
+			/>
+			{overlay?.kind === "help" ? (
+				<Panel title={[{ text: "Keys", bold: true, color: undefined }]} color="cyan" width={width} height={body}>
+					<Box flexDirection="column" paddingX={1}>
+						<HelpBody width={width - 4} height={body - 2} />
+					</Box>
+				</Panel>
+			) : wide ? (
+				<Box flexDirection="row" height={body}>
+					<Box flexDirection="column" width={listW} height={body}>
+						{listPanel}
+						{problemsPanel}
+					</Box>
+					{detailPanel}
+				</Box>
+			) : (
+				<>
+					{listPanel}
+					{detailPanel}
+				</>
+			)}
+			{status.length ? <Row width={width} segs={[{ text: " " }, ...status]} /> : null}
+			<Footer e={sel} width={width} overlay={!!overlay} />
 		</Box>
 	);
 }

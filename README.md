@@ -223,19 +223,37 @@ how far it is from main and what `hydra update` would do to it.
 ### The dashboard
 
 Bare `hydra` in a terminal opens a dashboard of main and every worktree,
-built on `hydra status --json --watch`: each checkout's slot, whether its
-stack is up, what it runs here, how it stands against main (behind, a
-conflict, stacked on another branch), and for the chosen one its services
-and the problems with their fixes.
+built on `hydra status --json --watch`: each checkout by its branch (a
+ticket id first, the `you/` prefix dropped), whether its stack is up (a
+spinner and `starting 2/3` while it starts), how it stands against main
+(behind, a conflict, stacked on another branch), and in a panel for the
+chosen one, its problems with their fixes, its services and what it takes
+from main. At 120 columns or wider the panels sit side by side.
 
 ```
-hydra  main up · 2/4 worktrees up · read now  /Users/me/code/shop
-   CHECKOUT           SLOT STACK     RUNS HERE            VS MAIN
-   main               0    up        4/4 ok
- * shop-cart          1    up        web                  2↑
-   shop-checkout      -    down      api,web              conflicts(1) 1↓ 1↑
-▸  shop-notes         2    failing   api                  1↓ 1↑
-   shop-search        -    down      web                  1↓ 2↑ on cart
+ hydra  main   main up · 0 of 4 worktrees up
+╭─ Checkouts 5 ────────────────────────────────────────────────────────────────╮
+│ ● main                              up                            up to date │
+│▌○ api                               down                            1 behind │
+│ ○ clash                             down               1 behind · 1 conflict │
+│ ○ stacked                           down                 on web · needs main │
+│ ○ web                               down               1 behind · needs main │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ api  ○ down ────────────────────────────────────────────────────────────────╮
+│ api · ~/code/shop/api                                                        │
+│ 85fb02ad0 api: orders                                                        │
+│                                                                              │
+│ ✓ nothing in the way: u starts it                                            │
+│                                                                              │
+│ ⇅ vs main  1 behind · 1 ahead                                                │
+│   update: main would be merged in (1 commit)                                 │
+│                                                                              │
+│ ◆ Runs here  1                                                               │
+│   ○ api    not started     changed: apps/api/orders.go                       │
+│                                                                              │
+│ … 2 more lines (pgdn)                                                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ u up  ·  l logs  ·  m merge main             U update all  ·  ? help  ·  q quit
 ```
 
 Each key runs the hydra command an agent would type, in the chosen

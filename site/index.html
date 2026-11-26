@@ -254,32 +254,33 @@ you open  localhost:3400         slot 2's port for web. hydra's router answers,
 <section id="dashboard">
   <div class="measure">
     <h2>All of it on one screen</h2>
-    <p>Every command so far acts on one checkout. With a few agents at work you want to see all of them at once, so type <code>hydra</code> on its own. It opens a dashboard of main and every worktree: what each runs, whether its stack is up, how it stands against main, and for the one you pick, what is wrong and the fix.</p>
+    <p>Every command so far acts on one checkout. With a few agents at work you want to see all of them at once, so type <code>hydra</code> on its own. It opens a dashboard of main and every worktree, named by branch: whether its stack is up, how it stands against main, and for the one you pick, in a panel below, what is wrong and the fix, what it runs and what it takes from main.</p>
   </div>
   <div class="code term measure" style="margin-top:16px">
-    <div class="file">hydra</div>
-<pre><b class="m">hydra</b>  main <span class="x">up</span> · 2/2 worktrees up<span class="c"> · read now  /Users/me/code/shop</span>
-<span class="c">   CHECKOUT         SLOT STACK     RUNS HERE        VS MAIN</span>
-   main             0    <span class="x">up</span>        4/4 ok
-   fix-cart         1    <span class="x">up</span>        web              1↑
-<b class="s">▸</b><span class="m">*</span> <b class="s">api-paging</b>       2    <span class="r">up ✗1</span>     api              <span class="w">behind in web 4↓ 1↑</span>
-<span class="c">────────────────────────────────────────────────────────────────────────────────</span>
-<b>api-paging</b><span class="c">  api-paging · slot 2</span> · <span class="r">stack up</span><span class="c"> · 96M  /Users/me/code/api-paging</span>
-<span class="c">5e2c81a0d api: page the order list</span>
-4 behind main, 1 ahead<span class="c"> · update: main would be merged in (4 commits)</span>
-
-<span class="c">  SERVICE  RUNS          PORT   STATE</span>
-<span class="x">●</span> api      <span class="s">here</span>          8480   ready<span class="c">  96M  changed: services/api/list.go</span>
-<span class="x">●</span> db       <span class="c">main</span>          -      running
-<span class="x">●</span> web      <span class="c">main, routed</span>  3400   ready
-<span class="c">  (1 more of main's services aren't used by anything here)</span>
-
-<span class="r">✗</span> this branch is behind main: main changed these since the branch left it, and
-    this worktree uses main's copy:
-<span class="c">      web (it serves this worktree's api): apps/web/app/orders.tsx</span>
-<span class="c">  fix: </span><span class="s">hydra update --here   (or, for every worktree: hydra update)</span><span class="c">  (f runs it)</span>
-
-<b class="s">⏎</b><span class="c"> open  </span><b class="s">u</b><span class="c"> up  </span><b class="s">d</b><span class="c"> down  </span><b class="s">r</b><span class="c"> restart  </span><b class="s">l</b><span class="c"> logs  </span><b class="s">m</b><span class="c"> merge  </span><b class="s">U</b><span class="c"> update  </span><b class="s">?</b><span class="c"> help  </span><b class="s">q</b><span class="c"> quit</span></pre>
+    <div class="file">hydra, in examples/demo/dashboard.sh, 80 columns</div>
+<pre><b class="m"> hydra</b><b>  main</b><span class="c">   main </span><b class="x">up</b><span class="c"> · 0 of 4 worktrees up</span>
+<span class="s">╭─ </span><b>Checkouts</b><span class="s"> 5</span><span class="s"> ────────────────────────────────────────────────────────────────╮</span>
+<span class="s">│ </span><span class="x">●</span> <b class="m">main</b>                              <span class="x">up           </span> <span class="c">                up to date</span> <span class="s">│</span>
+<span class="s">│</span><span class="s hl">▌</span><span class="c hl">○</span><span class="hl"> </span><b class="s hl">api</b><span class="hl">                               </span><span class="c hl">down         </span><span class="hl"> </span><span class="c hl">                  1 behind</span><span class="hl"> </span><span class="s">│</span>
+<span class="s">│ </span><span class="c">○</span> <b>clash</b>                             <span class="c">down         </span> <span class="r">     1 behind · 1 conflict</span> <span class="s">│</span>
+<span class="s">│ </span><span class="c">○</span> <b>stacked</b>                           <span class="c">down         </span> <span class="w">       on web · needs main</span> <span class="s">│</span>
+<span class="s">│ </span><span class="c">○</span> <b>web</b>                               <span class="c">down         </span> <span class="w">     1 behind · needs main</span> <span class="s">│</span>
+<span class="s">╰──────────────────────────────────────────────────────────────────────────────╯</span>
+<span class="c">╭─ </span><b>api</b><span class="c">  ○</span><b class="c"> down</b><span class="c"> ────────────────────────────────────────────────────────────────╮</span>
+<span class="c">│</span> <span class="c">api · ~/code/shop/api</span>                             <span class="c">                           │</span>
+<span class="c">│</span> <span class="w">85fb02ad0 </span><span class="c">api: orders</span>                                                        <span class="c">│</span>
+<span class="c">│</span>                                                                              <span class="c">│</span>
+<span class="c">│</span> <b class="x">✓ </b><span class="x">nothing in the way: u starts it</span>                                            <span class="c">│</span>
+<span class="c">│</span>                                                                              <span class="c">│</span>
+<span class="c">│</span> <b class="s">⇅ </b><b>vs main</b>  1 behind · 1 ahead                                                <span class="c">│</span>
+<span class="c">│</span> <span class="c">  update: main would be merged in (1 commit)</span>                                 <span class="c">│</span>
+<span class="c">│</span>                                                                              <span class="c">│</span>
+<span class="c">│</span> <b class="s">◆ </b><b>Runs here</b><span class="c">  1</span>                                                               <span class="c">│</span>
+<span class="c">│</span>   <span class="c">○</span> api    <span class="c">not started     changed: apps/api/orders.go</span>                       <span class="c">│</span>
+<span class="c">│</span>                                                                              <span class="c">│</span>
+<span class="c">│</span> <span class="c">… 2 more lines (pgdn)</span>                                                        <span class="c">│</span>
+<span class="c">╰──────────────────────────────────────────────────────────────────────────────╯</span>
+ <b class="s">u</b><span class="c"> up  ·  </span><b class="s">l</b><span class="c"> logs  ·  </span><b class="s">m</b><span class="c"> merge main</span>             <b class="s">U</b><span class="c"> update all  ·  </span><b class="s">?</b><span class="c"> help  ·  </span><b class="s">q</b><span class="c"> quit</span></pre>
   </div>
   <div class="measure">
     <p style="margin-top:18px">Each key runs the command you would type, in the checkout you picked: <code>u</code> is <code style="white-space:nowrap">hydra up -D</code>, <code>m</code> merges main into that worktree alone (<code>hydra update --here</code>), <code>f</code> runs the fix, and <code>⏎</code> opens the stack in process-compose; F10, then Yes, brings you back with the stack still running. Whatever stops a stack or moves a branch asks first, and <code>q</code> leaves every stack running.</p>
@@ -293,7 +294,7 @@ you open  localhost:3400         slot 2's port for web. hydra's router answers,
 <hr>
 
 <footer class="foot">
-  <p>hydra is about 14,000 lines of Go and has no daemon: the watcher, the router and the pool are ordinary processes in your process-compose projects. The dashboard is about 1,300 lines of TypeScript, built into the binary and run with Node.js.</p>
+  <p>hydra is about 14,000 lines of Go and has no daemon: the watcher, the router and the pool are ordinary processes in your process-compose projects. The dashboard is about 1,700 lines of TypeScript, built into the binary and run with Node.js.</p>
   <p>This page is static HTML, one stylesheet and one script, with its fonts served from here. No build step, no trackers.</p>
   <p><a href="docs/">docs</a> · <a href="https://github.com/santiagotoscanini/hydra">source</a> · <a href="https://github.com/F1bonacc1/process-compose">process-compose</a></p>
 </footer>

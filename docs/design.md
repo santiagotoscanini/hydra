@@ -284,6 +284,18 @@ Three layers, each doing one thing:
   branch asks first; `m` and `U` show their dry run as the question. After
   a command, the dashboard asks the watch to read that checkout again.
 
+What it draws is kept to what a person acts on. A checkout is named by
+its branch (folders like `t3-baf5151f…` are noise; a ticket id and its
+title words are what people recognise). A row has one state and one
+"against main" badge in plain words (`69 behind · 5 conflicts`), and the
+chosen checkout's detail is a panel that leads with its problems and their
+fixes; on a wide terminal the problems get their own panel under the list.
+Slots and ports are means, not news: the list doesn't show them. Every
+action shows itself under way where it happens (a spinner and `starting
+2/3` in the row and the panel) and ends in a line that says how it went,
+or the command's output when it failed. Lines are cut, never wrapped, so
+the frame keeps its shape at 80 columns as on a wide screen.
+
 Opening a stack hands the terminal to `hydra attach` and takes it back
 when that ends. In process-compose's attach mode, F10 or ctrl-c asks
 "Detach from the remote project?", and Yes ends the attach and leaves the
@@ -1268,7 +1280,7 @@ The main checkout's never stops; everything leans on it.
 - **Where it shows.** `hydra status` in the worktree says "stopped after 2h
   idle; hydra up starts it again" in place of "isn't running",
   `hydra status --all` says `idle-stopped`, `hydra status --json` has
-  `idleStopped`, and the dashboard's STACK column `idle-off`.
+  `idleStopped`, and the dashboard's list `idle-stopped`.
 - **What it misses.** Requests straight to a service the worktree runs
   itself (its own api on its own port) don't pass the router. Edits go with
   them, usually; a worktree only browsed that way for longer than

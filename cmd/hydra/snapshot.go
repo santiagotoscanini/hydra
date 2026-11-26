@@ -744,6 +744,17 @@ func snapMainOf(ms *mainState, mem func(int) int64) *snapMain {
 		}
 		m.Processes = append(m.Processes, svc)
 	}
+	// A stack that isn't running still says what it would run, so the
+	// dashboard can show main's services while it is down.
+	if !ms.Up && len(ms.Procs) == 0 {
+		for _, name := range ms.target.stack.Names() {
+			s := ms.target.stack.Services[name]
+			m.Processes = append(m.Processes, snapService{
+				Name: name, Runs: "here", State: "not running", Health: "off",
+				Port: s.Port, URL: serviceURL(ms, name, s.Port), Address: ms.target.stack.HostsURL(s, ""),
+			})
+		}
+	}
 	return m
 }
 

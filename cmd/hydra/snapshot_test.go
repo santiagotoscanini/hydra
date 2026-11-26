@@ -119,3 +119,22 @@ func TestAFixIsRunWhenItIsAHydraCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestMainSaysWhatItRunsWhileItsStackIsDown(t *testing.T) {
+	st := checkSt(t)
+	mainT := &target{stack: st}
+	mainT.checkout.Root, mainT.checkout.Main = "/repo/main", "/repo/main"
+	ms := &mainState{target: mainT, Head: "abc", Branch: "main", Client: pc.TCP("127.0.0.1", 1)}
+	m := snapMainOf(ms, func(int) int64 { return 0 })
+	if len(m.Processes) != len(st.Services) {
+		t.Fatalf("processes = %+v, want one per service", m.Processes)
+	}
+	for _, p := range m.Processes {
+		if p.Health != "off" || p.State != "not running" || p.Runs != "here" {
+			t.Errorf("%s = %+v", p.Name, p)
+		}
+	}
+	if !strings.Contains(mainSummary(m, nil), "stack DOWN") || strings.Contains(mainSummary(m, nil), "not running") {
+		t.Errorf("an agent's summary lists only what runs:\n%s", mainSummary(m, nil))
+	}
+}

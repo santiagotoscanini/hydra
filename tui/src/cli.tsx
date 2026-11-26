@@ -4,7 +4,7 @@
 import React from "react";
 import { render } from "ink";
 import App from "./App.js";
-import { ESC, realBackend } from "./hydra.js";
+import { ESC, SELECTION_BG, detectTheme, realBackend } from "./hydra.js";
 
 // By here every module has loaded: a test runs the bundle this far.
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -26,7 +26,10 @@ const leave = () => {
 };
 process.on("exit", leave);
 
-const instance = render(<App backend={backend} />, {
+// The selection's background has to suit the terminal's.
+const theme = await detectTheme();
+
+const instance = render(<App backend={backend} selectionBg={SELECTION_BG[theme]} home={process.env["HOME"]} />, {
 	exitOnCtrlC: false,
 	patchConsole: false,
 });

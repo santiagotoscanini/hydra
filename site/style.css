@@ -333,5 +333,8 @@ pre.has-xh .ln:not(.xh) .k { color: var(--ink-3); }
 .term .r { color: var(--bad); }
 .term .s { color: var(--sel); }
 .term .m { color: var(--mag); }
+.term .w { color: var(--edit); }
+/* The chosen row's background, as the dashboard draws it. */
+.term .hl { background: color-mix(in srgb, var(--sel) 22%, transparent); }
 
 kbd { font-size: 0.82em; padding: 0 5px; border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 3px; background: var(--panel); white-space: nowrap; }

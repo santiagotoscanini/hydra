@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Demo: the dashboard (bare `hydra` in a terminal), driven in tmux.
 #
-#  1. It lists main and every worktree: what each runs, its slot, whether
-#     its stack is up, how it stands against main (behind, a conflict,
-#     stacked on another branch), with the checkout it was started in
-#     chosen.
+#  1. It lists main and every worktree by branch: whether its stack is
+#     up, how it stands against main (behind, a conflict, stacked on
+#     another branch), with the checkout it was started in chosen, and
+#     the chosen one's services and problems in a panel beside or below.
 #  2. u starts a worktree's stack, ⏎ opens it (process-compose attach), and
 #     F10 or ctrl-c, then Yes, comes back to the dashboard with the stack
 #     still running. d stops it, after asking.
@@ -87,27 +87,38 @@ start() { # cols rows
   T kill-session -t d 2>/dev/null || true
   T new -d -s d -x "$1" -y "$2" -c "$repo/api" \
     "env PC_PORT_NUM=$PC_PORT_NUM HYDRA_CACHE_DIR=$repo/cache $H; echo EXITED-\$?; sleep 600"
-  waitfor 'level with main|behind main'
+  waitfor 'Checkouts [0-9]'
   sleep 1
 }
 
 echo "--- 1. bare hydra in the api worktree"
 start 80 24
 screen "80 columns"
-T capture-pane -p -t d | grep -qE '▸\* api +- +down +api' || fail "the api worktree isn't chosen"
-T capture-pane -p -t d | grep -qE 'main +0 +up +3/3 ok' || fail "main isn't up"
-T capture-pane -p -t d | grep -qE 'clash .*conflicts\(1\)' || fail "the conflict isn't shown"
-T capture-pane -p -t d | grep -qE 'stacked .*on web' || fail "the stack isn't shown"
+T capture-pane -p -t d | grep -qE '▌○ api +down' || fail "the api worktree isn't chosen"
+T capture-pane -p -t d | grep -qE '● main +up +up to date' || fail "main isn't up"
+T capture-pane -p -t d | grep -qE '○ clash +down +1 behind · 1 conflict' || fail "the conflict isn't shown"
+T capture-pane -p -t d | grep -qE '○ stacked +down +on web' || fail "the stack isn't shown"
+T capture-pane -p -t d | grep -qE '◆ Runs here' || fail "the chosen worktree's services aren't shown"
 T capture-pane -p -t d | python3 -c 'import sys; sys.exit(any(len(l.rstrip("\n")) > 80 for l in sys.stdin))' || fail "a line is wider than 80 columns"
 start 150 24
 screen "150 columns"
-T capture-pane -p -t d | grep -qE 'BRANCH' || fail "a wide terminal shows the branch"
+T capture-pane -p -t d | grep -qE '╭─ Checkouts.*╭─ api' || fail "a wide terminal shows the detail beside the list"
+T capture-pane -p -t d | grep -qE '╭─ Problems' || fail "a wide terminal shows the problems under the list"
+T capture-pane -e -p -t d | grep -qF $'\e[48;2;30;58;95m' || T capture-pane -e -p -t d | grep -qF $'\e[48;2;191;219;254m' || fail "the chosen row has no background"
 
 echo "--- 2. u, ⏎, F10 and Yes, d"
 T send-keys -t d u
+waitfor 'starting'
+screen "u: the row and the panel say it is starting"
 waitfor '✓ hydra up -D in api'
-waitfor 'api +[0-9]+ +up'
+waitfor '● api +up'
 screen "u started the api worktree's stack"
+T resize-window -t d -x 100 -y 32
+sleep 1
+screen "100 columns"
+T capture-pane -p -t d | python3 -c 'import sys; sys.exit(any(len(l.rstrip("\n")) > 100 for l in sys.stdin))' || fail "a line is wider than 100 columns"
+T resize-window -t d -x 150 -y 24
+sleep 0.5
 [[ "$(procs "$repo/api")" == *api* ]] || fail "the stack isn't up"
 T send-keys -t d Enter
 waitfor 'Process Compose'
@@ -115,7 +126,7 @@ T send-keys -t d F10
 waitfor 'Detach from the remote'
 screen "⏎ opened it; F10 asks"
 T send-keys -t d Enter
-waitfor 'CHECKOUT'
+waitfor 'Checkouts'
 [[ "$(procs "$repo/api")" == *api* ]] || fail "leaving attach stopped the stack"
 echo "back in the dashboard; the stack still runs: $(procs "$repo/api")"
 T send-keys -t d Enter
@@ -123,13 +134,13 @@ waitfor 'Process Compose'
 T send-keys -t d C-c
 waitfor 'Detach from the remote'
 T send-keys -t d Enter
-waitfor 'CHECKOUT'
+waitfor 'Checkouts'
 [[ "$(procs "$repo/api")" == *api* ]] || fail "ctrl-c in attach stopped the stack"
 echo "the same after ctrl-c: $(procs "$repo/api")"
 T send-keys -t d d
 waitfor "Stop api's stack"
 T send-keys -t d y
-waitfor 'api +[0-9]+ +down'
+waitfor '○ api +down'
 [ -z "$(procs "$repo/api")" ] || fail "d left the stack running"
 echo "d, y: stopped"
 

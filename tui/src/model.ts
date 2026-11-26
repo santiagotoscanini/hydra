@@ -93,55 +93,101 @@ export function runsHere(e: Entry): Service[] {
 	return e.services.filter((s) => s.runs === "here" && !s.off);
 }
 
-/** What the list says about a checkout's stack. */
-export function stackState(e: Entry): { text: string; color?: string } {
-	if (e.error) return { text: "error", color: "red" };
-	if (e.pending) return { text: "…", color: "gray" };
-	const blocking = e.problems.filter((p) => p.blocks).length;
-	if (!e.up) {
-		if (e.kind === "main") return { text: "DOWN", color: "red" };
-		if (e.idleStopped) return { text: "idle-off", color: "blue" };
-		return { text: "down", color: "gray" };
-	}
-	const svcs = runsHere(e);
-	if (svcs.some((s) => s.health === "failed")) return { text: "failing", color: "red" };
-	if (svcs.some((s) => s.health === "starting")) return { text: "starting", color: "yellow" };
-	if (blocking > 0) return { text: `up ✗${blocking}`, color: "red" };
-	return { text: "up", color: "green" };
+/** A branch as a person names it: without the "user/" prefix, and split
+ *  into its ticket id and title words when it starts with one
+ *  ("santiago/fla-709-an-advisor" → fla-709, "an advisor"). */
+export function branchName(branch: string): { id?: string; title: string } {
+	const slug = branch.slice(branch.lastIndexOf("/") + 1);
+	const m = /^([A-Za-z]{2,10}-\d+)(?:[-_](.*))?$/.exec(slug);
+	if (!m) return { title: slug };
+	return { id: m[1]!.toLowerCase(), title: (m[2] ?? "").replace(/[-_]+/g, " ") };
 }
 
-/** How a checkout stands against main, in a few words for the list. */
+/** The shortest name that still says which branch: its ticket id, or its slug. */
+export function shortBranch(branch: string): string {
+	const n = branchName(branch);
+	return n.id ?? n.title;
+}
+
+/** What a checkout is called in the list and the panel. */
+export function displayName(e: Entry): { id?: string; title: string } {
+	if (e.kind === "main") return { title: "main" };
+	if (e.branch === "(detached)") return { title: e.name };
+	return branchName(e.branch);
+}
+
+/** The stack's progress: how many of what it runs itself are ready. */
+export function progress(e: Entry): { ready: number; total: number } {
+	const svcs = e.kind === "main" ? e.services.filter((s) => s.health !== "off") : runsHere(e);
+	return { ready: svcs.filter((s) => s.health === "up" || s.health === "done").length, total: svcs.length };
+}
+
+export interface StateView {
+	glyph: string;
+	/** a spinner instead of the glyph: something is under way */
+	spin: boolean;
+	word: string;
+	color: string;
+}
+
+/** Where a checkout's stack stands, in a glyph and a word or two. busy is
+ *  the action the dashboard is running in it ("starting", "stopping"). */
+export function stateOf(e: Entry, busy?: string): StateView {
+	if (e.error) return { glyph: "✗", spin: false, word: "can't plan", color: "red" };
+	if (e.pending) return { glyph: "…", spin: true, word: "planning", color: "gray" };
+	const p = progress(e);
+	const svcs = e.kind === "main" ? e.services : runsHere(e);
+	const starting = e.up && svcs.some((s) => s.health === "starting");
+	if (busy) {
+		const word = busy === "starting" && starting ? `starting ${p.ready}/${p.total}` : `${busy}…`;
+		return { glyph: "", spin: true, word, color: "yellow" };
+	}
+	if (!e.up) {
+		if (e.idleStopped) return { glyph: "◌", spin: false, word: "idle-stopped", color: "blue" };
+		return { glyph: "○", spin: false, word: "down", color: e.kind === "main" ? "red" : "gray" };
+	}
+	if (svcs.some((s) => s.health === "failed")) return { glyph: "✗", spin: false, word: "failing", color: "red" };
+	if (starting) return { glyph: "", spin: true, word: `starting ${p.ready}/${p.total}`, color: "yellow" };
+	const blocking = e.problems.filter((x) => x.blocks).length;
+	if (blocking) return { glyph: "●", spin: false, word: `up, ${blocking} issue${blocking === 1 ? "" : "s"}`, color: "yellow" };
+	return { glyph: "●", spin: false, word: "up", color: "green" };
+}
+
+/** How many files merging main would conflict in. */
+export function conflictCount(e: Entry): number {
+	return e.update?.conflicts?.length || e.farBehind?.conflicts.length || 0;
+}
+
+/** How a checkout stands against main, in plain words for the list:
+ *  "69 behind · 5 conflicts", "on fla-709 · up to date". */
 export function vsMain(e: Entry): { text: string; color?: string } {
+	const plural = (n: number, one: string, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 	if (e.kind === "main") {
 		const parts: string[] = [];
-		if (e.behind > 0) parts.push(`${e.behind}↓ upstream`);
+		if (e.behind > 0) parts.push(`${e.behind} behind upstream`);
 		if (e.dirty > 0) parts.push(`${e.dirty} uncommitted`);
-		return { text: parts.join(" · "), color: parts.length ? "yellow" : undefined };
+		return parts.length ? { text: parts.join(" · "), color: "yellow" } : { text: "up to date", color: "gray" };
 	}
+	if (e.error || e.pending) return { text: "" };
 	const parts: string[] = [];
-	let color: string | undefined;
-	// Far behind main: a "!" up front, where it shows however narrow the
-	// column, and the conflicts merging main would bring.
-	const far = e.farBehind;
-	if (far) parts.push("!");
-	const conflicts = e.update?.conflicts?.length || far?.conflicts.length || 0;
+	if (e.stack.length > 1) parts.push(`on ${shortBranch(e.stack[e.stack.length - 2]!)}`);
+	const conflicts = conflictCount(e);
+	const landed = e.update?.note.startsWith("left alone: everything on it");
+	let color: string | undefined = "gray";
+	// Stacked: what counts is its parent, which brings main with it.
+	if (landed) parts.push("landed");
+	else if (e.behind > 0 && e.stack.length <= 1) parts.push(`${e.behind} behind`);
 	if (conflicts) {
-		parts.push(`conflicts(${conflicts})`);
+		parts.push(plural(conflicts, "conflict"));
 		color = "red";
 	} else if (e.outOfStep.length > 0) {
-		parts.push(e.mainBehind ? `main older: ${e.outOfStep.join(",")}` : `behind in ${e.outOfStep.join(",")}`);
+		parts.push(e.mainBehind ? "main is older" : "needs main");
 		color = "yellow";
-	} else if (far) {
+	} else if (e.farBehind) {
 		color = "yellow";
 	}
-	if (e.behind > 0) parts.push(`${e.behind}↓`);
-	if (e.ahead > 0) parts.push(`${e.ahead}↑`);
-	if (e.update?.note.startsWith("left alone: everything on it")) {
-		parts.push("landed");
-		color ??= "gray";
-	}
-	if (e.stack.length > 1) parts.push(`on ${e.stack[e.stack.length - 2]}`);
-	return { text: parts.join(" "), color };
+	if (parts.length === 0) parts.push("up to date");
+	return { text: parts.join(" · "), color };
 }
 
 export function healthGlyph(h: Health): { glyph: string; color?: string } {
@@ -230,4 +276,17 @@ export function wrap(text: string, width: number, more = "  "): string[] {
 		for (let i = 0; i < chars.length || i === 0; i += Math.max(1, width)) parts.push(chars.slice(i, i + width).join(""));
 		return parts;
 	});
+}
+
+/** A path with the home directory as ~. */
+export function tildePath(p: string, home: string | undefined): string {
+	if (home && (p === home || p.startsWith(home + "/"))) return "~" + p.slice(home.length);
+	return p;
+}
+
+/** The services main runs, or would run, split into those that are on and
+ *  those switched off (disabled until someone starts them). */
+export function mainServices(e: Entry): { on: Service[]; off: Service[] } {
+	const off = e.up ? e.services.filter((s) => s.health === "off") : [];
+	return { on: e.services.filter((s) => !off.includes(s)), off };
 }

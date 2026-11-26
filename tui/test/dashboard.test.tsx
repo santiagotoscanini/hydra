@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import React from "react";
 import { render } from "ink-testing-library";
 import App from "../src/App.js";
-import { Confirm, Footer, ListRow, columns, detailLines } from "../src/ui.js";
-import { entries, fixCommand, stackState, vsMain, wrap } from "../src/model.js";
+import { ConfirmBody, Footer, ListRow, detailRows, footerKeys, problemRows, Row } from "../src/ui.js";
+import { branchName, entries, fixCommand, stateOf, vsMain, wrap } from "../src/model.js";
 import { FakeBackend, plain, tick } from "./fake.js";
 import { fixture } from "./fixture.js";
 
@@ -23,40 +23,74 @@ function noLineWiderThan(frame: string, width: number) {
 	}
 }
 
+/** Renders once, and unmounts, so no spinner keeps the test running. */
+function once(el: React.ReactElement): string {
+	const r = render(el);
+	const f = plain(r.lastFrame());
+	r.unmount();
+	return f;
+}
+
+const rows = (segs: ReturnType<typeof detailRows>, width = 80) =>
+	once(<>{segs.map((s, i) => <Row key={i} segs={s} width={width} />)}</>);
+
+test("a branch is named without its user prefix, by its ticket and title", () => {
+	assert.deepEqual(branchName("santiago/fla-709-an-advisor-splits"), { id: "fla-709", title: "an advisor splits" });
+	assert.deepEqual(branchName("SCRM-264_app_ring"), { id: "scrm-264", title: "app ring" });
+	assert.deepEqual(branchName("santiago/supabase-native-local"), { title: "supabase-native-local" });
+	assert.deepEqual(branchName("main"), { title: "main" });
+});
+
 test("the list shows main and every worktree, with where each stands", async () => {
 	const { frame, unmount } = app();
 	await tick();
 	const f = frame();
-	assert.match(f, /main\s+0\s+up\s+3\/4 ok\s+2↓ upstream/);
-	assert.match(f, /▸\* cart\s+1\s+up ✗2|▸\* cart\s+1\s+failing/, "the checkout hydra ran in is chosen, and marked");
-	assert.match(f, /clash\s+-\s+down\s+api\s+conflicts\(1\) 1↓ 1↑/);
-	assert.match(f, /more\s+2\s+down\s+web\s+2↑ on cart-checkout/);
-	assert.match(f, /fresh\s+-\s+…/);
-	assert.match(f, /main up · 1\/4 worktrees up/);
+	assert.match(f, /● main\s+up\s+2 behind upstream/);
+	assert.match(f, /▌✗ cart-checkout\s+failing\s+3 behind · needs main/, "the checkout hydra ran in is chosen");
+	assert.match(f, /○ clash\s+down\s+1 behind · 1 conflict/);
+	assert.match(f, /○ more\s+down\s+on cart-checkout/);
+	assert.match(f, /fresh\s+planning/);
+	assert.match(f, /main up · 1 of 4 worktrees up/);
+	assert.doesNotMatch(f, /read now|SLOT|CHECKOUT/);
 	unmount();
 });
 
 test("the detail lists what runs here, what comes from main, and the problems with their fixes", async () => {
-	const { frame, unmount } = app(100, 40);
+	const { frame, unmount } = app(100, 44);
 	await tick();
 	const f = frame();
-	assert.match(f, /cart\s+santiago\/cart-checkout · slot 1 · stack up/);
-	assert.match(f, /3 behind main, 1 ahead · update: main would be merged in \(3 commits\)/);
-	assert.match(f, /● web\s+here\s+3100\s+running/);
-	assert.match(f, /✗ worker\s+here\s+8120\s+exited with code 1/);
-	assert.match(f, /● api\s+main\s+8080\s+ready/);
+	assert.match(f, /╭─ cart-checkout {2}✗ failing/);
+	assert.match(f, /santiago\/cart-checkout · \/repo\/cart · 300M/);
+	assert.match(f, /⇅ vs main {2}3 behind · 1 ahead/);
+	assert.match(f, /update: main would be merged in \(3 commits\)/);
+	assert.match(f, /◆ Runs here {2}1\/2 ready/);
+	assert.match(f, /● web\s+running\s+http:\/\/cart\.localhost:3900\s+changed: apps\/web\/cart\.tsx/);
+	assert.match(f, /✗ worker\s+exited with code 1\s+:8120/);
+	assert.match(f, /◇ From main {2}2 used, 1 more unused/);
+	assert.match(f, /● api ● db/);
 	assert.doesNotMatch(f, /seed/, "main's services nothing here uses are counted, not listed");
-	assert.match(f, /1 more of main's services aren't used/);
+	assert.match(f, /! 2 problems/);
 	assert.match(f, /✗ this branch is behind main/);
-	assert.match(f, /fix: hydra update   \(or, for this worktree alone: git merge main\)\s+\(f runs it\)/);
-	assert.match(f, /fix: hydra process restart worker\s+\(f runs it\)/);
+	assert.match(f, /fix hydra update {3}\(or, for this worktree alone: git merge main\) {3}f runs it/);
+	assert.match(f, /fix hydra process restart worker {3}f runs it/);
+	unmount();
+});
+
+test("a wide terminal shows the problems in a panel of their own, under the list", async () => {
+	const { frame, unmount } = app(160, 40);
+	await tick();
+	const f = frame();
+	assert.match(f, /╭─ Checkouts 5 ─+╮╭─ cart-checkout {2}✗ failing/);
+	assert.match(f, /╭─ Problems 2 ─/);
+	assert.match(f, /│ ✗ worker exited with code 1\./);
+	noLineWiderThan(f, 160);
 	unmount();
 });
 
 test("o opens the checkout's address by name in the browser", async () => {
-	const { backend, stdin, frame, unmount } = app(100, 40);
+	const { backend, stdin, frame, unmount } = app(100, 50);
 	await tick();
-	assert.match(frame(), /address: web http:\/\/cart\.localhost:3900/);
+	assert.match(frame(), /↗ Addresses {2}o opens one/);
 	stdin.write("o");
 	await tick();
 	assert.deepEqual(backend.browsed, ["http://cart.localhost:3900"]);
@@ -64,30 +98,60 @@ test("o opens the checkout's address by name in the browser", async () => {
 	unmount();
 });
 
-test("detail lines of a conflicting and of a stacked worktree", () => {
+test("detail of a conflicting, a stacked and a still planned worktree", () => {
 	const list = entries(fixture());
-	const text = (i: number) =>
-		render(<>{detailLines(list[i]!, 80, "main")}</>).lastFrame() ?? "";
-	assert.match(plain(text(2)), /conflicting: apps\/api\/users.go/);
-	assert.match(plain(text(2)), /✓ nothing in the way \(its stack isn't running: u starts it\)/);
-	assert.match(plain(text(3)), /stacked: main ← cart-checkout ← more/);
-	assert.match(plain(text(4)), /planning…/);
+	const all = (i: number) => rows([...detailRows(list[i]!, 80), ...problemRows(list[i]!, 80)]);
+	assert.match(all(2), /merging main conflicts in 1 file: users\.go/);
+	assert.match(all(2), /✓ nothing in the way: u starts it/);
+	assert.match(all(3), /stacked on cart-checkout {2}\(main ← cart-checkout ← more\)/);
+	assert.match(all(4), /working out what runs here/);
 });
 
-test("the footer shows the keys, merge only for a worktree", () => {
-	const wt = plain(render(<Footer kind="worktree" width={80} />).lastFrame());
-	assert.match(wt, /⏎ open\s+u up\s+d down\s+r restart\s+l logs\s+m merge\s+U update\s+\? help\s+q quit/);
-	noLineWiderThan(wt, 80);
-	const main = plain(render(<Footer kind="main" width={120} />).lastFrame());
-	assert.doesNotMatch(main, /merge/);
-	assert.match(main, /f fix · U update all/);
+test("main lists what it runs even while its stack is down", () => {
+	const snap = fixture();
+	const m = snap.main!;
+	m.up = false;
+	m.processes = m.processes.map((p) => ({ ...p, state: "not running", health: "off" as const }));
+	const e = entries(snap)[0]!;
+	assert.deepEqual(stateOf(e), { glyph: "○", spin: false, word: "down", color: "red" });
+	const f = rows(detailRows(e, 80));
+	assert.match(f, /not running: the worktrees that use main's services need it/);
+	assert.match(f, /◆ Services {2}4, none running/);
+	assert.match(f, /○ api\s+not running\s+:8080/);
+	assert.doesNotMatch(f, /nothing runs here|switched off/);
+});
+
+test("a stack being started says how far it got, in the row and the panel", () => {
+	const snap = fixture();
+	snap.worktrees[0]!.services[1]!.health = "starting";
+	const e = entries(snap)[1]!;
+	assert.equal(stateOf(e).word, "starting 1/2");
+	assert.equal(stateOf(e, "starting").word, "starting 1/2");
+	assert.equal(stateOf(entries(fixture())[2]!, "starting").word, "starting…", "before the stack answers");
+	assert.equal(stateOf(entries(fixture())[2]!, "stopping").spin, true);
+});
+
+test("the footer shows only the keys that apply to the selection", () => {
+	const list = entries(fixture());
+	const keys = (i: number) => footerKeys(list[i]).map(([k]) => k).join(" ");
+	assert.equal(keys(0), "⏎ d r l o f", "main is up: no up, no merge");
+	assert.equal(keys(1), "⏎ d r l o f m");
+	assert.equal(keys(2), "u m", "down, nothing to fix, no logs to follow");
+	assert.equal(keys(4), "", "still being planned");
+	for (const width of [80, 120]) {
+		const f = once(<Footer e={list[1]} width={width} />);
+		noLineWiderThan(f, width);
+		assert.match(f, /U update/);
+		assert.match(f, /q quit/);
+	}
+	const f = once(<Footer e={list[1]} width={80} overlay />);
+	assert.doesNotMatch(f, /quit/, "an overlay says its own keys");
 });
 
 test("a confirm dialog says what it will do, and how to say no", () => {
-	const f = plain(render(<Confirm title="Stop main's stack? (hydra down)" lines={["Every worktree loses it."]} height={6} width={80} />).lastFrame());
-	assert.match(f, /Stop main's stack\? \(hydra down\)/);
+	const f = once(<ConfirmBody lines={["Every worktree loses it."]} height={6} width={80} />);
 	assert.match(f, /Every worktree loses it\./);
-	assert.match(f, /y yes, do it · n\/esc no/);
+	assert.match(f, /y {2}yes, do it {4}n \/ esc no/);
 });
 
 test("d asks first, then runs hydra down in that worktree", async () => {
@@ -95,12 +159,12 @@ test("d asks first, then runs hydra down in that worktree", async () => {
 	await tick();
 	stdin.write("d");
 	await tick();
-	assert.match(frame(), /Stop cart's stack\? \(hydra down\)/);
+	assert.match(frame(), /Stop cart-checkout's stack\? \(hydra down\)/);
 	assert.equal(backend.runs.length, 0, "nothing runs before the yes");
 	stdin.write("y");
 	await tick();
 	assert.deepEqual(backend.runs, [{ args: ["down"], cwd: "/repo/cart" }]);
-	assert.match(frame(), /✓ hydra down in cart: ok/);
+	assert.match(frame(), /✓ hydra down in cart-checkout: ok/);
 	unmount();
 });
 
@@ -113,6 +177,7 @@ test("n leaves things as they were", async () => {
 	await tick();
 	assert.equal(backend.runs.length, 0);
 	assert.doesNotMatch(frame(), /Stop cart/);
+	assert.match(frame(), /╭─ cart-checkout {2}✗ failing/, "the detail is back");
 	unmount();
 });
 
@@ -163,7 +228,7 @@ test("m shows the dry run, and on yes runs hydra update --here in the terminal",
 	await tick();
 	stdin.write("m");
 	await tick();
-	assert.match(frame(), /Merge main into cart\? \(hydra update --here\)/);
+	assert.match(frame(), /Merge main into cart-checkout\? \(hydra update --here\)/);
 	assert.match(frame(), /main would be merged in \(3 commits\)/);
 	stdin.write("y");
 	await tick();
@@ -195,7 +260,7 @@ test("f picks a fix, asks, and runs it with this hydra", async () => {
 	await tick();
 	stdin.write(ENTER);
 	await tick();
-	assert.match(frame(), /Run in cart: hydra process restart worker/);
+	assert.match(frame(), /Run in cart-checkout: hydra process restart worker/);
 	stdin.write("y");
 	await tick();
 	assert.equal(backend.terminals[0]!.shell, "/usr/local/bin/hydra process restart worker");
@@ -208,7 +273,7 @@ test("r and l pick a service", async () => {
 	await tick();
 	stdin.write("r");
 	await tick();
-	assert.match(frame(), /Restart which of cart's services\?/);
+	assert.match(frame(), /Restart which of cart-checkout's services\?/);
 	stdin.write(ENTER);
 	await tick();
 	assert.deepEqual(backend.runs[0], { args: ["process", "restart", "web"], cwd: "/repo/cart" });
@@ -233,7 +298,7 @@ test("? shows the keys, and how to come back from an open stack", async () => {
 	await tick();
 	stdin.write("?");
 	await tick();
-	assert.match(frame(), /F10 \(or ctrl-c\) then Yes comes back; the stack keeps running/);
+	assert.match(frame(), /F10 or ctrl-c, then Yes, comes back; the stack keeps running/);
 	stdin.write("\u001B");
 	await tick();
 	assert.doesNotMatch(frame(), /F10/);
@@ -247,18 +312,19 @@ test("no line is wider than the terminal, narrow or wide", async () => {
 		noLineWiderThan(frame(), width);
 		const f = frame();
 		assert.equal(f.split("\n").length, 29, `the frame is one row short of the terminal at ${width}`);
-		if (width >= 110) assert.match(f, /BRANCH/);
-		else assert.doesNotMatch(f, /BRANCH/);
+		if (width >= 120) assert.match(f, /╭─ Problems/);
+		else assert.doesNotMatch(f, /╭─ Problems/);
 		unmount();
 	}
 });
 
 test("a list row at 80 columns", () => {
 	const e = entries(fixture())[1]!;
-	const f = plain(render(<ListRow e={e} selected={false} cols={columns(80)} />).lastFrame());
-	noLineWiderThan(f, 80);
-	assert.equal(stackState(e).text, "failing");
-	assert.equal(vsMain(e).text, "behind in api 3↓ 1↑");
+	const f = once(<ListRow e={e} selected width={78} selectionBg="#1e3a5f" />);
+	noLineWiderThan(f, 78);
+	assert.equal(stateOf(e).word, "failing");
+	assert.deepEqual(vsMain(e), { text: "3 behind · needs main", color: "yellow" });
+	assert.match(f, /^▌✗ cart-checkout/);
 });
 
 test("fixes run with the dashboard's hydra", () => {
@@ -278,10 +344,10 @@ test("keys typed together all count", async () => {
 	await tick();
 	stdin.write("jj");
 	await tick();
-	assert.match(frame(), /▸  more/);
+	assert.match(frame(), /▌○ more/);
 	stdin.write("kkk");
 	await tick();
-	assert.match(frame(), /▸  main/);
+	assert.match(frame(), /▌● main/);
 	unmount();
 });
 
@@ -289,12 +355,11 @@ test("a worktree hydra stopped for being idle says so", () => {
 	const snap = fixture();
 	snap.worktrees[2]!.idleStopped = { at: new Date().toISOString(), after: "2h" };
 	const e = entries(snap)[3]!;
-	assert.equal(stackState(e).text, "idle-off");
-	const row = plain(render(<ListRow e={e} selected={false} cols={columns(80)} />).lastFrame());
-	noLineWiderThan(row, 80);
-	assert.match(row, /more\s+2\s+idle-off\s+web/);
-	const detail = plain(render(<>{detailLines(e, 80, "main")}</>).lastFrame() ?? "");
-	assert.match(detail, /stopped after 2h idle/);
+	assert.equal(stateOf(e).word, "idle-stopped");
+	const row = once(<ListRow e={e} selected={false} width={78} selectionBg="#1e3a5f" />);
+	noLineWiderThan(row, 78);
+	assert.match(row, /◌ more\s+idle-stopped\s+on cart-checkout/);
+	assert.match(rows(detailRows(e, 80)), /nobody used it for 2h, so hydra stopped it: u starts it/);
 });
 
 test("a worktree far behind main is marked, and the row still fits 80 columns", () => {
@@ -302,14 +367,16 @@ test("a worktree far behind main is marked, and the row still fits 80 columns", 
 	const w = snap.worktrees[0]!;
 	w.behind = 312;
 	w.farBehind = { behind: 312, limit: 100, conflicts: ["apps/api/users.go", "apps/web/cart.tsx"] };
+	w.update = undefined;
 	const e = entries(snap)[1]!;
-	assert.deepEqual(vsMain(e), { text: "! conflicts(2) 312↓ 1↑", color: "red" });
-	const row = plain(render(<ListRow e={e} selected={false} cols={columns(80)} />).lastFrame());
-	noLineWiderThan(row, 80);
-	assert.match(row, /! conflicts\(2\)/);
-	const detail = plain(render(<>{detailLines(e, 80, "main")}</>).lastFrame() ?? "");
-	assert.match(detail, /! far behind main: merging it conflicts in apps\/api\/users.go, apps\/web\/cart.tsx/);
+	assert.deepEqual(vsMain(e), { text: "312 behind · 2 conflicts", color: "red" });
+	const row = once(<ListRow e={e} selected={false} width={78} selectionBg="#1e3a5f" />);
+	noLineWiderThan(row, 78);
+	assert.match(row, /312 behind · 2 conflicts/);
+	assert.match(rows(detailRows(e, 80)), /merging main conflicts in 2 files: users\.go, cart\.tsx/);
 
 	w.farBehind = { behind: 312, limit: 100 };
-	assert.deepEqual(vsMain(entries(snap)[1]!), { text: "! behind in api 312↓ 1↑", color: "yellow" });
+	w.outOfStep = [];
+	assert.deepEqual(vsMain(entries(snap)[1]!), { text: "312 behind", color: "yellow" });
+	assert.match(rows(detailRows(entries(snap)[1]!, 80)), /far behind: 312 commits, and the merge only gets harder/);
 });
