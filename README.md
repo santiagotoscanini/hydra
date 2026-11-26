@@ -225,21 +225,25 @@ how far it is from main and what `hydra update` would do to it.
 Bare `hydra` in a terminal opens a dashboard of main and every worktree,
 built on `hydra status --json --watch`: each checkout by its branch (a
 ticket id first, the `you/` prefix dropped), whether its stack is up (a
-spinner and `starting 2/3` while it starts), how it stands against main
-(behind, a conflict, stacked on another branch), and in a panel for the
+spinner and `starting 2/3` while it starts), and how it stands against its
+parent, as a tree: main at the root, each stacked branch under the one it
+is stacked on. A branch under one that is behind is out of date too
+(`↑ web is behind`), and the first stale branch of each chain stands out,
+so you see where to update first. In a panel for the
 chosen one, its problems with their fixes, its services and what it takes
 from main. At 120 columns or wider the panels sit side by side. It uses
 the terminal's own colours and follows its light or dark theme, also when
 the terminal switches while it runs.
 
 ```
- hydra  main   main up · 0 of 4 worktrees up
-╭─ Checkouts 5 ────────────────────────────────────────────────────────────────╮
+ hydra  main   main up · 0 of 5 worktrees up · 5 out of date
+╭─ Checkouts 6 ────────────────────────────────────────────────────────────────╮
 │ ● main                              up                            up to date │
-│▌○ api                               down                            1 behind │
-│ ○ clash                             down               1 behind · 1 conflict │
-│ ○ stacked                           down                 on web · needs main │
-│ ○ web                               down               1 behind · needs main │
+│▌├─○ api                             down                       1 behind main │
+│ ├─○ clash                           down          1 behind main · 1 conflict │
+│ └─○ web                             down                       1 behind main │
+│   └─○ stacked                       down                     ↑ web is behind │
+│     └─○ deeper                      down                     ↑ web is behind │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ api  ○ down ────────────────────────────────────────────────────────────────╮
 │ api · ~/code/shop/api                                                        │

@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -136,5 +138,27 @@ func TestMainSaysWhatItRunsWhileItsStackIsDown(t *testing.T) {
 	}
 	if !strings.Contains(mainSummary(m, nil), "stack DOWN") || strings.Contains(mainSummary(m, nil), "not running") {
 		t.Errorf("an agent's summary lists only what runs:\n%s", mainSummary(m, nil))
+	}
+}
+
+// The dashboard draws the checkouts as a tree, each against its parent: the
+// snapshot says how far behind the parent each worktree is, main or the
+// branch it is stacked on.
+func TestTheSnapshotSaysHowFarBehindItsParentAWorktreeIs(t *testing.T) {
+	main, wt := stackedRepo(t)
+	// a moves on: b, stacked on it, is now behind a, and c, on b, isn't.
+	if out, err := exec.Command("sh", "-c", `cd "$0" && echo more > apps/api/a2.go && git add -A && git -c user.name=t -c user.email=t@t commit -qm a2`, wt("a")).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	mainHead, err := gitOut(main, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"a": "main 1", "b": "a 1", "c": "b 0", "d": "main 1"}
+	for name, w := range want {
+		g := gitState(stack.Worktree{Root: wt(name), Branch: name}, main, "main", mainHead, 0)
+		if got := fmt.Sprintf("%s %d", g.update.Parent, g.update.Behind); got != w {
+			t.Errorf("%s: parent and behind = %q, want %q (%s)", name, got, w, g.update.Note)
+		}
 	}
 }

@@ -48,7 +48,10 @@ export interface MainState {
 }
 
 export interface Update {
+	/** The branch merged in: the base ref (main), or the one it is stacked on. */
 	parent: string;
+	/** Commits the parent has that it doesn't. */
+	behind?: number;
 	action?: "merge" | "fast-forward";
 	note: string;
 	hand?: boolean;

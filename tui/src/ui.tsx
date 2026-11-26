@@ -15,9 +15,13 @@ import {
 	shortBranch,
 	stateOf,
 	tildePath,
-	vsMain,
 	wrap,
+	badgeOf,
+	chainText,
+	firstToUpdate,
 	type Entry,
+	type Node,
+	type Staleness,
 } from "./model.js";
 import type { Service } from "./types.js";
 import { themeFor, type Theme } from "./theme.js";
@@ -162,23 +166,32 @@ export function listColumns(width: number): { state: number; badge: number } {
 	return { state: 13, badge: width >= 60 ? 26 : width >= 50 ? 22 : 18 };
 }
 
+/** The columns of a row at a depth: the name shrinks with the connectors
+ *  before it, down to a point, and then the badge gives up room. */
+export function rowColumns(width: number, lead: number): { name: number; state: number; badge: number } {
+	const cols = listColumns(width);
+	const name = width - 4 - lead - cols.state - cols.badge - 2;
+	const badge = name >= 10 ? cols.badge : Math.max(12, cols.badge - (10 - name));
+	return { name: Math.max(4, width - 4 - lead - cols.state - badge - 2), state: cols.state, badge };
+}
+
 export function ListRow({
-	e,
+	node,
 	selected,
 	width,
 	busy,
 }: {
-	e: Entry;
+	node: Node;
 	selected: boolean;
 	width: number;
 	busy?: string;
 }) {
 	const { selectionBg } = useContext(ThemeContext);
+	const e = node.e;
 	const st = stateOf(e, busy);
-	const vs = vsMain(e);
+	const badge = badgeOf(node);
 	const n = displayName(e);
-	const cols = listColumns(width);
-	const nameW = Math.max(6, width - 4 - cols.state - cols.badge - 2);
+	const cols = rowColumns(width, len(node.lead));
 	const bg = selected ? selectionBg : undefined;
 	// On the selection's background the words are the terminal's own text
 	// colour, which reads on it in any palette; the glyph keeps the state's
@@ -190,17 +203,23 @@ export function ListRow({
 				{ text: " " + n.title, bold: selected },
 			]
 		: [{ text: n.title, bold: true, color: selected ? on("cyan") : e.kind === "main" ? "magenta" : undefined }];
-	const nameFit = fit(name, nameW);
+	const nameFit = fit(name, cols.name);
 	const nameLen = nameFit.reduce((k, s) => k + len(s.text), 0);
+	// The badge right-aligned: the longest way of saying it that fits.
+	const markLen = badge.mark ? len(badge.mark) : 0;
+	const room = cols.badge - markLen;
+	const text = badge.texts.find((t) => len(t) <= room) ?? pad(badge.texts[badge.texts.length - 1]!, room);
 	const segs: Seg[] = [
 		{ text: selected ? "▌" : " ", color: "cyan" },
+		{ text: node.lead, color: "gray" },
 		st.spin ? { text: "", spin: true, color: st.color } : { text: st.glyph, color: st.color },
 		{ text: " " },
 		...nameFit,
-		{ text: " ".repeat(nameW - nameLen + 1) },
+		{ text: " ".repeat(cols.name - nameLen + 1) },
 		{ text: pad(st.word, cols.state), color: on(st.color), bold: !!bg },
-		{ text: " " },
-		{ text: vs.text.length > cols.badge ? pad(vs.text, cols.badge) : vs.text.padStart(cols.badge), color: on(vs.color), bold: !!bg },
+		{ text: " " + " ".repeat(Math.max(0, room - len(text))) },
+		...(badge.mark ? [{ text: badge.mark, color: "yellow" }] : []),
+		{ text, color: on(badge.color), bold: badge.bold || !!bg, dim: badge.dim && !bg },
 	];
 	return <Row segs={segs} width={width} bg={bg} />;
 }
@@ -244,7 +263,11 @@ export function detailTitle(e: Entry, busy?: string): Seg[] {
 }
 
 /** The detail as rows of segments, so the caller can show the ones that fit. */
-export function detailRows(e: Entry, width: number, opts: { home?: string; busy?: string; problems?: boolean } = {}): Seg[][] {
+export function detailRows(
+	e: Entry,
+	width: number,
+	opts: { home?: string; busy?: string; problems?: boolean; node?: Node; staleOf?: (e: Entry) => Staleness } = {},
+): Seg[][] {
 	const out: Seg[][] = [];
 	const add = (...segs: Seg[]) => out.push(segs);
 	const blank = () => out.push([]);
@@ -287,10 +310,25 @@ export function detailRows(e: Entry, width: number, opts: { home?: string; busy?
 		const counts: string[] = [];
 		if (e.behind > 0) counts.push(`${e.behind} behind`);
 		if (e.ahead > 0) counts.push(`${e.ahead} ahead`);
-		const color = conflicts ? "red" : e.farBehind || e.outOfStep.length ? "yellow" : "cyan";
-		add(...section("⇅", "vs main", color, [{ text: "  " + (counts.join(" · ") || "up to date") }]));
-		if (e.stack.length > 1) {
-			add({ text: "  stacked on " }, { text: shortBranch(e.stack[e.stack.length - 2]!), bold: true }, { text: `  (main ← ${e.stack.map(shortBranch).join(" ← ")})` });
+		const vsMainText = counts.join(" · ") || "up to date";
+		const node = opts.node;
+		const s = node?.stale;
+		const color = conflicts ? "red" : s?.kind === "behind" || e.farBehind || e.outOfStep.length ? "yellow" : s?.kind === "inherits" ? "yellow" : "cyan";
+		const parent = e.parent && e.stack.length > 1 ? shortBranch(e.parent) : undefined;
+		if (!parent) add(...section("⇅", "vs main", color, [{ text: "  " + vsMainText }]));
+		else {
+			const own = s?.kind === "behind" ? [s.behind ? `${s.behind} behind` : "", s.conflicts ? `${s.conflicts} conflict${s.conflicts === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ") : "in step";
+			add(...section("⇅", `vs ${parent}`, color, [{ text: "  " + own }, { text: `   vs main: ${vsMainText}`, dim: true }]));
+		}
+		if (node && node.chain.length > 1) {
+			for (const l of wrap(chainText(node, opts.staleOf ?? (() => ({ kind: "none" }))), width - 2)) add({ text: "  " + l });
+		}
+		// Which branch to bring up to date first: the top of the stale part.
+		const first = node && firstToUpdate(node);
+		if (first && first !== e) {
+			const name = shortBranch(first.branch);
+			for (const l of wrap(`${name} is behind ${first.parent ? shortBranch(first.parent) : "main"}: update it first (select it, m), or U updates every branch, parents first`, width - 2))
+				add({ text: "  " + l, color: "yellow" });
 		}
 		const u = e.update;
 		if (u) {
@@ -298,9 +336,10 @@ export function detailRows(e: Entry, width: number, opts: { home?: string; busy?
 			for (const l of wrap(`update: ${u.note}`, width - 2)) add({ text: "  " + l, color: c });
 		}
 		const files = u?.conflicts?.length ? u.conflicts : (e.farBehind?.conflicts ?? []);
+		const into = u?.conflicts?.length && parent ? parent : "main";
 		if (files.length) {
 			const shown = files.slice(0, 3).map((f) => f.slice(f.lastIndexOf("/") + 1));
-			add({ text: `  merging main conflicts in ${files.length} file${files.length === 1 ? "" : "s"}: `, color: "red" }, { text: shown.join(", ") + (files.length > 3 ? ` +${files.length - 3}` : "") });
+			add({ text: `  merging ${into} conflicts in ${files.length} file${files.length === 1 ? "" : "s"}: `, color: "red" }, { text: shown.join(", ") + (files.length > 3 ? ` +${files.length - 3}` : "") });
 		}
 		if (e.farBehind && !files.length) add({ text: `  far behind: ${e.farBehind.behind} commits, and the merge only gets harder`, color: "yellow" });
 		if (e.outOfStep.length && !files.length) {
@@ -473,7 +512,7 @@ export const KEYS: Array<[string, string]> = [
 	["l", "follow a service's logs: hydra process logs NAME -f; ctrl-c ends"],
 	["o", "open a service's address by name in the browser (x-hydra hosts)"],
 	["f", "run the fix of one of its problems (asks first)"],
-	["m", "merge main into this worktree: hydra update --here (asks first)"],
+	["m", "merge its parent (main, or the branch it is stacked on) into it: hydra update --here (asks first)"],
 	["U", "update all: hydra update, which pulls main (dry run, then asks)"],
 	["R", "read everything again now"],
 	["pgup pgdn", "scroll the detail"],
@@ -481,10 +520,11 @@ export const KEYS: Array<[string, string]> = [
 	["q", "quit; every stack keeps running"],
 	["● ○ ◌", "up · down · stopped by hydra, unused for x-hydra idle_stop"],
 	["⠋ ✗", "starting (ready/total) or another action under way · failing"],
-	["behind", "commits main has that the branch doesn't; yellow: past behind_warn"],
-	["on X", "stacked on branch X, so main reaches it through X"],
-	["needs main", "main changed a service this worktree takes from it: m merges main"],
-	["conflicts", "files merging main would conflict in: merge and resolve by hand"],
+	["├─ └─", "a branch under the one it is stacked on; main is the root"],
+	["in step", "has every commit of its parent, and so does every branch above it"],
+	["12 behind", "commits its parent has that it doesn't; bold: the chain goes stale here"],
+	["↑ X behind", "in step with its parent, but X above it is behind: update X first"],
+	["conflicts", "files merging its parent in would conflict in: merge and resolve by hand"],
 ];
 
 export function HelpBody({ width, height }: { width: number; height: number }) {
@@ -507,7 +547,8 @@ export function footerKeys(e: Entry | undefined): Array<[string, string]> {
 		if (e.up || detailServices(e).shown.some((s) => s.runs !== "here" && s.health !== "off")) keys.push(["l", "logs"]);
 		if (e.services.some((s) => s.address)) keys.push(["o", "browse"]);
 		if (e.problems.some((p) => p.run)) keys.push(["f", "fix"]);
-		if (e.kind === "worktree" && (e.behind > 0 || e.update?.action)) keys.push(["m", "merge main"]);
+		if (e.kind === "worktree" && (e.behindParent > 0 || e.update?.action))
+			keys.push(["m", `merge ${e.parent && e.stack.length > 1 ? shortBranch(e.parent) : "main"}`]);
 	}
 	return keys;
 }

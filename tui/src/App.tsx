@@ -2,7 +2,19 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import type { Backend, Result } from "./hydra.js";
 import { onRedraw } from "./hydra.js";
-import { detailServices, displayName, entries, fixCommand, runsHere, type Entry } from "./model.js";
+import {
+	detailServices,
+	displayName,
+	entries,
+	fixCommand,
+	outOfDate,
+	runsHere,
+	shortBranch,
+	tree,
+	type Entry,
+	type Node,
+	type Staleness,
+} from "./model.js";
 import type { Problem, Snapshot } from "./types.js";
 import { themeFor, type Theme } from "./theme.js";
 import {
@@ -98,7 +110,11 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 		);
 	}, [backend]);
 
-	const list = useMemo(() => (snap ? entries(snap) : []), [snap]);
+	// In the order drawn, so ↑ and ↓ move down the tree as it reads.
+	const nodes = useMemo(() => (snap ? tree(entries(snap)) : []), [snap]);
+	const list = useMemo(() => nodes.map((n) => n.e), [nodes]);
+	const nodeOf = useMemo(() => new Map<Entry, Node>(nodes.map((n) => [n.e, n])), [nodes]);
+	const staleOf = (e: Entry): Staleness => nodeOf.get(e)?.stale ?? { kind: "none" };
 	// The checkout hydra was started in, until someone moves.
 	useEffect(() => {
 		if (preselected.current || list.length === 0) return;
@@ -310,19 +326,30 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 				});
 				return;
 			}
-			case "merge":
+			case "merge": {
 				if (e.kind === "main") {
 					setMessage({ text: "m merges main into a worktree; U updates main itself", color: "yellow" });
+					return;
+				}
+				// In step with its parent: merging it changes nothing until
+				// the branch above that is behind is brought up to date.
+				const s = staleOf(e);
+				if (s.kind === "inherits" && !e.update?.action) {
+					setMessage({
+						text: `${called(e)} has everything ${shortBranch(e.parent ?? "main")} has; ${shortBranch(s.from.branch)} is behind: update it first (select it, m), or U updates all, parents first`,
+						color: "yellow",
+					});
 					return;
 				}
 				dryThenDo(
 					["update", "--here", "--dry-run"],
 					["update", "--here"],
 					e.root,
-					`Merge ${e.update?.parent ?? "main"} into ${called(e)}? (hydra update --here)`,
+					`Merge ${e.parent && e.stack.length > 1 ? shortBranch(e.parent) : "main"} into ${called(e)}? (hydra update --here)`,
 					e.root,
 				);
 				return;
+			}
 			case "update":
 				dryThenDo(
 					["update", "--dry-run"],
@@ -428,6 +455,7 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 	const verbOf = (e: Entry) => busy[e.root]?.verb;
 
 	const wtUp = snap ? snap.worktrees.filter((w) => w.up).length : 0;
+	const stale = nodes.filter(outOfDate).length;
 	const anyPending = !!snap?.worktrees.some((w) => w.pending);
 
 	// The detail panel, or an overlay in its place.
@@ -451,7 +479,7 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 		color = overlay.code === 0 ? "green" : "red";
 		content = <OutputBody text={overlay.text} width={detailInner} height={detailRoom} />;
 	} else if (sel) {
-		const lines = detailRows(sel, detailInner, { home, busy: verbOf(sel), problems: !wide });
+		const lines = detailRows(sel, detailInner, { home, busy: verbOf(sel), problems: !wide, node: nodeOf.get(sel), staleOf });
 		const max = Math.max(0, lines.length - detailRoom);
 		const from = Math.min(scroll, max);
 		const shown = lines.slice(from, from + detailRoom);
@@ -473,10 +501,10 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 			height={listH}
 		>
 			{snap ? (
-				list
+				nodes
 					.slice(start, start + visible)
-					.map((e) => (
-						<ListRow key={e.root} e={e} selected={e.root === sel?.root} width={listInner} busy={verbOf(e)} />
+					.map((n) => (
+						<ListRow key={n.e.root} node={n} selected={n.e.root === sel?.root} width={listInner} busy={verbOf(n.e)} />
 					))
 			) : (
 				<Row width={listInner} segs={error ? [] : [{ text: " " }, { text: "", spin: true, color: "cyan" }, { text: " reading the repository…" }]} />
@@ -512,27 +540,38 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 		);
 	}
 
+	/** The top line: the repository, main, and how many worktrees are up
+	 *  and out of date. Main behind its upstream is said here once: every
+	 *  branch is behind then, and the rows don't repeat it. */
+	function header(w: number): Seg[] {
+		const n = snap?.worktrees.length ?? 0;
+		const main: Seg[] = snap?.main
+			? [
+					{ text: "   main " },
+					{ text: snap.main.up ? "up" : "down", color: snap.main.up ? "green" : "red", bold: true },
+					...(snap.main.behind > 0 ? [{ text: `, ${snap.main.behind} behind upstream (U)`, color: "yellow" }] : []),
+					{ text: ` · ${wtUp} of ${n} worktree${n === 1 ? "" : "s"} up` },
+					...(n
+						? [{ text: " · " }, stale ? { text: `${stale} out of date`, color: "yellow", bold: true } : { text: "all in step", dim: true }]
+						: []),
+				]
+			: [];
+		const busyNote: Seg[] =
+			reading || anyPending
+				? [{ text: "   " }, { text: "", spin: true, color: "cyan" }, { text: reading ? " reading everything again" : " planning" }]
+				: [];
+		const repo: Seg[] = [{ text: snap ? "  " + snap.repo.slice(snap.repo.lastIndexOf("/") + 1) : "", bold: true }];
+		const segs = (withRepo: boolean): Seg[] => [{ text: " hydra", bold: true, color: "magenta" }, ...(withRepo ? repo : []), ...main, ...busyNote];
+		const width_ = (x: Seg[]) => x.reduce((k, s) => k + (s.spin ? 1 : Array.from(s.text).length), 0);
+		// Narrow: the repository's name goes first, it is the least news.
+		return width_(segs(true)) <= w ? segs(true) : segs(false);
+	}
+
 	if (blank) return <Box />;
 	return (
 		<ThemeContext.Provider value={theme}>
 			<Box flexDirection="column" width={width} height={rows}>
-				<Row
-					width={width}
-					segs={[
-						{ text: " hydra", bold: true, color: "magenta" },
-						{ text: snap ? "  " + snap.repo.slice(snap.repo.lastIndexOf("/") + 1) : "", bold: true },
-						...(snap?.main
-							? [
-									{ text: "   main " },
-									{ text: snap.main.up ? "up" : "down", color: snap.main.up ? "green" : "red", bold: true },
-									{ text: ` · ${wtUp} of ${snap.worktrees.length} worktree${snap.worktrees.length === 1 ? "" : "s"} up` },
-								]
-							: []),
-						...(reading || anyPending
-							? [{ text: "   " }, { text: "", spin: true, color: "cyan" }, { text: reading ? " reading everything again" : " planning" }]
-							: []),
-					]}
-				/>
+				<Row width={width} segs={header(width)} />
 				{overlay?.kind === "help" ? (
 					<Panel title={[{ text: "Keys", bold: true, color: undefined }]} color="cyan" width={width} height={body}>
 						<Box flexDirection="column" paddingX={1}>

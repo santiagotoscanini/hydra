@@ -125,6 +125,7 @@ type snapMain struct {
 // the way the update works it out.
 type snapUpdate struct {
 	Parent    string   `json:"parent"`           // what is merged in: main, or the branch it is stacked on
+	Behind    int      `json:"behind"`           // commits the parent has that it doesn't
 	Action    string   `json:"action,omitempty"` // "merge", "fast-forward", "" when it is left alone
 	Note      string   `json:"note"`             // the update's line for it
 	Hand      bool     `json:"hand,omitempty"`   // someone has to step in: conflicts, uncommitted work
@@ -581,7 +582,7 @@ func gitState(wt stack.Worktree, mainRoot, base, mainHead string, limit int) *wt
 	u := &wtUpdate{root: wt.Root, name: wt.Branch}
 	u.inspect(nil, base)
 	u.decide(mainRoot, base, mainHead, true)
-	g.update = &snapUpdate{Parent: u.parent, Action: u.action, Note: u.note, Hand: u.hand}
+	g.update = &snapUpdate{Parent: u.parent, Behind: u.behind, Action: u.action, Note: u.note, Hand: u.hand}
 	for _, line := range u.detail {
 		if f, ok := strings.CutPrefix(line, "conflict: "); ok {
 			g.update.Conflicts = append(g.update.Conflicts, f)

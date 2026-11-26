@@ -14,6 +14,10 @@ export interface Entry {
 	subject: string;
 	/** Commits behind main (for main: behind its upstream). */
 	behind: number;
+	/** The branch it is updated from: main's, or the one it is stacked on. */
+	parent?: string;
+	/** Commits that parent has that it doesn't. */
+	behindParent: number;
 	ahead: number;
 	dirty: number;
 	stack: string[];
@@ -46,6 +50,7 @@ export function entries(s: Snapshot): Entry[] {
 			commit: m.commit,
 			subject: m.subject,
 			behind: m.behind,
+			behindParent: 0,
 			ahead: 0,
 			dirty: m.dirty,
 			stack: [],
@@ -69,6 +74,9 @@ export function entries(s: Snapshot): Entry[] {
 			commit: w.commit,
 			subject: w.subject,
 			behind: w.behind,
+			parent: w.update?.parent,
+			// A snapshot from before update.behind: on main, the two are one.
+			behindParent: w.update?.behind ?? ((w.stack?.length ?? 0) <= 1 ? w.behind : 0),
 			ahead: w.ahead,
 			dirty: 0,
 			stack: w.stack ?? [],
@@ -158,36 +166,181 @@ export function conflictCount(e: Entry): number {
 	return e.update?.conflicts?.length || e.farBehind?.conflicts.length || 0;
 }
 
-/** How a checkout stands against main, in plain words for the list:
- *  "69 behind · 5 conflicts", "on fla-709 · up to date". */
-export function vsMain(e: Entry): { text: string; color?: string } {
-	const plural = (n: number, one: string, many = one + "s") => `${n} ${n === 1 ? one : many}`;
+/** How many files merging its parent in would conflict in. farBehind's
+ *  files are main's: they count only for a branch that sits on main. */
+export function parentConflicts(e: Entry): number {
+	return e.update?.conflicts?.length || (onMain(e) ? (e.farBehind?.conflicts.length ?? 0) : 0);
+}
+
+const onMain = (e: Entry) => e.stack.length <= 1;
+
+/** Everything on it is already in its parent: it was merged upstream. */
+export function landed(e: Entry): boolean {
+	return !!e.update?.note.startsWith("left alone: everything on it");
+}
+
+/** Behind the branch it is updated from, so what runs there isn't what its
+ *  parent has. */
+function ownStale(e: Entry): boolean {
+	return e.kind === "worktree" && !e.error && !e.pending && !landed(e) && (e.behindParent > 0 || parentConflicts(e) > 0);
+}
+
+/**
+ * Where a checkout stands against its parent, the staleness of the chain
+ * above it carried down. hydra runs a branch on the code of every branch
+ * under it, so a branch in step with a parent that is behind is behind too.
+ */
+export type Staleness =
+	/** in step with its parent, and so is every branch up to main */
+	| { kind: "current" }
+	/** behind its parent; from: the branch up the chain that is behind too,
+	 *  none when the chain goes stale here */
+	| { kind: "behind"; behind: number; conflicts: number; from?: Entry }
+	/** in step with its parent, but from, up the chain, is behind its own */
+	| { kind: "inherits"; from: Entry }
+	| { kind: "landed" }
+	/** main, or a worktree not worked out yet */
+	| { kind: "none" };
+
+/** A checkout's place in the tree: main the root, each worktree under its parent. */
+export interface Node {
+	e: Entry;
+	depth: number;
+	/** the connectors drawn before its glyph ("│ ├─"), two columns a level */
+	lead: string;
+	/** the checkouts above it, main first */
+	chain: Entry[];
+	stale: Staleness;
+}
+
+/** What a sibling is sorted by: its name as shown, which doesn't change
+ *  when its stack starts or stops, so rows stay where they are. */
+function sortKey(e: Entry): string {
+	const n = displayName(e);
+	return (n.id ?? n.title).toLowerCase() + " " + n.title.toLowerCase();
+}
+
+/**
+ * The checkouts as a tree, in the order drawn: main, then each branch
+ * right above the branches stacked on it, siblings by name. A worktree's
+ * parent is the worktree whose branch it is updated from; the rest (main,
+ * or not worked out yet) hang off main.
+ */
+export function tree(list: Entry[]): Node[] {
+	const main = list.find((e) => e.kind === "main");
+	const byBranch = new Map(list.filter((e) => e.kind === "worktree").map((e) => [e.branch, e]));
+	const parentOf = new Map<Entry, Entry | undefined>();
+	for (const e of list) {
+		if (e.kind === "main") continue;
+		const p = e.parent ? byBranch.get(e.parent) : undefined;
+		parentOf.set(e, p && p !== e ? p : main);
+	}
+	// A loop (two worktrees each naming the other) can't be drawn: its
+	// branches hang off main.
+	for (const e of parentOf.keys()) {
+		const seen = new Set<Entry>([e]);
+		for (let p = parentOf.get(e); p && p !== main; p = parentOf.get(p)) {
+			if (seen.has(p)) {
+				parentOf.set(e, main);
+				break;
+			}
+			seen.add(p);
+		}
+	}
+	const children = new Map<Entry | undefined, Entry[]>();
+	for (const [e, p] of parentOf) children.set(p, [...(children.get(p) ?? []), e]);
+	for (const kids of children.values()) kids.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+
+	const out: Node[] = [];
+	const visit = (e: Entry, depth: number, lead: string, below: string, chain: Entry[], firstStale?: Entry) => {
+		let stale: Staleness;
+		if (e.kind === "main" || e.error || e.pending) stale = { kind: "none" };
+		else if (landed(e)) stale = { kind: "landed" };
+		else if (ownStale(e)) stale = { kind: "behind", behind: e.behindParent, conflicts: parentConflicts(e), from: firstStale };
+		else if (firstStale) stale = { kind: "inherits", from: firstStale };
+		else stale = { kind: "current" };
+		out.push({ e, depth, lead, chain, stale });
+		const kids = children.get(e) ?? [];
+		kids.forEach((k, i) => {
+			const last = i === kids.length - 1;
+			visit(k, depth + 1, below + (last ? "└─" : "├─"), below + (last ? "  " : "│ "), [...chain, e], firstStale ?? (ownStale(e) ? e : undefined));
+		});
+	};
+	if (main) visit(main, 0, "", "", []);
+	// Without main (it couldn't be read), the branches on it are roots.
+	else for (const e of children.get(undefined) ?? []) visit(e, 0, "", "", []);
+	return out;
+}
+
+/** Out of date: behind its parent, or on a branch that is. */
+export function outOfDate(n: Node): boolean {
+	return n.stale.kind === "behind" || n.stale.kind === "inherits";
+}
+
+const plural = (n: number, one: string, many = one + "s") => `${n} ${n === 1 ? one : many}`;
+
+/** How a checkout stands against its parent, for the list. texts are the
+ *  ways to say it, longest first: the row shows the first that fits. */
+export interface Badge {
+	texts: string[];
+	color?: string;
+	bold?: boolean;
+	dim?: boolean;
+	/** a mark before the text, in the colour of staleness: "↑" (inherited) */
+	mark?: string;
+}
+
+export function badgeOf(n: Node): Badge {
+	const e = n.e;
 	if (e.kind === "main") {
 		const parts: string[] = [];
 		if (e.behind > 0) parts.push(`${e.behind} behind upstream`);
 		if (e.dirty > 0) parts.push(`${e.dirty} uncommitted`);
-		return parts.length ? { text: parts.join(" · "), color: "yellow" } : { text: "up to date", color: "gray" };
+		return parts.length ? { texts: [parts.join(" · ")], color: "yellow" } : { texts: ["up to date"], dim: true };
 	}
-	if (e.error || e.pending) return { text: "" };
-	const parts: string[] = [];
-	if (e.stack.length > 1) parts.push(`on ${shortBranch(e.stack[e.stack.length - 2]!)}`);
-	const conflicts = conflictCount(e);
-	const landed = e.update?.note.startsWith("left alone: everything on it");
-	let color: string | undefined = "gray";
-	// Stacked: what counts is its parent, which brings main with it.
-	if (landed) parts.push("landed");
-	else if (e.behind > 0 && e.stack.length <= 1) parts.push(`${e.behind} behind`);
-	if (conflicts) {
-		parts.push(plural(conflicts, "conflict"));
-		color = "red";
-	} else if (e.outOfStep.length > 0) {
-		parts.push(e.mainBehind ? "main is older" : "needs main");
-		color = "yellow";
-	} else if (e.farBehind) {
-		color = "yellow";
+	const s = n.stale;
+	const parent = e.parent ? shortBranch(e.parent) : "main";
+	switch (s.kind) {
+		case "none":
+			return { texts: [""] };
+		case "landed":
+			return { texts: [`landed in ${parent}`, "landed"], dim: true };
+		case "behind": {
+			const c = s.conflicts ? ` · ${plural(s.conflicts, "conflict")}` : "";
+			const b = s.behind ? `${s.behind} behind` : "";
+			const texts = b ? [`${b} ${parent}${c}`, b + c] : [plural(s.conflicts, "conflict")];
+			// Where the chain goes stale is drawn strong; below that, plain.
+			return { texts, color: s.conflicts ? "red" : "yellow", bold: !s.from };
+		}
+		case "inherits": {
+			const from = shortBranch(s.from.branch);
+			return { texts: [`${from} is behind`, `${from} behind`, "parent behind"], dim: true, mark: "↑ " };
+		}
+		case "current":
+			if (e.outOfStep.length > 0 && e.mainBehind) return { texts: ["in step · main is older", "main is older"], color: "yellow" };
+			return { texts: ["in step"], dim: true };
 	}
-	if (parts.length === 0) parts.push("up to date");
-	return { text: parts.join(" · "), color };
+}
+
+/** The chain from main to a checkout, each stale branch with how far
+ *  behind: "main → fla-709 (69 behind) → fla-710". */
+export function chainText(n: Node, staleOf: (e: Entry) => Staleness): string {
+	return [...n.chain, n.e]
+		.map((e) => {
+			const name = e.kind === "main" ? "main" : shortBranch(e.branch);
+			const s = staleOf(e);
+			if (s.kind !== "behind") return name;
+			const what = [s.behind ? `${s.behind} behind` : "", s.conflicts ? plural(s.conflicts, "conflict") : ""].filter(Boolean);
+			return `${name} (${what.join(", ")})`;
+		})
+		.join(" → ");
+}
+
+/** The branch to update first for a checkout to be current, and how. */
+export function firstToUpdate(n: Node): Entry | undefined {
+	if (n.stale.kind === "inherits") return n.stale.from;
+	if (n.stale.kind === "behind") return n.stale.from ?? n.e;
+	return undefined;
 }
 
 export function healthGlyph(h: Health): { glyph: string; color?: string } {

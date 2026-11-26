@@ -292,7 +292,17 @@ Three layers, each doing one thing:
 What it draws is kept to what a person acts on. A checkout is named by
 its branch (folders like `t3-baf5151f…` are noise; a ticket id and its
 title words are what people recognise). A row has one state and one
-"against main" badge in plain words (`69 behind · 5 conflicts`), and the
+badge against its parent in plain words (`69 behind · 5 conflicts`). The
+rows are a tree, each stacked branch under its parent, because a branch
+runs on the code of every branch under it: one in step with a parent that
+is behind is behind too, so it is marked out of date (`↑ fla-709 is
+behind`), and the first stale branch of a chain is the strong one, since
+updating it is the first step (`hydra update` goes parents first). Main
+behind its upstream makes every branch behind; the header says that once
+instead of every row. Siblings are in order of name, not of state, so a
+row stays put when its stack starts. The snapshot gives each worktree's
+parent and how far behind it it is (`update.parent`, `update.behind`), so
+the dashboard draws the tree without asking git. The
 chosen checkout's detail is a panel that leads with its problems and their
 fixes; on a wide terminal the problems get their own panel under the list.
 Slots and ports are means, not news: the list doesn't show them. Every

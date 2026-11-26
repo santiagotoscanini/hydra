@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -631,6 +632,7 @@ type wtUpdate struct {
 	root, name string
 	parent     string   // the ref merged in: main, or the branch it is stacked on
 	depth      int      // position in its stack: parents are updated first
+	behind     int      // commits the parent has that it doesn't
 	action     string   // "merge", "fast-forward", or "" when left alone
 	note       string   // why it was left alone, or what happened
 	hand       bool     // someone has to step in
@@ -747,6 +749,7 @@ func (u *wtUpdate) decide(main, base, mainCommit string, dry bool) {
 		return
 	}
 	behind, _ := gitOut(u.root, "rev-list", "--count", "HEAD.."+theirs)
+	u.behind, _ = strconv.Atoi(behind)
 	gitDir, _ := gitOut(u.root, "rev-parse", "--absolute-git-dir")
 	for _, f := range []string{"MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD"} {
 		if _, err := os.Stat(filepath.Join(gitDir, f)); err == nil {

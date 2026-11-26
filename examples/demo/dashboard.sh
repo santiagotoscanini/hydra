@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Demo: the dashboard (bare `hydra` in a terminal), driven in tmux.
 #
-#  1. It lists main and every worktree by branch: whether its stack is
-#     up, how it stands against main (behind, a conflict, stacked on
-#     another branch), with the checkout it was started in chosen, and
-#     the chosen one's services and problems in a panel beside or below.
+#  1. It lists main and every worktree by branch as a tree, each branch
+#     under the one it is stacked on: whether its stack is up, how it
+#     stands against its parent (behind, a conflict, in step but on a
+#     branch that is behind), with the checkout it was started in chosen,
+#     and the chosen one's services and problems in a panel beside or below.
 #  2. u starts a worktree's stack, ⏎ opens it (process-compose attach), and
 #     F10 or ctrl-c, then Yes, comes back to the dashboard with the stack
 #     still running. d stops it, after asking.
@@ -33,8 +34,8 @@ H="$repo/bin/hydra"
 cleanup() {
   cd /
   T kill-server 2>/dev/null || true
-  for wt in api web clash stacked; do (cd "$repo/$wt" 2>/dev/null && "$H" down >/dev/null 2>&1) || true; done
-  for wt in api web clash stacked; do (cd "$main" 2>/dev/null && "$H" slots free "$repo/$wt" >/dev/null 2>&1) || true; done
+  for wt in api web clash stacked deeper; do (cd "$repo/$wt" 2>/dev/null && "$H" down >/dev/null 2>&1) || true; done
+  for wt in api web clash stacked deeper; do (cd "$main" 2>/dev/null && "$H" slots free "$repo/$wt" >/dev/null 2>&1) || true; done
   (cd "$main" 2>/dev/null && "$H" down >/dev/null 2>&1) || true
   rm -rf "$repo"
 }
@@ -47,8 +48,10 @@ screen() { echo "--- $1"; T capture-pane -p -t d | sed -e "s#$repo#<repo>#g" -e 
 waitfor() { for _ in $(seq 80); do T capture-pane -p -t d | grep -qE -- "$1" && return 0; sleep 0.25; done; fail "no /$1/ on the screen"; }
 procs() { (cd "$1" && "$H" process list 2>/dev/null | tr '\n' ' '); }
 
-# A repository with four worktrees: one that changed the api, one the web
-# app, one whose change conflicts with main's, and one stacked on the web one.
+# A repository with five worktrees: one that changed the api, one the web
+# app, one whose change conflicts with main's, one stacked on the web one,
+# and one stacked on that. main moves on after the web one is cut, so the
+# stack is behind from web down.
 g init -q -b main "$main"
 cd "$main"
 cat >process-compose.yaml <<YAML
@@ -83,6 +86,8 @@ g worktree add -q -b clash "$repo/clash" main
 put apps/api/users.go "main's"; g add -A; g commit -qm "api: users on main"
 g worktree add -q -b stacked "$repo/stacked" web
 (cd "$repo/stacked" && put apps/web/more.tsx && g add -A && g commit -qm "web: more")
+g worktree add -q -b deeper "$repo/deeper" stacked
+(cd "$repo/deeper" && put apps/web/deeper.tsx && g add -A && g commit -qm "web: deeper")
 "$H" up -D -L "$repo/main.log" >/dev/null
 
 T new -d -s keep "sleep 100000"
@@ -97,10 +102,13 @@ start() { # cols rows
 echo "--- 1. bare hydra in the api worktree"
 start 80 24
 screen "80 columns"
-T capture-pane -p -t d | grep -qE '▌○ api +down' || fail "the api worktree isn't chosen"
+T capture-pane -p -t d | grep -qE '▌├─○ api +down +1 behind main' || fail "the api worktree isn't chosen"
 T capture-pane -p -t d | grep -qE '● main +up +up to date' || fail "main isn't up"
-T capture-pane -p -t d | grep -qE '○ clash +down +1 behind · 1 conflict' || fail "the conflict isn't shown"
-T capture-pane -p -t d | grep -qE '○ stacked +down +on web' || fail "the stack isn't shown"
+T capture-pane -p -t d | grep -qE '├─○ clash +down +1 behind main · 1 conflict' || fail "the conflict isn't shown"
+T capture-pane -p -t d | grep -qE '└─○ web +down +1 behind main' || fail "web, last on main, isn't drawn so"
+T capture-pane -p -t d | grep -qE '│ {3}└─○ stacked +down +↑ web is behind' || fail "the stack isn't under web, out of date through it"
+T capture-pane -p -t d | grep -qE '│ {5}└─○ deeper +down +↑ web is behind' || fail "the second level isn't under stacked, out of date through web"
+T capture-pane -p -t d | grep -qE '0 of 5 worktrees up · 5 out of date' || fail "the header doesn't count what is out of date"
 T capture-pane -p -t d | grep -qE '◆ Runs here' || fail "the chosen worktree's services aren't shown"
 T capture-pane -p -t d | python3 -c 'import sys; sys.exit(any(len(l.rstrip("\n")) > 80 for l in sys.stdin))' || fail "a line is wider than 80 columns"
 start 150 24

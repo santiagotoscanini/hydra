@@ -4,7 +4,8 @@ import React from "react";
 import { render } from "ink-testing-library";
 import App from "../src/App.js";
 import { ConfirmBody, Footer, ListRow, detailRows, footerKeys, problemRows, Row } from "../src/ui.js";
-import { branchName, entries, fixCommand, stateOf, vsMain, wrap } from "../src/model.js";
+import { badgeOf, branchName, entries, fixCommand, stateOf, tree, wrap, type Node } from "../src/model.js";
+import type { Snapshot, WorktreeState } from "../src/types.js";
 import { FakeBackend, plain, tick } from "./fake.js";
 import { fixture } from "./fixture.js";
 
@@ -31,6 +32,11 @@ function once(el: React.ReactElement): string {
 	return f;
 }
 
+/** The tree node of the worktree in dir. */
+function nodeOf(snap: Snapshot, dir: string): Node {
+	return tree(entries(snap)).find((n) => n.e.name === dir)!;
+}
+
 const rows = (segs: ReturnType<typeof detailRows>, width = 80) =>
 	once(<>{segs.map((s, i) => <Row key={i} segs={s} width={width} />)}</>);
 
@@ -46,11 +52,11 @@ test("the list shows main and every worktree, with where each stands", async () 
 	await tick();
 	const f = frame();
 	assert.match(f, /● main\s+up\s+2 behind upstream/);
-	assert.match(f, /▌✗ cart-checkout\s+failing\s+3 behind · needs main/, "the checkout hydra ran in is chosen");
-	assert.match(f, /○ clash\s+down\s+1 behind · 1 conflict/);
-	assert.match(f, /○ more\s+down\s+on cart-checkout/);
-	assert.match(f, /fresh\s+planning/);
-	assert.match(f, /main up · 1 of 4 worktrees up/);
+	assert.match(f, /▌├─✗ cart-checkout\s+failing\s+3 behind main/, "the checkout hydra ran in is chosen");
+	assert.match(f, /│ └─○ more\s+down\s+↑ cart-checkout is behind/, "under the branch it is stacked on");
+	assert.match(f, /├─○ clash\s+down\s+1 behind main · 1 conflict/);
+	assert.match(f, /└─. fresh\s+planning/);
+	assert.match(f, /main up, 2 behind upstream \(U\) · 1 of 4 worktrees up · 3 out of date/);
 	assert.doesNotMatch(f, /read now|SLOT|CHECKOUT/);
 	unmount();
 });
@@ -100,10 +106,15 @@ test("o opens the checkout's address by name in the browser", async () => {
 
 test("detail of a conflicting, a stacked and a still planned worktree", () => {
 	const list = entries(fixture());
-	const all = (i: number) => rows([...detailRows(list[i]!, 80), ...problemRows(list[i]!, 80)]);
+	const nodes = tree(list);
+	const node = (i: number) => nodes.find((n) => n.e === list[i])!;
+	const staleOf = (e: (typeof list)[number]) => nodes.find((n) => n.e === e)!.stale;
+	const all = (i: number) => rows([...detailRows(list[i]!, 80, { node: node(i), staleOf }), ...problemRows(list[i]!, 80)]);
 	assert.match(all(2), /merging main conflicts in 1 file: users\.go/);
 	assert.match(all(2), /✓ nothing in the way: u starts it/);
-	assert.match(all(3), /stacked on cart-checkout {2}\(main ← cart-checkout ← more\)/);
+	assert.match(all(3), /⇅ vs cart-checkout {2}in step {3}vs main: 2 ahead/);
+	assert.match(all(3), /main → cart-checkout \(3 behind\) → more/);
+	assert.match(all(3), /cart-checkout is behind main: update it first \(select it, m\), or U updates\s+every branch, parents first/);
 	assert.match(all(4), /working out what runs here/);
 });
 
@@ -137,6 +148,7 @@ test("the footer shows only the keys that apply to the selection", () => {
 	assert.equal(keys(0), "⏎ d r l o f", "main is up: no up, no merge");
 	assert.equal(keys(1), "⏎ d r l o f m");
 	assert.equal(keys(2), "u m", "down, nothing to fix, no logs to follow");
+	assert.equal(keys(3), "u", "in step with its parent: nothing to merge");
 	assert.equal(keys(4), "", "still being planned");
 	for (const width of [80, 120]) {
 		const f = once(<Footer e={list[1]} width={width} />);
@@ -185,6 +197,8 @@ test("u starts the chosen checkout's stack; a refusal shows what hydra said", as
 	const { backend, stdin, frame, unmount } = app();
 	backend.results["up -D"] = { code: 1, output: "✗ main's stack isn't running.\nhydra: not starting this worktree\n" };
 	await tick();
+	stdin.write(DOWN); // more, under cart-checkout
+	await tick();
 	stdin.write(DOWN); // clash
 	await tick();
 	stdin.write("u");
@@ -209,6 +223,8 @@ test("enter opens the stack with hydra attach, in that checkout", async () => {
 
 test("enter on a stack that isn't running says how to start it", async () => {
 	const { backend, stdin, frame, unmount } = app();
+	await tick();
+	stdin.write(DOWN);
 	await tick();
 	stdin.write(DOWN);
 	await tick();
@@ -319,12 +335,12 @@ test("no line is wider than the terminal, narrow or wide", async () => {
 });
 
 test("a list row at 80 columns", () => {
-	const e = entries(fixture())[1]!;
-	const f = once(<ListRow e={e} selected width={78} />);
+	const n = nodeOf(fixture(), "cart");
+	const f = once(<ListRow node={n} selected width={78} />);
 	noLineWiderThan(f, 78);
-	assert.equal(stateOf(e).word, "failing");
-	assert.deepEqual(vsMain(e), { text: "3 behind · needs main", color: "yellow" });
-	assert.match(f, /^▌✗ cart-checkout/);
+	assert.equal(stateOf(n.e).word, "failing");
+	assert.deepEqual(badgeOf(n), { texts: ["3 behind main", "3 behind"], color: "yellow", bold: true });
+	assert.match(f, /^▌├─✗ cart-checkout/);
 });
 
 test("fixes run with the dashboard's hydra", () => {
@@ -344,7 +360,7 @@ test("keys typed together all count", async () => {
 	await tick();
 	stdin.write("jj");
 	await tick();
-	assert.match(frame(), /▌○ more/);
+	assert.match(frame(), /▌├─○ clash/, "down the tree as it reads: more, under cart-checkout, then clash");
 	stdin.write("kkk");
 	await tick();
 	assert.match(frame(), /▌● main/);
@@ -354,11 +370,12 @@ test("keys typed together all count", async () => {
 test("a worktree hydra stopped for being idle says so", () => {
 	const snap = fixture();
 	snap.worktrees[2]!.idleStopped = { at: new Date().toISOString(), after: "2h" };
-	const e = entries(snap)[3]!;
+	const n = nodeOf(snap, "more");
+	const e = n.e;
 	assert.equal(stateOf(e).word, "idle-stopped");
-	const row = once(<ListRow e={e} selected={false} width={78} />);
+	const row = once(<ListRow node={n} selected={false} width={78} />);
 	noLineWiderThan(row, 78);
-	assert.match(row, /◌ more\s+idle-stopped\s+on cart-checkout/);
+	assert.match(row, /◌ more\s+idle-stopped\s+↑ cart-checkout is behind/);
 	assert.match(rows(detailRows(e, 80)), /nobody used it for 2h, so hydra stopped it: u starts it/);
 });
 
@@ -368,15 +385,173 @@ test("a worktree far behind main is marked, and the row still fits 80 columns", 
 	w.behind = 312;
 	w.farBehind = { behind: 312, limit: 100, conflicts: ["apps/api/users.go", "apps/web/cart.tsx"] };
 	w.update = undefined;
-	const e = entries(snap)[1]!;
-	assert.deepEqual(vsMain(e), { text: "312 behind · 2 conflicts", color: "red" });
-	const row = once(<ListRow e={e} selected={false} width={78} />);
+	const n = nodeOf(snap, "cart");
+	const e = n.e;
+	assert.deepEqual(badgeOf(n).texts, ["312 behind main · 2 conflicts", "312 behind · 2 conflicts"]);
+	assert.equal(badgeOf(n).color, "red");
+	const row = once(<ListRow node={n} selected={false} width={78} />);
 	noLineWiderThan(row, 78);
-	assert.match(row, /312 behind · 2 conflicts/);
+	assert.match(row, /312 behind · 2 conflicts/, "the parent's name goes when it doesn't fit");
 	assert.match(rows(detailRows(e, 80)), /merging main conflicts in 2 files: users\.go, cart\.tsx/);
 
 	w.farBehind = { behind: 312, limit: 100 };
 	w.outOfStep = [];
-	assert.deepEqual(vsMain(entries(snap)[1]!), { text: "312 behind", color: "yellow" });
+	assert.deepEqual(badgeOf(nodeOf(snap, "cart")).texts, ["312 behind main", "312 behind"]);
 	assert.match(rows(detailRows(entries(snap)[1]!, 80)), /far behind: 312 commits, and the merge only gets harder/);
+});
+
+// ── The tree ──────────────────────────────────────────────────────────
+
+/** A worktree on parent, behind it by behind, for the tree's tests. */
+function wt(branch: string, parent: string, behind: number, more: Partial<WorktreeState> = {}): WorktreeState {
+	const at = new Date().toISOString();
+	return {
+		root: `/repo/${branch}`,
+		dir: branch,
+		branch,
+		slot: 0,
+		up: false,
+		commit: "0123456ab",
+		subject: branch,
+		behind: 0,
+		ahead: 1,
+		stack: parent === "main" ? undefined : [parent, branch],
+		outOfStep: [],
+		services: [],
+		memory: 0,
+		problems: [],
+		update: { parent, behind, note: behind ? `${parent} would be merged in` : "up to date" },
+		plannedAt: at,
+		gitAt: at,
+		...more,
+	};
+}
+
+function snapOf(worktrees: WorktreeState[], mainBehind = 0): Snapshot {
+	const s = fixture();
+	s.main!.behind = mainBehind;
+	s.worktrees = worktrees;
+	return s;
+}
+
+/** The whole dashboard once it has read the snapshot. */
+async function framed(snap: Snapshot, columns = 80, rows = 24): Promise<string> {
+	const r = render(<App backend={new FakeBackend(snap)} size={{ columns, rows }} />);
+	await tick();
+	const f = plain(r.lastFrame());
+	r.unmount();
+	return f;
+}
+
+const drawn = (snap: Snapshot, width = 78) =>
+	tree(entries(snap)).map((n) => once(<ListRow node={n} selected={false} width={width} />));
+
+test("a stack four deep nests each branch under its parent", () => {
+	const snap = snapOf([
+		wt("santiago/fla-712-the-fourth-layer-of-the-stack-with-a-long-title", "santiago/fla-711-third", 0),
+		wt("santiago/fla-709-an-advisor-splits-a-sold-policy", "main", 0),
+		wt("santiago/fla-711-third", "santiago/fla-710-second", 0),
+		wt("santiago/fla-710-second", "santiago/fla-709-an-advisor-splits-a-sold-policy", 0),
+	]);
+	const nodes = tree(entries(snap));
+	assert.deepEqual(
+		nodes.map((n) => `${n.depth}:${n.lead}`),
+		["0:", "1:└─", "2:  └─", "3:    └─", "4:      └─"],
+	);
+	const lines = drawn(snap);
+	lines.forEach((l) => noLineWiderThan(l, 78));
+	assert.match(lines[1]!, /^ └─○ fla-709 an advisor splits a so… down\s+in step$/);
+	assert.match(lines[4]!, /^ {7}└─○ fla-712 the fourth layer…\s+down\s+in step$/, "the title gives way, not the columns");
+	assert.match(lines[4]!, /…/);
+	for (const n of nodes) assert.ok(n.stale.kind === "current" || n.e.kind === "main");
+});
+
+test("siblings share their parent's line, sorted by name", () => {
+	const snap = snapOf([wt("zeta", "main", 0), wt("beta", "alpha", 0), wt("alpha", "main", 0), wt("gamma", "alpha", 0)]);
+	const lines = drawn(snap);
+	assert.match(lines[1]!, /^ ├─○ alpha/);
+	assert.match(lines[2]!, /^ │ ├─○ beta/);
+	assert.match(lines[3]!, /^ │ └─○ gamma/);
+	assert.match(lines[4]!, /^ └─○ zeta/);
+	// Starting a stack doesn't move its row.
+	snap.worktrees[0]!.up = true;
+	assert.match(drawn(snap)[4]!, /zeta/);
+});
+
+test("a stale parent makes its in-step child out of date too, and says where it starts", async () => {
+	const snap = snapOf([wt("a", "main", 12), wt("b", "a", 0), wt("c", "b", 0)]);
+	const nodes = tree(entries(snap));
+	assert.deepEqual(nodes.map((n) => n.stale.kind), ["none", "behind", "inherits", "inherits"]);
+	const lines = drawn(snap);
+	assert.match(lines[1]!, /└─○ a\s+down\s+12 behind main$/);
+	assert.match(lines[2]!, /└─○ b\s+down\s+↑ a is behind$/);
+	assert.match(lines[3]!, /└─○ c\s+down\s+↑ a is behind$/, "the start of the stale part, not the parent");
+	assert.equal(badgeOf(nodes[1]!).bold, true, "where it goes stale is drawn strong");
+	assert.equal(badgeOf(nodes[2]!).dim, true, "what inherits it, weaker");
+	const f = await framed(snap);
+	assert.match(f, /0 of 3 worktrees up · 3 out of date/);
+});
+
+test("an in-step parent with a stale child: only the child is out of date", async () => {
+	const snap = snapOf([wt("a", "main", 0), wt("b", "a", 4, { update: { parent: "a", behind: 4, note: "CONFLICTS", hand: true, conflicts: ["x.go"] } }), wt("c", "b", 0)]);
+	const nodes = tree(entries(snap));
+	assert.deepEqual(nodes.map((n) => n.stale.kind), ["none", "current", "behind", "inherits"]);
+	const lines = drawn(snap);
+	assert.match(lines[1]!, /└─○ a\s+down\s+in step$/);
+	assert.match(lines[2]!, /└─○ b\s+down\s+4 behind a · 1 conflict$/);
+	assert.match(lines[3]!, /└─○ c\s+down\s+↑ b is behind$/);
+	const f = await framed(snap);
+	assert.match(f, /0 of 3 worktrees up · 2 out of date/);
+});
+
+test("a whole chain in step says so, and main behind its upstream is said once, at the top", async () => {
+	const snap = snapOf([wt("a", "main", 0), wt("b", "a", 0)], 10);
+	const f = await framed(snap);
+	assert.match(f, /main up, 10 behind upstream \(U\) · 0 of 2 worktrees up · all in step/);
+	assert.match(f, /└─○ a\s+down\s+in step/);
+	assert.match(f, /└─○ b\s+down\s+in step/);
+	assert.equal(f.match(/behind upstream/g)!.length, 2, "the header and main's row, not the worktrees'");
+});
+
+test("a deep, wide tree fits 80 columns without a wrap", async () => {
+	const long = "santiago/fla-7%d-a-customer-approves-their-quote-from-the-portal-and-signs";
+	const snap = snapOf([
+		wt(long.replace("%d", "01"), "main", 69, { update: { parent: "main", behind: 69, note: "CONFLICTS", hand: true, conflicts: ["a", "b", "c", "d", "e"] } }),
+		wt(long.replace("%d", "02"), long.replace("%d", "01"), 7),
+		wt(long.replace("%d", "03"), long.replace("%d", "02"), 0),
+		wt(long.replace("%d", "04"), long.replace("%d", "03"), 0),
+		wt(long.replace("%d", "05"), long.replace("%d", "04"), 0),
+		wt(long.replace("%d", "06"), long.replace("%d", "01"), 0),
+		wt("santiago/supabase-native-local-with-a-very-long-name", "main", 32),
+	]);
+	for (const [w, h] of [[80, 24], [120, 30], [200, 40]] as const) {
+		const r = render(<App backend={new FakeBackend(snap)} size={{ columns: w, rows: h }} />);
+		await tick();
+		const f = plain(r.lastFrame());
+		noLineWiderThan(f, w);
+		assert.equal(f.split("\n").length, h - 1);
+		r.unmount();
+	}
+	const lines = drawn(snap);
+	lines.forEach((l) => noLineWiderThan(l, 78));
+	assert.match(lines[1]!, /├─○ fla-701 .*69 behind · 5 conflicts$/);
+	assert.match(lines[5]!, /^ │ │ {5}└─○ fla-705 /);
+	assert.match(lines[5]!, /↑ fla-701 is behind$/);
+	assert.match(lines[2]!, /7 behind fla-701$/, "behind its own parent too, after the one above it");
+	assert.equal(badgeOf(tree(entries(snap))[2]!).bold, false, "not where the chain goes stale");
+	// The narrowest list (a wide terminal's left column): still one line each.
+	drawn(snap, 58).forEach((l) => noLineWiderThan(l, 58));
+});
+
+test("m on a branch in step with its parent says which branch to update first", async () => {
+	const snap = snapOf([wt("a", "main", 12), wt("b", "a", 0)]);
+	snap.current = "/repo/b";
+	const backend = new FakeBackend(snap);
+	const r = render(<App backend={backend} size={{ columns: 80, rows: 30 }} />);
+	await tick();
+	r.stdin.write("m");
+	await tick();
+	assert.match(plain(r.lastFrame()), /b has everything a has; a is behind: update it first/);
+	assert.equal(backend.runs.length, 0);
+	r.unmount();
 });
