@@ -578,27 +578,27 @@ ok: main's stack is up and runs what main has checked out.
     <p>Type <code>hydra</code>, with nothing after it, in a terminal anywhere in the repository. It opens a dashboard of the main checkout and every worktree, with the one you typed it in chosen, and keeps itself up to date. It only shows what hydra's commands would tell you, and every key runs one of them.</p>
     <div class="code term">
       <div class="file">hydra, in examples/demo/dashboard.sh, 100 columns</div>
-<pre><b class="m"> hydra</b><b>  main</b><span class="c">   main </span><b class="x">up</b><span class="c"> · 1 of 4 worktrees up</span>
-<span class="s">╭─ </span><b>Checkouts</b><span class="s"> 5</span><span class="s"> ────────────────────────────────────────────────────────────────────────────────────╮</span>
-<span class="s">│ </span><span class="x">●</span> <b class="m">main</b>                                                  <span class="x">up           </span> <span class="c">                up to date</span> <span class="s">│</span>
-<span class="s">│</span><span class="s hl">▌</span><span class="x hl">●</span><span class="hl"> </span><b class="s hl">api</b><span class="hl">                                                   </span><span class="x hl">up           </span><span class="hl"> </span><span class="c hl">                  1 behind</span><span class="hl"> </span><span class="s">│</span>
-<span class="s">│ </span><span class="c">○</span> <b>clash</b>                                                 <span class="c">down         </span> <span class="r">     1 behind · 1 conflict</span> <span class="s">│</span>
-<span class="s">│ </span><span class="c">○</span> <b>stacked</b>                                               <span class="c">down         </span> <span class="w">       on web · needs main</span> <span class="s">│</span>
-<span class="s">│ </span><span class="c">○</span> <b>web</b>                                                   <span class="c">down         </span> <span class="w">     1 behind · needs main</span> <span class="s">│</span>
+<pre><b class="m"> hydra</b><b>  main</b>   main <b class="x">up</b> · 1 of 4 worktrees up
+<span class="s">╭─ </span><b>Checkouts</b> 5<span class="s"> ────────────────────────────────────────────────────────────────────────────────────╮</span>
+<span class="s">│ </span><span class="x">●</span> <b class="m">main</b>                                                  <span class="x">up           </span>                 up to date <span class="s">│</span>
+<span class="s">│</span><span class="s hl">▌</span><span class="x hl">●</span><span class="hl"> </span><b class="hl">api</b><span class="hl">                                                   </span><b class="hl">up           </b><span class="hl"> </span><b class="hl">                  1 behind</b><span class="hl"> </span><span class="s">│</span>
+<span class="s">│ </span><span class="c">○</span> <b>clash</b>                                                 down          <span class="r">     1 behind · 1 conflict</span> <span class="s">│</span>
+<span class="s">│ </span><span class="c">○</span> <b>stacked</b>                                               down          <span class="w">       on web · needs main</span> <span class="s">│</span>
+<span class="s">│ </span><span class="c">○</span> <b>web</b>                                                   down          <span class="w">     1 behind · needs main</span> <span class="s">│</span>
 <span class="s">╰──────────────────────────────────────────────────────────────────────────────────────────────────╯</span>
 <span class="c">╭─ </span><b>api</b><span class="c">  </span><span class="x">●</span><b class="x"> up</b><span class="c"> ──────────────────────────────────────────────────────────────────────────────────────╮</span>
-<span class="c">│</span> <span class="c">api · ~/code/shop/api</span>                                                 <span class="c">                           │</span>
-<span class="c">│</span> <span class="w">85fb02ad0 </span><span class="c">api: orders</span>                                                                            <span class="c">│</span>
+<span class="c">│</span> api · ~/code/shop/api                                                 <span class="c">                           │</span>
+<span class="c">│</span> <b>85fb02ad0 </b>api: orders                                                                            <span class="c">│</span>
 <span class="c">│</span>                                                                                                  <span class="c">│</span>
 <span class="c">│</span> <b class="x">✓ </b><span class="x">nothing wrong</span>                                                                                  <span class="c">│</span>
 <span class="c">│</span>                                                                                                  <span class="c">│</span>
 <span class="c">│</span> <b class="s">⇅ </b><b>vs main</b>  1 behind · 1 ahead                                                                    <span class="c">│</span>
-<span class="c">│</span> <span class="c">  update: main would be merged in (1 commit)</span>                                                     <span class="c">│</span>
+<span class="c">│</span>   update: main would be merged in (1 commit)                                                     <span class="c">│</span>
 <span class="c">│</span>                                                                                                  <span class="c">│</span>
-<span class="c">│</span> <b class="s">◆ </b><b>Runs here</b><span class="c">  1/1 ready</span>                                                                           <span class="c">│</span>
-<span class="c">│</span>   <span class="x">●</span> api    <span class="x">running       </span><span class="c">  changed: apps/api/orders.go</span>                                           <span class="c">│</span>
+<span class="c">│</span> <b class="s">◆ </b><b>Runs here</b>  1/1 ready                                                                           <span class="c">│</span>
+<span class="c">│</span>   <span class="x">●</span> api    <span class="x">running       </span>  changed: apps/api/orders.go                                           <span class="c">│</span>
 <span class="c">│</span>                                                                                                  <span class="c">│</span>
-<span class="c">│</span> <b class="c">◇ </b><b>From main</b><span class="c">  1 used, 1 more unused</span>                                                               <span class="c">│</span>
+<span class="c">│</span> <b class="c">◇ </b><b>From main</b>  1 used, 1 more unused                                                               <span class="c">│</span>
 <span class="c">│</span>   <span class="x">●</span> db                                                                                           <span class="c">│</span>
 <span class="c">│</span>                                                                                                  <span class="c">│</span>
 <span class="c">│</span>                                                                                                  <span class="c">│</span>
@@ -611,6 +611,7 @@ ok: main's stack is up and runs what main has checked out.
  <b class="s">⏎</b><span class="c"> open  ·  </span><b class="s">d</b><span class="c"> down  ·  </span><b class="s">r</b><span class="c"> restart  ·  </span><b class="s">l</b><span class="c"> logs  ·  </span><b class="s">m</b><span class="c"> merge main</span>      <b class="s">U</b><span class="c"> update all  ·  </span><b class="s">?</b><span class="c"> help  ·  </span><b class="s">q</b><span class="c"> quit</span></pre>
     </div>
     <p>The <b>Checkouts</b> panel has one line per checkout, main first. The chosen one has a coloured background and a <code>▌</code> at its left edge; the dashboard starts on the one you typed <code>hydra</code> in.</p>
+    <p>The colours are your terminal's own (its green, red, yellow, cyan), so they suit its theme. The chosen row's background is light blue on a light terminal and dark blue on a dark one, and yellow becomes a dark amber on a light one, which most light themes make too pale to read. The dashboard asks the terminal for its background colour when it opens, and follows it when it changes (a terminal that switches with the system appearance): terminals that report the change (Ghostty, kitty, a recent tmux) say so, and the others are asked again every two seconds. In a terminal that doesn't answer, the chosen row has no background, only the <code>▌</code> and its name in cyan.</p>
     <div class="table"><table>
       <tr><th>Part</th><th>What it says</th></tr>
       <tr><td>The name</td><td>The branch, without its <code>you/</code> prefix. A branch that starts with a ticket id shows it first and its title in words: <code>santiago/fla-709-an-advisor-splits</code> is <code>fla-709 an advisor splits</code>. A detached checkout shows its folder.</td></tr>

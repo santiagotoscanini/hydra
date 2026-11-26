@@ -10,6 +10,9 @@
 #     still running. d stops it, after asking.
 #  3. q leaves the dashboard; main's stack keeps running.
 #
+# The chosen row's background follows tmux's window-style, light or dark,
+# as it changes.
+#
 # Needs tmux and node. Everything happens in a throwaway repo under $TMPDIR;
 # each step checks the screen, so this doubles as a test.
 set -euo pipefail
@@ -104,7 +107,19 @@ start 150 24
 screen "150 columns"
 T capture-pane -p -t d | grep -qE '╭─ Checkouts.*╭─ api' || fail "a wide terminal shows the detail beside the list"
 T capture-pane -p -t d | grep -qE '╭─ Problems' || fail "a wide terminal shows the problems under the list"
-T capture-pane -e -p -t d | grep -qF $'\e[48;2;30;58;95m' || T capture-pane -e -p -t d | grep -qF $'\e[48;2;191;219;254m' || fail "the chosen row has no background"
+# The chosen row's background follows the terminal's theme, also when it
+# changes while the dashboard runs. A tmux with no client attached and no
+# window-style of its own doesn't know its background, so the row has none;
+# with a style it answers, and tells the dashboard when the style changes.
+bgrow() { T capture-pane -e -p -t d | grep -F '▌' | grep -qF $'\e[48;2;'"$1"'m'; }
+T capture-pane -e -p -t d | grep -F '▌' | grep -qF $'\e[48;2;' && fail "an unknown theme still gave the chosen row a background"
+T set -t d window-style 'bg=#2e3440'
+for _ in $(seq 20); do bgrow '38;75;120' && break; sleep 0.25; done
+bgrow '38;75;120' || fail "a dark terminal's chosen row isn't dark blue"
+T set -t d window-style 'bg=#ffffff'
+for _ in $(seq 20); do bgrow '191;219;254' && break; sleep 0.25; done
+bgrow '191;219;254' || fail "a light terminal's chosen row isn't light blue"
+T set -u -t d window-style
 
 echo "--- 2. u, ⏎, F10 and Yes, d"
 T send-keys -t d u

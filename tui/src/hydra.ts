@@ -6,6 +6,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { Snapshot } from "./types.js";
 import { shQuote } from "./model.js";
+import { ASK, REPORT_OFF, REPORT_ON } from "./theme.js";
 
 export interface Result {
 	code: number;
@@ -123,7 +124,9 @@ function handOver(exe: string, cmd: TerminalCommand): number {
 	const out = process.stdout;
 	const stdin = process.stdin;
 	const wasRaw = stdin.isTTY ? stdin.isRaw : false;
-	out.write(ESC.clear + ESC.altOff + ESC.cursorOn);
+	// The command gets the terminal's keys, so no theme report may land
+	// among them; the dashboard asks again when it is back.
+	out.write(REPORT_OFF + ESC.clear + ESC.altOff + ESC.cursorOn);
 	if (stdin.isTTY) {
 		try {
 			stdin.setRawMode(false);
@@ -164,47 +167,8 @@ function handOver(exe: string, cmd: TerminalCommand): number {
 				stdin.setRawMode(wasRaw);
 			} catch {}
 		}
-		out.write(ESC.altOn + ESC.cursorOff + ESC.clear);
+		out.write(ESC.altOn + ESC.cursorOff + ESC.clear + REPORT_ON + ASK);
 		redraw();
 	}
 	return status;
-}
-
-/** The selected row's background for a dark and a light terminal (santree's). */
-export const SELECTION_BG = { dark: "#1e3a5f", light: "#bfdbfe" } as const;
-
-/**
- * Asks the terminal for its background colour (OSC 11) to tell a light
- * theme from a dark one. A terminal that doesn't answer within timeoutMs
- * counts as dark. Runs before Ink takes stdin, so the answer never reaches it.
- */
-export function detectTheme(timeoutMs = 150): Promise<"light" | "dark"> {
-	return new Promise((resolve) => {
-		const stdin = process.stdin;
-		let buf = "";
-		const finish = (mode: "light" | "dark") => {
-			clearTimeout(timer);
-			stdin.off("data", onData);
-			stdin.pause();
-			try {
-				stdin.setRawMode(false);
-			} catch {}
-			resolve(mode);
-		};
-		const onData = (d: Buffer) => {
-			buf += d.toString("utf8");
-			const m = /\x1b\]11;rgb:([0-9a-f]+)\/([0-9a-f]+)\/([0-9a-f]+)(?:\x07|\x1b\\)/i.exec(buf);
-			if (!m) return;
-			const c = (h: string) => parseInt(h, 16) / (h.length >= 4 ? 65535 : 255);
-			finish(0.2126 * c(m[1]!) + 0.7152 * c(m[2]!) + 0.0722 * c(m[3]!) > 0.5 ? "light" : "dark");
-		};
-		const timer = setTimeout(() => finish("dark"), timeoutMs);
-		try {
-			stdin.setRawMode(true);
-		} catch {
-			return finish("dark");
-		}
-		stdin.on("data", onData);
-		process.stdout.write("\x1b]11;?\x07");
-	});
 }

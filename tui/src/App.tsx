@@ -4,6 +4,7 @@ import type { Backend, Result } from "./hydra.js";
 import { onRedraw } from "./hydra.js";
 import { detailServices, displayName, entries, fixCommand, runsHere, type Entry } from "./model.js";
 import type { Problem, Snapshot } from "./types.js";
+import { themeFor, type Theme } from "./theme.js";
 import {
 	ConfirmBody,
 	Footer,
@@ -13,6 +14,7 @@ import {
 	Panel,
 	PickerBody,
 	Row,
+	ThemeContext,
 	detailRows,
 	detailTitle,
 	problemRows,
@@ -38,8 +40,8 @@ interface Props {
 	size?: { columns: number; rows: number };
 	/** A snapshot to start from (tests). */
 	initial?: Snapshot;
-	/** The selected row's background, for the terminal's light or dark theme. */
-	selectionBg?: string;
+	/** The terminal's light or dark theme (theme.ts); unknown when left out. */
+	theme?: Theme;
 	home?: string;
 }
 
@@ -64,7 +66,7 @@ function called(e: Entry): string {
 	return n.id ?? n.title;
 }
 
-export default function App({ backend, size: fixedSize, initial, selectionBg = "#1e3a5f", home }: Props) {
+export default function App({ backend, size: fixedSize, initial, theme = themeFor(), home }: Props) {
 	const { exit } = useApp();
 	const size = useSize(fixedSize);
 	const [snap, setSnap] = useState<Snapshot | undefined>(initial);
@@ -443,7 +445,7 @@ export default function App({ backend, size: fixedSize, initial, selectionBg = "
 	} else if (overlay?.kind === "pick") {
 		title = [{ text: overlay.title, bold: true }];
 		color = "cyan";
-		content = <PickerBody items={overlay.items} index={overlay.index} width={detailInner} height={detailRoom} selectionBg={selectionBg} />;
+		content = <PickerBody items={overlay.items} index={overlay.index} width={detailInner} height={detailRoom} />;
 	} else if (overlay?.kind === "output") {
 		title = [{ text: overlay.code === 0 ? "✓ " : `✗ exit ${overlay.code}: `, bold: true }, { text: overlay.title, bold: true }];
 		color = overlay.code === 0 ? "green" : "red";
@@ -465,7 +467,7 @@ export default function App({ backend, size: fixedSize, initial, selectionBg = "
 
 	const listPanel = (
 		<Panel
-			title={[{ text: "Checkouts", bold: true, color: undefined }, { text: snap ? ` ${list.length}` : "", dim: true }]}
+			title={[{ text: "Checkouts", bold: true, color: undefined }, { text: snap ? ` ${list.length}` : "" }]}
 			color="cyan"
 			width={listW}
 			height={listH}
@@ -474,10 +476,10 @@ export default function App({ backend, size: fixedSize, initial, selectionBg = "
 				list
 					.slice(start, start + visible)
 					.map((e) => (
-						<ListRow key={e.root} e={e} selected={e.root === sel?.root} width={listInner} busy={verbOf(e)} selectionBg={selectionBg} />
+						<ListRow key={e.root} e={e} selected={e.root === sel?.root} width={listInner} busy={verbOf(e)} />
 					))
 			) : (
-				<Row width={listInner} segs={error ? [] : [{ text: " " }, { text: "", spin: true, color: "cyan" }, { text: " reading the repository…", dim: true }]} />
+				<Row width={listInner} segs={error ? [] : [{ text: " " }, { text: "", spin: true, color: "cyan" }, { text: " reading the repository…" }]} />
 			)}
 		</Panel>
 	);
@@ -512,46 +514,48 @@ export default function App({ backend, size: fixedSize, initial, selectionBg = "
 
 	if (blank) return <Box />;
 	return (
-		<Box flexDirection="column" width={width} height={rows}>
-			<Row
-				width={width}
-				segs={[
-					{ text: " hydra", bold: true, color: "magenta" },
-					{ text: snap ? "  " + snap.repo.slice(snap.repo.lastIndexOf("/") + 1) : "", bold: true },
-					...(snap?.main
-						? [
-								{ text: "   main ", dim: true },
-								{ text: snap.main.up ? "up" : "down", color: snap.main.up ? "green" : "red", bold: true },
-								{ text: ` · ${wtUp} of ${snap.worktrees.length} worktree${snap.worktrees.length === 1 ? "" : "s"} up`, dim: true },
-							]
-						: []),
-					...(reading || anyPending
-						? [{ text: "   " }, { text: "", spin: true, color: "cyan" }, { text: reading ? " reading everything again" : " planning", dim: true }]
-						: []),
-				]}
-			/>
-			{overlay?.kind === "help" ? (
-				<Panel title={[{ text: "Keys", bold: true, color: undefined }]} color="cyan" width={width} height={body}>
-					<Box flexDirection="column" paddingX={1}>
-						<HelpBody width={width - 4} height={body - 2} />
+		<ThemeContext.Provider value={theme}>
+			<Box flexDirection="column" width={width} height={rows}>
+				<Row
+					width={width}
+					segs={[
+						{ text: " hydra", bold: true, color: "magenta" },
+						{ text: snap ? "  " + snap.repo.slice(snap.repo.lastIndexOf("/") + 1) : "", bold: true },
+						...(snap?.main
+							? [
+									{ text: "   main " },
+									{ text: snap.main.up ? "up" : "down", color: snap.main.up ? "green" : "red", bold: true },
+									{ text: ` · ${wtUp} of ${snap.worktrees.length} worktree${snap.worktrees.length === 1 ? "" : "s"} up` },
+								]
+							: []),
+						...(reading || anyPending
+							? [{ text: "   " }, { text: "", spin: true, color: "cyan" }, { text: reading ? " reading everything again" : " planning" }]
+							: []),
+					]}
+				/>
+				{overlay?.kind === "help" ? (
+					<Panel title={[{ text: "Keys", bold: true, color: undefined }]} color="cyan" width={width} height={body}>
+						<Box flexDirection="column" paddingX={1}>
+							<HelpBody width={width - 4} height={body - 2} />
+						</Box>
+					</Panel>
+				) : wide ? (
+					<Box flexDirection="row" height={body}>
+						<Box flexDirection="column" width={listW} height={body}>
+							{listPanel}
+							{problemsPanel}
+						</Box>
+						{detailPanel}
 					</Box>
-				</Panel>
-			) : wide ? (
-				<Box flexDirection="row" height={body}>
-					<Box flexDirection="column" width={listW} height={body}>
+				) : (
+					<>
 						{listPanel}
-						{problemsPanel}
-					</Box>
-					{detailPanel}
-				</Box>
-			) : (
-				<>
-					{listPanel}
-					{detailPanel}
-				</>
-			)}
-			{status.length ? <Row width={width} segs={[{ text: " " }, ...status]} /> : null}
-			<Footer e={sel} width={width} overlay={!!overlay} />
-		</Box>
+						{detailPanel}
+					</>
+				)}
+				{status.length ? <Row width={width} segs={[{ text: " " }, ...status]} /> : null}
+				<Footer e={sel} width={width} overlay={!!overlay} />
+			</Box>
+		</ThemeContext.Provider>
 	);
 }

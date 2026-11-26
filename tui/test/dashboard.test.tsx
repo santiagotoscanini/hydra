@@ -320,7 +320,7 @@ test("no line is wider than the terminal, narrow or wide", async () => {
 
 test("a list row at 80 columns", () => {
 	const e = entries(fixture())[1]!;
-	const f = once(<ListRow e={e} selected width={78} selectionBg="#1e3a5f" />);
+	const f = once(<ListRow e={e} selected width={78} />);
 	noLineWiderThan(f, 78);
 	assert.equal(stateOf(e).word, "failing");
 	assert.deepEqual(vsMain(e), { text: "3 behind · needs main", color: "yellow" });
@@ -356,7 +356,7 @@ test("a worktree hydra stopped for being idle says so", () => {
 	snap.worktrees[2]!.idleStopped = { at: new Date().toISOString(), after: "2h" };
 	const e = entries(snap)[3]!;
 	assert.equal(stateOf(e).word, "idle-stopped");
-	const row = once(<ListRow e={e} selected={false} width={78} selectionBg="#1e3a5f" />);
+	const row = once(<ListRow e={e} selected={false} width={78} />);
 	noLineWiderThan(row, 78);
 	assert.match(row, /◌ more\s+idle-stopped\s+on cart-checkout/);
 	assert.match(rows(detailRows(e, 80)), /nobody used it for 2h, so hydra stopped it: u starts it/);
@@ -370,7 +370,7 @@ test("a worktree far behind main is marked, and the row still fits 80 columns", 
 	w.update = undefined;
 	const e = entries(snap)[1]!;
 	assert.deepEqual(vsMain(e), { text: "312 behind · 2 conflicts", color: "red" });
-	const row = once(<ListRow e={e} selected={false} width={78} selectionBg="#1e3a5f" />);
+	const row = once(<ListRow e={e} selected={false} width={78} />);
 	noLineWiderThan(row, 78);
 	assert.match(row, /312 behind · 2 conflicts/);
 	assert.match(rows(detailRows(e, 80)), /merging main conflicts in 2 files: users\.go, cart\.tsx/);

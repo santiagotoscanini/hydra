@@ -1,7 +1,7 @@
 // The dashboard's pieces. Every line is one terminal row: text is clipped,
 // never wrapped, so the frame keeps its height at any width.
 
-import React, { useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import {
 	bytes,
@@ -20,6 +20,22 @@ import {
 	type Entry,
 } from "./model.js";
 import type { Service } from "./types.js";
+import { themeFor, type Theme } from "./theme.js";
+
+// ── Colours ───────────────────────────────────────────────────────────
+
+/** The terminal's theme (theme.ts): the selection's background, and yellow. */
+export const ThemeContext = createContext<Theme>(themeFor());
+
+/** A named colour as this theme draws it: only yellow differs. */
+function usePaint(): (c?: string) => string | undefined {
+	const t = useContext(ThemeContext);
+	return (c) => (c === "yellow" ? t.yellow : c);
+}
+
+/** A word's colour: gray marks things (a glyph, a border), never words,
+ *  which it makes too faint on many palettes. */
+const wordColor = (c?: string) => (c === "gray" ? undefined : c);
 
 // ── Lines made of segments ────────────────────────────────────────────
 
@@ -57,6 +73,7 @@ function fit(segs: Seg[], width: number): Seg[] {
 
 /** One row of exactly width columns. bg colours all of it (the selection). */
 export function Row({ segs, width, bg }: { segs: Seg[]; width: number; bg?: string }) {
+	const paint = usePaint();
 	const cut = fit(segs, width);
 	const used = cut.reduce((n, s) => n + (s.spin ? 1 : len(s.text)), 0);
 	return (
@@ -66,7 +83,7 @@ export function Row({ segs, width, bg }: { segs: Seg[]; width: number; bg?: stri
 					s.spin ? (
 						<Spinner key={i} color={s.color} bg={bg} />
 					) : (
-						<Text key={i} color={s.color} bold={s.bold} dimColor={s.dim} backgroundColor={s.bg ?? bg}>
+						<Text key={i} color={paint(s.color)} bold={s.bold} dimColor={s.dim} backgroundColor={paint(s.bg) ?? bg}>
 							{s.text}
 						</Text>
 					),
@@ -102,6 +119,7 @@ export function Panel({
 	height: number;
 	children?: React.ReactNode;
 }) {
+	const paint = usePaint();
 	const inner = Math.max(0, width - 2);
 	const head = fit([{ text: "─ ", color }, ...title, { text: " " }], Math.max(0, inner - 1));
 	const headLen = head.reduce((n, s) => n + (s.spin ? 1 : len(s.text)), 0);
@@ -109,23 +127,23 @@ export function Panel({
 		<Box flexDirection="column" width={width} height={height}>
 			<Box height={1} width={width} overflow="hidden">
 				<Text wrap="truncate-end">
-					<Text color={color}>╭</Text>
+					<Text color={paint(color)}>╭</Text>
 					{head.map((s, i) =>
 						s.spin ? (
 							<Spinner key={i} color={s.color} />
 						) : (
-							<Text key={i} color={s.color} bold={s.bold} dimColor={s.dim}>
+							<Text key={i} color={paint(s.color)} bold={s.bold} dimColor={s.dim}>
 								{s.text}
 							</Text>
 						),
 					)}
-					<Text color={color}>{"─".repeat(Math.max(0, inner - headLen)) + "╮"}</Text>
+					<Text color={paint(color)}>{"─".repeat(Math.max(0, inner - headLen)) + "╮"}</Text>
 				</Text>
 			</Box>
 			<Box
 				borderStyle="round"
 				borderTop={false}
-				borderColor={color}
+				borderColor={paint(color)}
 				flexDirection="column"
 				width={width}
 				height={Math.max(1, height - 1)}
@@ -149,26 +167,29 @@ export function ListRow({
 	selected,
 	width,
 	busy,
-	selectionBg,
 }: {
 	e: Entry;
 	selected: boolean;
 	width: number;
 	busy?: string;
-	selectionBg: string;
 }) {
+	const { selectionBg } = useContext(ThemeContext);
 	const st = stateOf(e, busy);
 	const vs = vsMain(e);
 	const n = displayName(e);
 	const cols = listColumns(width);
 	const nameW = Math.max(6, width - 4 - cols.state - cols.badge - 2);
 	const bg = selected ? selectionBg : undefined;
+	// On the selection's background the words are the terminal's own text
+	// colour, which reads on it in any palette; the glyph keeps the state's
+	// colour. Without a background (the theme isn't known) the name is cyan.
+	const on = (c?: string) => (bg ? undefined : wordColor(c));
 	const name: Seg[] = n.id
 		? [
-				{ text: n.id, bold: true, color: selected ? "cyan" : undefined },
-				{ text: " " + n.title, bold: selected, dim: !selected },
+				{ text: n.id, bold: true, color: selected && !bg ? "cyan" : undefined },
+				{ text: " " + n.title, bold: selected },
 			]
-		: [{ text: n.title, bold: true, color: e.kind === "main" ? "magenta" : selected ? "cyan" : undefined }];
+		: [{ text: n.title, bold: true, color: selected ? on("cyan") : e.kind === "main" ? "magenta" : undefined }];
 	const nameFit = fit(name, nameW);
 	const nameLen = nameFit.reduce((k, s) => k + len(s.text), 0);
 	const segs: Seg[] = [
@@ -177,9 +198,9 @@ export function ListRow({
 		{ text: " " },
 		...nameFit,
 		{ text: " ".repeat(nameW - nameLen + 1) },
-		{ text: pad(st.word, cols.state), color: st.color },
+		{ text: pad(st.word, cols.state), color: on(st.color), bold: !!bg },
 		{ text: " " },
-		{ text: vs.text.length > cols.badge ? pad(vs.text, cols.badge) : vs.text.padStart(cols.badge), color: vs.color },
+		{ text: vs.text.length > cols.badge ? pad(vs.text, cols.badge) : vs.text.padStart(cols.badge), color: on(vs.color), bold: !!bg },
 	];
 	return <Row segs={segs} width={width} bg={bg} />;
 }
@@ -202,10 +223,10 @@ function serviceRow(s: Service, nameW: number, whereW: number, stateW: number, w
 		{ text: "  " },
 		s.health === "starting" ? { text: "", spin: true, color: "yellow" } : { text: g.glyph, color: g.color },
 		{ text: " " + pad(s.name, nameW) + " " },
-		{ text: pad(s.state, stateW), color: s.health === "failed" ? "red" : s.health === "up" ? "green" : undefined, dim: s.health === "off" || s.health === "done" },
-		{ text: whereW ? " " + where : "", color: "cyan", dim: !s.address && !s.url },
-		{ text: s.memory ? `  ${bytes(s.memory)}` : "", dim: true },
-		{ text: worktree && s.why ? `  ${s.why}` : "", dim: true },
+		{ text: pad(s.state, stateW), color: s.health === "failed" ? "red" : s.health === "up" ? "green" : undefined },
+		{ text: whereW ? " " + where : "", color: "cyan" },
+		{ text: s.memory ? `  ${bytes(s.memory)}` : "" },
+		{ text: worktree && s.why ? `  ${s.why}` : "" },
 	];
 }
 
@@ -218,7 +239,7 @@ export function detailTitle(e: Entry, busy?: string): Seg[] {
 		{ text: n.title || e.name, bold: true, color: e.kind === "main" ? "magenta" : undefined },
 		{ text: "  " },
 		st.spin ? { text: "", spin: true, color: st.color } : { text: st.glyph, color: st.color },
-		{ text: " " + st.word, color: st.color, bold: true },
+		{ text: " " + st.word, color: wordColor(st.color), bold: true },
 	];
 }
 
@@ -233,8 +254,8 @@ export function detailRows(e: Entry, width: number, opts: { home?: string; busy?
 	if (e.idleStopped && !e.up) stateSegs.push({ text: `nobody used it for ${e.idleStopped}, so hydra stopped it: u starts it`, color: "blue" });
 	else if (e.kind === "main" && !e.up && !e.pending && !opts.busy) stateSegs.push({ text: "not running: the worktrees that use main's services need it", color: "red" });
 	if (stateSegs.length) add(...stateSegs);
-	add({ text: `${e.branch} · ${tildePath(e.root, opts.home)}`, dim: true }, { text: e.memory ? ` · ${bytes(e.memory)}` : "", dim: true });
-	if (e.commit) add({ text: e.commit + " ", color: "yellow", dim: true }, { text: e.subject, dim: true });
+	add({ text: `${e.branch} · ${tildePath(e.root, opts.home)}` }, { text: e.memory ? ` · ${bytes(e.memory)}` : "" });
+	if (e.commit) add({ text: e.commit + " ", bold: true }, { text: e.subject });
 	if (e.error) {
 		blank();
 		for (const l of wrap(`can't plan it: ${e.error}`, width)) add({ text: l, color: "red" });
@@ -242,7 +263,7 @@ export function detailRows(e: Entry, width: number, opts: { home?: string; busy?
 	}
 	if (e.pending) {
 		blank();
-		add({ text: "", spin: true, color: "gray" }, { text: " working out what runs here…", dim: true });
+		add({ text: "", spin: true, color: "gray" }, { text: " working out what runs here…" });
 		return out;
 	}
 
@@ -269,17 +290,17 @@ export function detailRows(e: Entry, width: number, opts: { home?: string; busy?
 		const color = conflicts ? "red" : e.farBehind || e.outOfStep.length ? "yellow" : "cyan";
 		add(...section("⇅", "vs main", color, [{ text: "  " + (counts.join(" · ") || "up to date") }]));
 		if (e.stack.length > 1) {
-			add({ text: "  stacked on " }, { text: shortBranch(e.stack[e.stack.length - 2]!), bold: true }, { text: `  (main ← ${e.stack.map(shortBranch).join(" ← ")})`, dim: true });
+			add({ text: "  stacked on " }, { text: shortBranch(e.stack[e.stack.length - 2]!), bold: true }, { text: `  (main ← ${e.stack.map(shortBranch).join(" ← ")})` });
 		}
 		const u = e.update;
 		if (u) {
 			const c = u.hand ? (u.conflicts?.length ? "red" : "yellow") : undefined;
-			for (const l of wrap(`update: ${u.note}`, width - 2)) add({ text: "  " + l, color: c, dim: !c });
+			for (const l of wrap(`update: ${u.note}`, width - 2)) add({ text: "  " + l, color: c });
 		}
 		const files = u?.conflicts?.length ? u.conflicts : (e.farBehind?.conflicts ?? []);
 		if (files.length) {
 			const shown = files.slice(0, 3).map((f) => f.slice(f.lastIndexOf("/") + 1));
-			add({ text: `  merging main conflicts in ${files.length} file${files.length === 1 ? "" : "s"}: `, color: "red" }, { text: shown.join(", ") + (files.length > 3 ? ` +${files.length - 3}` : ""), dim: true });
+			add({ text: `  merging main conflicts in ${files.length} file${files.length === 1 ? "" : "s"}: `, color: "red" }, { text: shown.join(", ") + (files.length > 3 ? ` +${files.length - 3}` : "") });
 		}
 		if (e.farBehind && !files.length) add({ text: `  far behind: ${e.farBehind.behind} commits, and the merge only gets harder`, color: "yellow" });
 		if (e.outOfStep.length && !files.length) {
@@ -292,21 +313,21 @@ export function detailRows(e: Entry, width: number, opts: { home?: string; busy?
 	if (e.kind === "main") {
 		const { on, off } = mainServices(e);
 		const p = progress(e);
-		add(...section("◆", "Services", "cyan", [{ text: e.up ? `  ${p.ready}/${p.total} ready` : `  ${on.length}, none running`, dim: true }]));
+		add(...section("◆", "Services", "cyan", [{ text: e.up ? `  ${p.ready}/${p.total} ready` : `  ${on.length}, none running` }]));
 		const nameW = Math.min(20, Math.max(6, ...on.map((s) => len(s.name))));
 		const whereW = Math.max(0, ...on.map((s) => len(whereOf(s))));
 		const stateW = Math.min(24, Math.max(0, ...on.map((s) => len(s.state))));
 		for (const s of on) add(...serviceRow(s, nameW, whereW, stateW, false));
 		if (off.length) {
 			for (const [i, l] of wrap(off.map((s) => s.name).join(", "), width - 16, "").entries())
-				add({ text: i === 0 ? "  switched off: " : " ".repeat(16), dim: true }, { text: l, dim: true });
+				add({ text: i === 0 ? "  switched off: " : " ".repeat(16) }, { text: l });
 		}
 	} else {
 		const { shown, hidden } = detailServices(e);
 		const here = shown.filter((s) => s.runs === "here");
 		const fromMain = shown.filter((s) => s.runs !== "here");
 		const p = progress(e);
-		add(...section("◆", "Runs here", "cyan", [{ text: here.length ? (e.up ? `  ${p.ready}/${p.total} ready` : `  ${here.length}`) : "  nothing: everything comes from main", dim: true }]));
+		add(...section("◆", "Runs here", "cyan", [{ text: here.length ? (e.up ? `  ${p.ready}/${p.total} ready` : `  ${here.length}`) : "  nothing: everything comes from main" }]));
 		const nameW = Math.min(20, Math.max(6, ...here.map((s) => len(s.name))));
 		const whereW = Math.max(0, ...here.map((s) => len(whereOf(s))));
 		const stateW = Math.min(24, Math.max(0, ...here.map((s) => len(s.state))));
@@ -317,7 +338,7 @@ export function detailRows(e: Entry, width: number, opts: { home?: string; busy?
 				const g = healthGlyph(s.health);
 				return { s, g, label: s.runs === "routed" ? `${s.name} (routed)` : s.name };
 			});
-			add(...section("◇", "From main", "gray", [{ text: hidden ? `  ${fromMain.length} used, ${hidden} more unused` : `  ${fromMain.length}`, dim: true }]));
+			add(...section("◇", "From main", "gray", [{ text: hidden ? `  ${fromMain.length} used, ${hidden} more unused` : `  ${fromMain.length}` }]));
 			// As many per line as fit: "● api  ● supabase  ✓ migrate".
 			let line: Seg[] = [{ text: " " }];
 			let used = 1;
@@ -360,7 +381,7 @@ export function problemRows(e: Entry, width: number): Seg[][] {
 		const color = p.passing ? "yellow" : p.blocks ? "red" : "yellow";
 		const [first, ...rest] = p.text.split("\n");
 		wrap(first!, width - 2).forEach((l, j) => add({ text: j === 0 ? `${mark} ` : "  ", color, bold: true }, { text: l }));
-		for (const r of rest) for (const l of wrap(r, width - 2)) add({ text: "  " + l, dim: true });
+		for (const r of rest) for (const l of wrap(r, width - 2)) add({ text: "  " + l });
 		if (p.fix) {
 			const lines = wrap(p.fix, width - 6 - (p.run ? 13 : 0), "");
 			lines.forEach((l, j) =>
@@ -410,7 +431,8 @@ export function ConfirmBody({ lines: raw, width, height }: { lines: string[]; wi
 	);
 }
 
-export function PickerBody({ items, index, width, height, selectionBg }: { items: string[]; index: number; width: number; height: number; selectionBg: string }) {
+export function PickerBody({ items, index, width, height }: { items: string[]; index: number; width: number; height: number }) {
+	const { selectionBg } = useContext(ThemeContext);
 	const room = Math.max(1, height - 1);
 	const start = Math.max(0, Math.min(index - Math.floor(room / 2), items.length - room));
 	return (
@@ -513,13 +535,14 @@ export function Footer({ e, width, overlay }: { e: Entry | undefined; width: num
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 export function Spinner({ color = "yellow", bg }: { color?: string; bg?: string }) {
+	const paint = usePaint();
 	const [i, setI] = useState(0);
 	useEffect(() => {
 		const t = setInterval(() => setI((n) => (n + 1) % FRAMES.length), 100);
 		return () => clearInterval(t);
 	}, []);
 	return (
-		<Text color={color} backgroundColor={bg}>
+		<Text color={paint(color)} backgroundColor={bg}>
 			{FRAMES[i]}
 		</Text>
 	);

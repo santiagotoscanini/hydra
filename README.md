@@ -228,7 +228,9 @@ ticket id first, the `you/` prefix dropped), whether its stack is up (a
 spinner and `starting 2/3` while it starts), how it stands against main
 (behind, a conflict, stacked on another branch), and in a panel for the
 chosen one, its problems with their fixes, its services and what it takes
-from main. At 120 columns or wider the panels sit side by side.
+from main. At 120 columns or wider the panels sit side by side. It uses
+the terminal's own colours and follows its light or dark theme, also when
+the terminal switches while it runs.
 
 ```
  hydra  main   main up · 0 of 4 worktrees up

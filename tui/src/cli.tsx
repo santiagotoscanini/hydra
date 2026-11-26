@@ -4,7 +4,8 @@
 import React from "react";
 import { render } from "ink";
 import App from "./App.js";
-import { ESC, SELECTION_BG, detectTheme, realBackend } from "./hydra.js";
+import { ESC, realBackend } from "./hydra.js";
+import { watchTheme, type Theme } from "./theme.js";
 
 // By here every module has loaded: a test runs the bundle this far.
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -18,18 +19,27 @@ const backend = realBackend(exe, process.cwd());
 // The alternate screen, as vim and less use: leaving it puts back what the
 // terminal showed before.
 process.stdout.write(ESC.altOn + ESC.cursorOff + ESC.clear);
+// The selection's background and yellow have to suit the terminal's
+// background, which can change while the dashboard runs (theme.ts).
+const app = (theme: Theme) => <App backend={backend} theme={theme} home={process.env["HOME"]} />;
+let instance: ReturnType<typeof render> | undefined;
+const theme = watchTheme(process.stdin, (s) => process.stdout.write(s), (t) => instance?.rerender(app(t)));
+
 let left = false;
 const leave = () => {
 	if (left) return;
 	left = true;
+	theme.stop();
 	process.stdout.write(ESC.altOff + ESC.cursorOn);
 };
 process.on("exit", leave);
 
-// The selection's background has to suit the terminal's.
-const theme = await detectTheme();
+// A moment for the terminal to say which theme it has, so the first frame
+// is drawn in it.
+await theme.ready;
 
-const instance = render(<App backend={backend} selectionBg={SELECTION_BG[theme]} home={process.env["HOME"]} />, {
+instance = render(app(theme.theme()), {
+	stdin: theme.stdin,
 	exitOnCtrlC: false,
 	patchConsole: false,
 });

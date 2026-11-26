@@ -301,6 +301,19 @@ action shows itself under way where it happens (a spinner and `starting
 or the command's output when it failed. Lines are cut, never wrapped, so
 the frame keeps its shape at 80 columns as on a wide screen.
 
+Colours are the terminal's own palette, which its theme tunes for its
+background; words are never dim or gray, which many palettes make
+unreadable, only marks and key hints are. Two colours can't come from the
+palette: the chosen row's background, and yellow on a light terminal,
+where most palettes make it too pale. Both are picked per theme, and the
+theme is followed while the dashboard runs, since terminals switch with
+the system appearance: it asks the background colour (OSC 11) and
+subscribes to scheme changes (mode 2031); a terminal that answers the
+first but doesn't report changes is asked again every two seconds. The
+answers are taken out of stdin before Ink reads keys from it. Not knowing the theme
+leaves the row without a background rather than guessing one: a light
+blue on a dark terminal hid the row's text.
+
 Opening a stack hands the terminal to `hydra attach` and takes it back
 when that ends. In process-compose's attach mode, F10 or ctrl-c asks
 "Detach from the remote project?", and Yes ends the attach and leaves the
