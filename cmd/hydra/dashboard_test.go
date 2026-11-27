@@ -121,3 +121,11 @@ func TestBareHydraOpensTheDashboardOnlyAtATerminal(t *testing.T) {
 		t.Error("bare hydra without a terminal opened the dashboard")
 	}
 }
+
+// CI=true makes Ink draw nothing until it exits: the dashboard drops it.
+func TestDashboardRunsWithoutCI(t *testing.T) {
+	got := dashboardEnv([]string{"HOME=/h", "CI=true", "CONTINUOUS_INTEGRATION=1", "CIRCLE=x"})
+	if strings.Join(got, " ") != "HOME=/h CIRCLE=x" {
+		t.Fatalf("got %v", got)
+	}
+}

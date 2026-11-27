@@ -51,6 +51,13 @@ func TestMain(m *testing.M) {
 	}
 	os.Setenv("HYDRA_CACHE_DIR", cache)
 	os.Setenv("HYDRA_GH", "off")
+	// A machine with no git identity (CI) can still commit and merge, in
+	// the tests and in the hydra they run.
+	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
+		if os.Getenv(k) == "" {
+			os.Setenv(k, map[bool]string{true: "t@t", false: "t"}[strings.HasSuffix(k, "EMAIL")])
+		}
+	}
 	code := m.Run()
 	os.RemoveAll(cache)
 	if hydraBin.err == nil && hydraBin.dir != "" {

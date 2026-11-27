@@ -35,7 +35,10 @@ export class FakeBackend implements Backend {
 	}
 }
 
-export const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
+// A CI runner is slower than a laptop: React's renders and effects may not
+// all be done in 30ms there, so its ticks are longer.
+const slow = process.env["CI"] ? 10 : 1;
+export const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms * slow));
 
 // eslint-disable-next-line no-control-regex
 export const plain = (s: string | undefined) => (s ?? "").replace(/\x1b\[[0-9;]*m/g, "");

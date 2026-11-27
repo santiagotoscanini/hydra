@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>hydra: every worktree runs only the services it changed</title>
-<meta name="description" content="hydra wraps process-compose. Your main checkout runs the full stack once, and each git worktree starts only the services its branch changed, wired to main's copy of the rest.">
-<meta property="og:title" content="hydra: every worktree runs only the services it changed">
-<meta property="og:description" content="A wrapper around process-compose. One stack in your main checkout; each git worktree starts only what its branch changed.">
+<title>hydra: ten agents, ten branches, one dev stack</title>
+<meta name="description" content="Your laptop shouldn't be what holds your agents back. hydra runs the full dev stack once, in your main checkout, and each git worktree starts only the services its branch changed, wired to main's copy of the rest.">
+<meta property="og:title" content="hydra: ten agents, ten branches, one dev stack">
+<meta property="og:description" content="Your laptop shouldn't be what holds your agents back. One stack in your main checkout; each git worktree starts only what its branch changed.">
 <meta property="og:type" content="website">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <script>try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}</script>
@@ -31,8 +31,8 @@
 <main>
 
 <div class="lead">
-  <h1>Every worktree gets a running stack. Only the services it changed actually start.</h1>
-  <p>hydra is a small wrapper around <a href="https://github.com/F1bonacc1/process-compose">process-compose</a>. Your main checkout runs the full stack, once. In every other git worktree, <code>hydra up</code> starts the services that branch touched, on their own ports, and points them at main's copy of everything else.</p>
+  <h1>Ten agents, ten branches, one stack. Your laptop stops being the bottleneck.</h1>
+  <p>Every agent works in a git worktree of its own, and needs the app running to check its change. Ten full stacks don't fit in memory and fight over the same ports. hydra, a small wrapper around <a href="https://github.com/F1bonacc1/process-compose">process-compose</a>, runs the full stack once, in your main checkout. In every worktree, <code>hydra up</code> starts only the services that branch changed, on their own ports, pointed at main's copy of everything else.</p>
   <button class="install" data-copy="brew install --HEAD santiagotoscanini/tap/hydra" aria-label="Copy the install command">
     <span class="cmd"><i>$ </i>brew install --HEAD santiagotoscanini/tap/hydra</span><span class="act">copy</span>
   </button>

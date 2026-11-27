@@ -10,7 +10,7 @@
 		"build": "node build.mjs",
 		"check": "node build.mjs --check",
 		"typecheck": "tsc --noEmit",
-		"test": "node --import tsx --test test/*.test.tsx",
+		"test": "node --import tsx --test --test-timeout=60000 test/*.test.tsx",
 		"dev": "node --import tsx src/cli.tsx"
 	},
 	"dependencies": {

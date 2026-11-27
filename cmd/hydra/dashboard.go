@@ -68,8 +68,23 @@ func dashboardCmd() error {
 		return err
 	}
 	journal.Log("start", journal.Fields{"what": "dashboard"})
-	env := append(os.Environ(), "HYDRA_EXE="+exe)
+	env := append(dashboardEnv(os.Environ()), "HYDRA_EXE="+exe)
 	return syscall.Exec(node, []string{"node", script}, env)
+}
+
+// dashboardEnv is the environment the dashboard runs in: without CI and
+// CONTINUOUS_INTEGRATION, which make Ink draw nothing until it exits (CI
+// logs can't take a redrawn screen). The dashboard only runs at a
+// terminal, so it is never a CI log; some shells and agents export CI.
+func dashboardEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "CI=") || strings.HasPrefix(kv, "CONTINUOUS_INTEGRATION=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // dashboardScript writes the embedded dashboard to the cache, under a name
