@@ -86,7 +86,9 @@ type snapService struct {
 	// (x-hydra hosts): http://<worktree>.localhost:PORT, main's at localhost.
 	Address string `json:"address,omitempty"`
 	Why     string `json:"why,omitempty"`
-	Memory  int64  `json:"memory,omitempty"` // bytes: the process and its children
+	// Files are the changed files that made it run here (at most 200).
+	Files  []string `json:"files,omitempty"`
+	Memory int64    `json:"memory,omitempty"` // bytes: the process and its children
 }
 
 // snapStray is a program that holds a port of the checkout's stack and is
@@ -1088,7 +1090,7 @@ func snapWorktreeOf(ms *mainState, wt stack.Worktree, p *wtPlan, g *wtGit, mem f
 
 	used := uses(ws.target.stack, ws.Plan)
 	for _, row := range ws.Plan.Services {
-		svc := snapService{Name: row.Name, Port: row.Port, Why: row.Why}
+		svc := snapService{Name: row.Name, Port: row.Port, Why: row.Why, Files: row.Files}
 		switch {
 		case row.Local:
 			svc.Runs, svc.Off = "here", row.Disabled

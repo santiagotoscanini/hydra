@@ -629,7 +629,7 @@ ring-schema  main         ! 4 commits behind  ring-web
 │                                                                              │
 │ ◆ Runs here, and why  1                                                      │
 │   ○ api    not started                                                       │
-│     ↳ changed: apps/api/orders.go                                            │
+│     ↳ changed: apps/api/ 📄 orders.go                                         │
 │ ◇ From main  ● db · 1 unused                                                 │
 │                                                                              │
 │ ✓ nothing in the way: u starts it                                            │
@@ -693,7 +693,7 @@ ring-schema  main         ! 4 commits behind  ring-web
     <ol>
       <li><b>◎ PR</b>: its number, state, review and checks (<code>#7 open · review required · checks passing</code>) and its link, which <kbd>p</kbd> opens. Merged or closed: <code>PR merged: nothing left to do here</code>. <code>none for this branch</code> when gh found none; nothing at all when gh can't be asked.</li>
       <li><b>⇅ vs its parent</b>: how far it is from its parent and from main, and what <a href="#updating"><code>hydra update</code></a> would do to it (a conflict names the files); for a stacked branch, its chain, each branch that is behind with how far (<code>main → fla-709 (69 behind) → fla-710</code>), and which one to update first.</li>
-      <li><b>◆ Runs here, and why</b>: each service it runs here with its state and its address by name, URL or port, and under it (<code>↳</code>) why it runs here: the files that changed (<code>changed: apps/api/orders.go</code>) or what pulls it in.</li>
+      <li><b>◆ Runs here, and why</b>: each service it runs here with its state and its address by name, URL or port, and under it (<code>↳</code>) why it runs here: where its files changed, as the folder they share and up to three folders (📁) or files (📄) in it, then <code>…</code> (<code>changed: services/core/ 📁 cmd/  📁 internal/  📄 go.mod</code>; one file: <code>changed: apps/api/ 📄 orders.go</code>), or what pulls it in.</li>
       <li><b>◇ From main</b>, on one line: main's services it uses, with their state (<code>(routed)</code>: main's copy answering on this worktree's port), and how many it doesn't.</li>
       <li>Its <b>problems</b>, the same texts as <a href="#messages">every message</a> that <a href="#status"><code>hydra status</code></a> prints, each with its fix (<code>f runs it</code> marks a fix that is a hydra command), or <code>✓ nothing wrong</code>.</li>
     </ol>
@@ -764,7 +764,8 @@ ring-schema  main         ! 4 commits behind  ring-web
       "behind": 1, "ahead": 1, "outOfStep": [],
       "services": [
         { "name": "api", "runs": "here", "state": "exited with code -1", "health": "failed",
-          "port": 24710, "url": "http://localhost:24710", "why": "changed: services/api/notes.go" },
+          "port": 24710, "url": "http://localhost:24710", "why": "changed: services/api/notes.go",
+          "files": ["services/api/notes.go"] },
         { "name": "db", "runs": "main", "used": true, "state": "running", "health": "up",
           "port": 24330, "why": "shared" },
         …
@@ -794,6 +795,7 @@ ring-schema  main         ! 4 commits behind  ring-web
       <tr><td><code>runs</code></td><td><code>here</code>, <code>main</code> (this worktree uses main's copy) or <code>routed</code> (main's copy, on this worktree's port). <code>used</code>: main's, and something here calls it or waits for it. <code>off</code>: listed here, but off until started.</td></tr>
       <tr><td><code>address</code></td><td>With <a href="#hosts"><code>hosts</code></a>: the service's address by name in this checkout, <code>http://shop-notes.localhost:3900</code> (main's: <code>http://localhost:3900</code>). There whether or not the stack runs; it answers while it does.</td></tr>
       <tr><td><code>health</code></td><td><code>up</code>, <code>done</code>, <code>starting</code>, <code>off</code>, <code>failed</code> or <code>unknown</code>. <code>state</code> is the same in words.</td></tr>
+      <tr><td><code>files</code></td><td>On a service that runs here because its paths matched: the changed files that did (at most 200). <code>why</code> names the first.</td></tr>
       <tr><td><code>main.processes</code></td><td>Every process of main's stack. While the stack is down, what it would run: each service with <code>state</code> <code>not running</code> and <code>health</code> <code>off</code>.</td></tr>
       <tr><td><code>problems</code></td><td>What <code>hydra status</code> prints, one object each. <code>blocks</code>: marked ✗. <code>fix</code>: the fix line. <code>run</code>: the fix as a command to run in that checkout, when it is a hydra command; absent when it is advice.</td></tr>
       <tr><td><code>slot</code></td><td>0: the worktree never ran a stack, so it holds none.</td></tr>

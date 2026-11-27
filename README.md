@@ -283,7 +283,7 @@ the terminal switches while it runs.
 │                                                                              │
 │ ◆ Runs here, and why  1                                                      │
 │   ○ api    not started                                                       │
-│     ↳ changed: apps/api/orders.go                                            │
+│     ↳ changed: apps/api/ 📄 orders.go                                         │
 │ ◇ From main  ● db · 1 unused                                                 │
 │                                                                              │
 │ ✓ nothing in the way: u starts it                                            │

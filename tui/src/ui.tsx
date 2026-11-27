@@ -2,6 +2,7 @@
 // never wrapped, so the frame keeps its height at any width.
 
 import React, { createContext, useContext, useEffect, useState } from "react";
+import stringWidth from "string-width";
 import { Box, Text } from "ink";
 import {
 	bytes,
@@ -16,6 +17,7 @@ import {
 	tildePath,
 	wrap,
 	fitPaths,
+	changedIn,
 	badgeOf,
 	chainText,
 	firstToUpdate,
@@ -59,7 +61,8 @@ export interface Seg {
 	bg?: string;
 }
 
-const len = (s: string) => Array.from(s).length;
+// Columns, not characters: 📁 takes two.
+const len = (s: string) => stringWidth(s);
 
 /** Cuts segments to width columns, with an ellipsis where it cut. */
 function fit(segs: Seg[], width: number): Seg[] {
@@ -274,6 +277,23 @@ function serviceRow(s: Service, nameW: number, whereW: number, stateW: number): 
 	];
 }
 
+/** "changed: services/core/ 📁 cmd  📁 internal  📄 go.mod  …": the folder
+ *  the files share, and up to three of what changed in it. What comes
+ *  before the first file in why ("changed in core") is kept. */
+export function changedRow(why: string, files: string[], width: number): Seg[] {
+	const head = why.includes(": ") ? why.slice(0, why.indexOf(": ")) : "changed";
+	const { dir, items } = changedIn(files);
+	const shown = items.slice(0, 3);
+	const tail: Seg[] = shown.flatMap((it, i) => [
+		{ text: (i ? "  " : " ") + (it.folder ? "📁 " : "📄 ") },
+		{ text: it.name + (it.folder ? "/" : ""), dim: true },
+	]);
+	if (items.length > shown.length) tail.push({ text: "  …", dim: true });
+	const tailLen = tail.reduce((k, x) => k + len(x.text), 0);
+	const lead = fitPaths(`${head}: ${dir}`.trimEnd(), Math.max(10, width - tailLen));
+	return [{ text: lead, dim: true }, ...tail];
+}
+
 /** The detail panel's title: the checkout's name and its state. */
 export function detailTitle(e: Entry, busy?: string): Seg[] {
 	const st = stateOf(e, busy);
@@ -376,7 +396,8 @@ export function detailRows(
 	const stateW = Math.min(24, Math.max(0, ...here.map((s) => len(s.state))));
 	for (const s of here) {
 		add(...serviceRow(s, nameW, whereW, stateW));
-		if (s.why) add({ text: "    ↳ ", color: "gray" }, { text: fitPaths(s.why, width - 6), dim: true });
+		if (s.files?.length) add({ text: "    ↳ ", color: "gray" }, ...changedRow(s.why ?? "changed", s.files, width - 6));
+		else if (s.why) add({ text: "    ↳ ", color: "gray" }, { text: fitPaths(s.why, width - 6), dim: true });
 	}
 
 	// 4. What it takes from main, on one line.

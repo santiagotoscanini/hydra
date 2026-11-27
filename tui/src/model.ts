@@ -506,6 +506,22 @@ export function wrap(text: string, width: number, more = "  "): string[] {
 	});
 }
 
+/** Where a service's changes are: the deepest folder all its changed files
+ *  share, and what in it changed, each a folder or a file, in order of
+ *  name. services/core/cmd/api/main.go alone is services/core/cmd/api/ and
+ *  the file main.go; with services/core/internal/x.go too, services/core/
+ *  and the folders cmd and internal. */
+export function changedIn(files: string[]): { dir: string; items: Array<{ name: string; folder: boolean }> } {
+	const split = files.map((f) => f.split("/"));
+	const dirs = split.map((p) => p.slice(0, -1));
+	let depth = 0;
+	while (dirs.every((d) => d.length > depth && d[depth] === dirs[0]![depth])) depth++;
+	const seen = new Map<string, boolean>();
+	for (const p of split) seen.set(p[depth]!, seen.get(p[depth]!) || p.length > depth + 1);
+	const items = [...seen].map(([name, folder]) => ({ name, folder })).sort((a, b) => a.name.localeCompare(b.name));
+	return { dir: split[0]!.slice(0, depth).map((d) => d + "/").join(""), items };
+}
+
 /** One line of at most width: the paths in it shortened in the middle
  *  (apps/web/…/activity.constants.ts), longest first, keeping the file's
  *  name, and only then the end cut with …. Why a service runs is one fact:

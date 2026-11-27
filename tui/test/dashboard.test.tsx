@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import React from "react";
 import { render } from "ink-testing-library";
 import App from "../src/App.js";
-import { ConfirmBody, Footer, ListRow, detailRows, footerKeys, problemRows, Row } from "../src/ui.js";
-import { badgeOf, branchName, entries, fitPaths, fixCommand, stateOf, tree, wrap, type Entry, type Node } from "../src/model.js";
+import { ConfirmBody, Footer, ListRow, changedRow, detailRows, footerKeys, problemRows, Row } from "../src/ui.js";
+import { badgeOf, branchName, changedIn, entries, fitPaths, fixCommand, stateOf, tree, wrap, type Entry, type Node } from "../src/model.js";
 import type { Branch, Snapshot, WorktreeState } from "../src/types.js";
 import { FakeBackend, plain, tick } from "./fake.js";
 import { fixture } from "./fixture.js";
@@ -804,4 +804,22 @@ test("why a service runs stays on one line: long paths give up their middle", ()
 	assert.match(got, /^changed: apps\/.*…\/activity\.constants\.ts$/);
 	assert.equal(fitPaths("changed: apps/api/orders.go", 60), "changed: apps/api/orders.go");
 	assert.equal(fitPaths("needed by api", 60), "needed by api");
+});
+
+test("where a service changed: the folder its files share, and up to three things in it", () => {
+	assert.deepEqual(changedIn(["services/core/cmd/api/main.go"]), { dir: "services/core/cmd/api/", items: [{ name: "main.go", folder: false }] });
+	assert.deepEqual(changedIn(["services/core/cmd/api/main.go", "services/core/internal/x.go", "services/core/go.mod"]), {
+		dir: "services/core/",
+		items: [
+			{ name: "cmd", folder: true },
+			{ name: "go.mod", folder: false },
+			{ name: "internal", folder: true },
+		],
+	});
+	const row = (segs: ReturnType<typeof changedRow>) => segs.map((x) => x.text).join("");
+	assert.equal(row(changedRow("changed: services/core/cmd/api/main.go", ["services/core/cmd/api/main.go"], 70)), "changed: services/core/cmd/api/ 📄 main.go");
+	assert.equal(
+		row(changedRow("changed in core: a/b/c.go", ["a/b/c.go", "a/d/e.go", "a/f.go", "a/g/h.go"], 70)),
+		"changed in core: a/ 📁 b/  📁 d/  📄 f.go  …",
+	);
 });

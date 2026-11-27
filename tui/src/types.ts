@@ -24,6 +24,8 @@ export interface Service {
 	/** Its address by checkout name (x-hydra hosts): http://<worktree>.localhost:PORT. */
 	address?: string;
 	why?: string;
+	/** the changed files that made it run here (at most 200) */
+	files?: string[];
 	memory?: number;
 }
 

@@ -98,10 +98,13 @@ type Upstream struct {
 
 // Service is one row of the plan.
 type Service struct {
-	Name      string
-	Local     bool
-	Why       string // why it runs locally, or why it doesn't
-	Port      int    // port of the instance this checkout uses (0 = none)
+	Name  string
+	Local bool
+	Why   string // why it runs locally, or why it doesn't
+	// Files are the changed files that made it run here, when its paths
+	// did (at most 200): the dashboard shows where they are.
+	Files     []string
+	Port      int // port of the instance this checkout uses (0 = none)
 	PortEnv   string
 	Prepare   string // rendered prepare command, local services only
 	Disabled  bool   // process-compose `disabled: true`: listed, started by hand
@@ -317,6 +320,7 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 	//    topmost worktree that changed it, which carries the lower layers'
 	//    commits plus its own edits. Global paths only touch services that
 	//    declare paths of their own; the rest are infra.
+	files := map[string][]string{}
 	type sharedHit struct{ name, reason, file string }
 	var sharedHits []sharedHit
 	for i := top; i >= 0; i-- {
@@ -340,6 +344,7 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 				}
 				if want(name, "changed"+in+": "+f) {
 					owner[name] = i
+					files[name] = capped(allMatches(s.Paths, layers[i].Changed))
 				}
 			} else if f, ok := firstMatch(st.Hydra.GlobalPaths, layers[i].Changed); ok && !s.Shared {
 				if want(name, "changed"+in+": "+f+" (global)") {
@@ -481,7 +486,7 @@ func Build(st *config.Stack, req Request) (*Plan, error) {
 			}
 			continue
 		}
-		row := Service{Name: name, Source: name, Local: local, Why: reason, PortEnv: s.PortEnv, Disabled: off(name)}
+		row := Service{Name: name, Source: name, Local: local, Why: reason, Files: files[name], PortEnv: s.PortEnv, Disabled: off(name)}
 		if local {
 			row.Root, row.Layer = layers[owner[name]].Root, layers[owner[name]].Name
 			row.FollowDeps = followDeps[name]
@@ -734,6 +739,15 @@ func dedupe(xs []string) []string {
 		}
 	}
 	return out
+}
+
+// capped keeps Service.Files short: a branch that moved a whole package
+// needs no list of thousands to say where it changed.
+func capped(files []string) []string {
+	if len(files) > 200 {
+		return files[:200]
+	}
+	return files
 }
 
 // allMatches returns every path that firstMatch would accept.
