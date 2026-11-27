@@ -29,6 +29,15 @@ hydra version                                      # which build, which process-
 The dashboard (bare `hydra` in a terminal) needs Node.js 20 or later; every
 command works without it.
 
+For coding agents, the repository is also a plugin marketplace: the
+`hydra` plugin brings the MCP server and three skills (see
+[The agent plugin](#the-agent-plugin-and-skills)).
+
+```
+/plugin marketplace add santiagotoscanini/hydra     # Claude Code
+/plugin install hydra@hydra
+```
+
 Working on hydra itself: `make link` puts this checkout's build on PATH as
 `hydra` (and unlinks Homebrew's), `make build` refreshes it, `make unlink`
 goes back.
@@ -334,7 +343,8 @@ the agent's own worktree's stack. In the main checkout it answers
 hydra printed them, and stdout carries nothing but protocol messages. The
 manual suggests deny rules for the shell commands the tools replace
 (`process-compose`, `hydra down`, `hydra update`, `supabase stop`,
-`supabase db reset`), and an ask rule for `mcp__hydra__update_main`.
+`supabase db reset`), and an ask rule for `mcp__hydra__update_main`
+(`mcp__plugin_hydra_hydra__update_main` with the plugin).
 
 The server also ships a prompt, `update_all` (`/mcp__hydra__update_all` in
 Claude Code): the workflow for bringing main and every worktree up to date.
@@ -348,6 +358,31 @@ worktree that the agent removes afterwards. An ambiguous
 conflict is aborted and comes back as a question. It never pushes, rebases
 or forces, and skips worktrees with uncommitted work. It ends with a table
 of what happened to each.
+
+### The agent plugin and skills
+
+`plugins/hydra/` is a plugin for Claude Code and Codex, listed by the
+marketplaces in `.claude-plugin/marketplace.json` and
+`.agents/plugins/marketplace.json`. It registers `hydra mcp` (Claude Code;
+in Codex, `codex mcp add hydra -- hydra mcp`) and ships three skills, plain
+Markdown in `plugins/hydra/skills/`:
+
+| Skill | For |
+|---|---|
+| `hydra` | running the app in a worktree: the tools, ports, logs, and what to do with each ✗ |
+| `hydra-setup` | setting hydra up in a repository: the `x-hydra` blocks, checked with `hydra plan` |
+| `hydra-update-all` | the `update_all` prompt as a skill, only when the developer types it; a test keeps it equal to the prompt (`HYDRA_WRITE_SKILLS=1 go test -run TestPlugin ./cmd/hydra` writes it again) |
+
+```
+claude plugin marketplace add santiagotoscanini/hydra && claude plugin install hydra@hydra
+codex plugin marketplace add santiagotoscanini/hydra
+npx skills add santiagotoscanini/hydra              # the skills alone, for any agent
+```
+
+With the plugin, Claude Code names the tools `mcp__plugin_hydra_hydra__…`
+and the skills `/hydra:hydra`, `/hydra:hydra-setup`,
+`/hydra:hydra-update-all`. A hand registration of `hydra mcp` should then
+be removed, or every tool shows up twice.
 
 ### Watching
 

@@ -42,6 +42,7 @@
   <a href="#updating">Updating main</a>
   <a href="#cleanup">Stopping and cleaning up</a>
   <a href="#agents">With coding agents</a>
+  <a href="#plugin">The agent plugin and skills</a>
   <a href="#mcp">For agents: hydra mcp</a>
   <a href="#troubleshooting">When something is wrong</a>
   <a href="#journal">The journal</a>
@@ -593,24 +594,23 @@ ring-schema  main         ! 4 commits behind  ring-web
   <section id="dashboard">
     <h2>The dashboard</h2>
     <p>Type <code>hydra</code>, with nothing after it, in a terminal anywhere in the repository. It opens a dashboard of the main checkout and every worktree, with the one you typed it in chosen, and keeps itself up to date. It only shows what hydra's commands would tell you, and every key runs one of them.</p>
-    <div class="code">
+    <div class="code term">
       <div class="file">hydra, in examples/demo/dashboard.sh, 80 columns</div>
-<pre data-lang="text">
- hydra  main   main up · 0 of 6 worktrees up · 8 out of date · 1 on a merged PR
+<pre> hydra  main   main up · 0 of 6 worktrees up · 8 out of date · 1 on a merged PR
 ╭─ Checkouts 9 ────────────────────────────────────────────────────────────────╮
-│ ● main                    up                                      up to date │
-│▌├─○ api                   down          #7 ✓                   1 behind main │
-│ ├─○ clash                 down                    1 behind main · 1 conflict │
-│ ├─◇ ring-schema           no checkout                          1 behind main │
-│ │ └─◇ ring-core           no checkout                ↑ ring-schema is behind │
-│ │   └─○ ring-web          down                       ↑ ring-schema is behind │
-│ └─○ web                   down                                 1 behind main │
-│   └─○ stacked             down                               ↑ web is behind │
-│     └─○ deeper            down          #8 merged   PR merged: nothing to do │
+│ <span class="g">▣</span> main                    up                                      up to date │
+│▌├─<span class="g">▣</span> api                   down          #7 ✓                   1 behind main │
+│ ├─<span class="g">▣</span> clash                 down                    1 behind main · 1 conflict │
+│ ├─<span class="g">⎇</span> ring-schema           branch only                          1 behind main │
+│ │ └─<span class="g">⎇</span> ring-core           branch only                ↑ ring-schema is behind │
+│ │   └─<span class="g">▣</span> ring-web          down                       ↑ ring-schema is behind │
+│ └─<span class="g">▣</span> web                   down                                 1 behind main │
+│   └─<span class="g">▣</span> stacked             down                               ↑ web is behind │
+│     └─<span class="g">▣</span> deeper            down          #8 merged   PR merged: nothing to do │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ api  ○ down ────────────────────────────────────────────────────────────────╮
 │ api · ~/code/shop/api                                                        │
-│ 85fb02ad0 api: orders                                                        │
+│ 2c059c488 api: orders                                                        │
 │                                                                              │
 │ ◎ PR  #7 open · review required · checks passing                             │
 │   https://example.invalid/demo/repo/pull/7  p opens it                       │
@@ -633,26 +633,25 @@ ring-schema  main         ! 4 commits behind  ring-web
     </div>
     <p>The <b>Checkouts</b> panel has one line per checkout, drawn as a tree: main at the top, the worktrees on main under it, and each <a href="#stacks">stacked</a> branch under the branch it is stacked on, joined by thin lines (<code>├─</code>, <code>└─</code>). Branches under the same parent are in order of name, so a row doesn't move when its stack starts or stops; <kbd>↑</kbd> and <kbd>↓</kbd> go down the tree as it reads. The chosen one has a coloured background and a <code>▌</code> at its left edge; the dashboard starts on the one you typed <code>hydra</code> in.</p>
     <p>A branch runs on the code of every branch under it, so hydra only works when each one has what its parent has. Each row says how it stands against its own parent, and a branch whose parent, or any branch above it, is behind is out of date too, even when it has everything its parent has. The first branch of a chain that is behind is in strong yellow (red with conflicts); the branches under it that are in step with their parent say <code>↑ fla-709 is behind</code>, fainter, naming where the chain goes stale. That one is updated first; <kbd>U</kbd> updates every branch in that order. The header counts them: <code>1 of 5 worktrees up · 5 out of date</code>, or <code>all in step</code>. When main is behind its upstream, every branch is, so the header says it once (<code>main up, 10 behind upstream (U)</code>) and the rows don't repeat it.</p>
-    <p>A PR stack is often checked out at its top only. Its lower branches are rows too, in their place in the chain, with a hollow <code>◇</code>, a muted name and <code>no checkout</code> instead of up or down (see <a href="#stacks-bare">branches with no worktree</a>). The same rules apply: below, <code>ring-web</code> merged main straight in, but <code>ring-schema</code> under it didn't, so <code>ring-web</code> is out of date through it. Nothing runs on such a row, so the keys offer only <kbd>m</kbd>, which merges its parent into it without a checkout (and <kbd>p</kbd>, with a PR).</p>
+    <p>A PR stack is often checked out at its top only. Its lower branches are rows too, in their place in the chain, marked <code>⎇</code>, with a muted name and <code>branch only</code> instead of up or down (see <a href="#stacks-bare">branches with no worktree</a>). The same rules apply: below, <code>ring-web</code> merged main straight in, but <code>ring-schema</code> under it didn't, so <code>ring-web</code> is out of date through it. Nothing runs on such a row, so the keys offer only <kbd>m</kbd>, which merges its parent into it without a checkout (and <kbd>p</kbd>, with a PR).</p>
     <p id="dashboard-prs">Each row also has its branch's pull request, briefly, read from GitHub with <a href="#prs">gh</a>: <code>#7 ✓</code>, <code>#10265 draft</code>, <code>#10265 ✗ checks</code>. A branch whose PR is merged or closed has nothing left to do: its row says <code>PR merged: nothing to do</code> in strong magenta in the place of where it stands against its parent, and the header counts them (<code>1 on a merged PR</code>), so a worktree still running a merged branch stands out. Removing it is up to you, or whatever makes your worktrees; hydra never does. Without gh, logged out or offline, there is no PR column and nothing says so but one muted line at the top of <kbd>?</kbd>.</p>
-    <div class="code">
+    <div class="code term">
       <div class="file">hydra, in examples/demo/dashboard.sh, 80 columns, ring-schema chosen</div>
-<pre data-lang="text">
- hydra  main   main up · 0 of 6 worktrees up · 8 out of date · 1 on a merged PR
+<pre> hydra  main   main up · 0 of 6 worktrees up · 8 out of date · 1 on a merged PR
 ╭─ Checkouts 9 ────────────────────────────────────────────────────────────────╮
-│ ● main                    up                                      up to date │
-│ ├─○ api                   down          #7 ✓                   1 behind main │
-│ ├─○ clash                 down                    1 behind main · 1 conflict │
-│▌├─◇ ring-schema           no checkout                          1 behind main │
-│ │ └─◇ ring-core           no checkout                ↑ ring-schema is behind │
-│ │   └─○ ring-web          down                       ↑ ring-schema is behind │
-│ └─○ web                   down                                 1 behind main │
-│   └─○ stacked             down                               ↑ web is behind │
-│     └─○ deeper            down          #8 merged   PR merged: nothing to do │
+│ <span class="g">▣</span> main                    up                                      up to date │
+│ ├─<span class="g">▣</span> api                   down          #7 ✓                   1 behind main │
+│ ├─<span class="g">▣</span> clash                 down                    1 behind main · 1 conflict │
+│▌├─<span class="g">⎇</span> ring-schema           branch only                          1 behind main │
+│ │ └─<span class="g">⎇</span> ring-core           branch only                ↑ ring-schema is behind │
+│ │   └─<span class="g">▣</span> ring-web          down                       ↑ ring-schema is behind │
+│ └─<span class="g">▣</span> web                   down                                 1 behind main │
+│   └─<span class="g">▣</span> stacked             down                               ↑ web is behind │
+│     └─<span class="g">▣</span> deeper            down          #8 merged   PR merged: nothing to do │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-╭─ ring-schema  ◇ no checkout ─────────────────────────────────────────────────╮
-│ ring-schema · no checkout                                                    │
-│ f9ce348ec ring: schema                                                       │
+╭─ ring-schema  <span class="g">⎇</span> branch only ─────────────────────────────────────────────────╮
+│ ring-schema · branch only: no worktree, no files on disk                     │
+│ 98db69954 ring: schema                                                       │
 │                                                                              │
 │ ◎ PR  none for this branch                                                   │
 │                                                                              │
@@ -677,7 +676,7 @@ ring-schema  main         ! 4 commits behind  ring-web
     <div class="table"><table>
       <tr><th>Part</th><th>What it says</th></tr>
       <tr><td>The name</td><td>The branch, without its <code>you/</code> prefix. A branch that starts with a ticket id shows it first and its title in words: <code>santiago/fla-709-an-advisor-splits</code> is <code>fla-709 an advisor splits</code>. Branches of one stack often share a ticket (<code>scrm-264-app-ring-schema</code>, <code>-core</code>, <code>-web</code>): when a title doesn't fit, they show the ticket and what tells them apart (<code>scrm-264 schema</code>), and messages and badges name them that way (<code>↑ schema is behind</code>). A detached checkout shows its folder. A branch with no worktree is muted.</td></tr>
-      <tr><td>The state</td><td><code>● up</code>; <code>○ down</code> (red for main, which every worktree needs); <code>◌ idle-stopped</code> (hydra stopped it, <a href="#idle">unused</a>); <code>starting 2/3</code> with a spinner, how many of its services are ready; <code>✗ failing</code> (a process here failed); <code>up, 2 issues</code> (up, with problems marked ✗). While a key's command runs in it, a spinner and what it does: <code>starting…</code>, <code>stopping…</code>, <code>restarting api…</code>, <code>checking…</code>. <code>planning</code>: a new worktree hydra hasn't worked out yet. <code>◇ no checkout</code>: a PR stack's branch that no worktree has checked out; nothing runs it.</td></tr>
+      <tr><td>The state</td><td>A worktree, or main, is <code>▣</code>: its files are on disk, and its services run there. The box takes the state's colour: <code>up</code> green; <code>down</code> grey (red for main, which every worktree needs); <code>idle-stopped</code> blue (hydra stopped it, <a href="#idle">unused</a>). The detail's title shows the state as <code>● up</code>, <code>○ down</code>, <code>◌ idle-stopped</code>. <code>starting 2/3</code> with a spinner, how many of its services are ready; <code>✗ failing</code> (a process here failed); <code>up, 2 issues</code> (up, with problems marked ✗). While a key's command runs in it, a spinner and what it does: <code>starting…</code>, <code>stopping…</code>, <code>restarting api…</code>, <code>checking…</code>. <code>planning</code>: a new worktree hydra hasn't worked out yet. <code>⎇ branch only</code>: a PR stack's branch that no worktree has checked out; nothing runs it, and it has no files of its own on disk.</td></tr>
       <tr><td>Its PR</td><td><code>#10265</code> and one word: <code>open</code>, <code>draft</code>, <code>merged</code>, <code>closed</code>; for an open one, <code>✗ checks</code> (a check failed), <code>✗ review</code> (changes requested), <code>◐ checks</code> (checks running), <code>approved</code>, or <code>✓</code> (checks pass). <code>merged</code> with no number: git alone says so (its commits are in <code>origin/main</code>), gh didn't. The column is as wide as its longest text, and is the first thing to go when the list is narrow (the deepest row needs room for its name); the detail always shows the PR.</td></tr>
       <tr><td>Against its parent</td><td><code>1 behind main</code>, <code>7 behind fla-709</code>: commits its parent (main, or the branch it is stacked on) has that it doesn't; bold where the chain goes stale, plain under a branch that is behind too. The parent's name goes when the line is short of room. <code>1 conflict</code>: merging the parent in (or <code>hydra update</code>) would conflict in that many files, in red. <code>↑ web is behind</code>: in step with its parent, but <code>web</code> above it is behind; update <code>web</code> first. <code>in step</code>: it has everything its parent has, and so does every branch up to main. <code>main is older</code>: main's copy of a service this worktree uses is older than its own (see <a href="#instep">in step with main</a>). <code>landed in web</code>: everything on the branch is in its parent already. <code>PR merged: nothing to do</code> (or <code>PR closed</code>): its PR is done, whatever else is true. For main: commits its upstream has that it doesn't, and uncommitted files, or <code>up to date</code>.</td></tr>
     </table></div>
@@ -1080,7 +1079,7 @@ $ hydra down             # when the work is done
 - When you are done: `hydra down`.
 </pre>
     </div>
-    <p>An agent whose tool speaks MCP can use <a href="#mcp"><code>hydra mcp</code></a> instead. It gets the same commands as tools, and those refuse to touch main's stack.</p>
+    <p>An agent whose tool speaks MCP can use <a href="#mcp"><code>hydra mcp</code></a> instead. It gets the same commands as tools, and those refuse to touch main's stack. <a href="#plugin">The hydra plugin</a> installs the server with skills that teach the agent all of this, set hydra up in a new repository, and update every worktree.</p>
     <p><a href="#dashboard">The dashboard</a> is for you; an agent gets the same facts from <code>hydra status</code> (<code>--all</code> for every worktree, <code>--json</code> to parse). Each key of the dashboard runs one of these commands, so whatever an agent can do, you can do from there, and the other way round. Making and removing worktrees is left to git or the tool that manages them: hydra shows a new worktree within a second, and cleans up after a removed one.</p>
     <p>Two things hydra does so that this holds:</p>
     <ul>
@@ -1089,10 +1088,32 @@ $ hydra down             # when the work is done
     </ul>
   </section>
 
+  <section id="plugin">
+    <h2>The agent plugin and skills</h2>
+    <p>The repository is also a plugin marketplace. The <code>hydra</code> plugin gives an agent everything on this page that is for agents, in one install: <a href="#mcp">the MCP server</a>, and three skills, instructions the agent loads when the task calls for them.</p>
+    <div class="table wrap"><table>
+      <tr><th>Skill</th><th>What the agent learns</th><th>Used</th></tr>
+      <tr><td><code>hydra</code></td><td>Running the app in a worktree: the tools (or commands) to start, wait for, read and stop its stack, where its ports and logs are, and what to do with each ✗ of <code>hydra status</code>: which fixes are its own to run, and which go to you.</td><td>When the task needs the app running, or a service doesn't answer</td></tr>
+      <tr><td><code>hydra-setup</code></td><td>Setting hydra up in a repository: learn each service's files, port and callers, write the <code>x-hydra</code> blocks, check them with <code>hydra plan</code> in a throwaway worktree, and hand over what is left to you. The <a href="#quickstart">five steps above</a>, done by the agent.</td><td>When you ask it to set hydra up</td></tr>
+      <tr><td><code>hydra-update-all</code></td><td>Bringing main and every worktree up to date, resolving conflicts: the <a href="#mcp-update-all"><code>update_all</code></a> workflow, word for word, for tools that show skills but not MCP prompts.</td><td>Only when you type it</td></tr>
+    </table></div>
+    <p><strong>Claude Code.</strong> In a session:</p>
+    <div class="code">
+<pre data-lang="text">
+/plugin marketplace add santiagotoscanini/hydra
+/plugin install hydra@hydra
+</pre>
+    </div>
+    <p>Or from a shell: <code>claude plugin marketplace add santiagotoscanini/hydra</code>, then <code>claude plugin install hydra@hydra</code>. The skills are then <code>/hydra:hydra</code>, <code>/hydra:hydra-setup</code> and <code>/hydra:hydra-update-all</code>, and the agent picks the first two by itself when they fit. The plugin follows the repository: <code>claude plugin update hydra@hydra</code> gets what is new. It starts <code>hydra mcp</code> from your <code>PATH</code>, so <a href="#install">install hydra</a> first; <code>/mcp</code> should show <code>plugin:hydra:hydra</code> connected. With the plugin, the server's tools are named <code>mcp__plugin_hydra_hydra__…</code> in permission rules (see <a href="#mcp-rules">the rules</a>). If you registered <code>hydra mcp</code> by hand before, remove that (<code>claude mcp remove hydra --scope user</code>), or the agent gets every tool twice.</p>
+    <p><strong>Codex.</strong> <code>codex plugin marketplace add santiagotoscanini/hydra</code>, then install hydra from the plugin directory. Codex's plugin brings the skills; register the server with <code>codex mcp add hydra -- hydra mcp</code>.</p>
+    <p><strong>Any other agent</strong> that reads skills (Cursor, OpenCode, …): <code>npx skills add santiagotoscanini/hydra</code> copies them into its skills folder, and its own MCP settings take <code>hydra mcp</code>. Or copy them by hand: they are plain Markdown, in <a href="https://github.com/santiagotoscanini/hydra/tree/main/plugins/hydra/skills"><code>plugins/hydra/skills/</code></a>.</p>
+    <p>The skills are general: they don't know your services. Put what is particular to your repository (its ports, its seed users, which fixes your agents may run) in its <code>AGENTS.md</code>, or in a skill of your own that says to read <code>hydra</code> first.</p>
+  </section>
+
   <section id="mcp">
     <h2>For agents: hydra mcp</h2>
     <p><code>hydra mcp</code> is an <a href="https://modelcontextprotocol.io">MCP</a> server for coding agents. The agent gets the commands above as tools: <code>up</code>, <code>wait</code>, <code>status</code>, <code>logs</code>, <code>restart</code>, <code>down</code>. It calls them instead of typing commands into a shell, and it gets typed answers back. Three more, and a prompt, <a href="#mcp-update-all">bring main and every worktree up to date</a>, with the agent resolving the conflicts. With a shell, agents get things wrong in ways that cost you. They run process-compose themselves, which starts everything on main's ports. They stop main's stack because theirs looks broken. They run <code>supabase stop</code> on the database everyone uses. A tool can only start, stop or restart the agent's own worktree. In the main checkout it refuses, and tells the agent to ask you.</p>
-    <p>The agent's tool (Claude Code, Codex, T3) starts <code>hydra mcp</code> once per session, in the directory the session runs in. The server works on the checkout that directory is in, the way every hydra command does. Register it once:</p>
+    <p>The agent's tool (Claude Code, Codex, T3) starts <code>hydra mcp</code> once per session, in the directory the session runs in. The server works on the checkout that directory is in, the way every hydra command does. <a href="#plugin">The plugin</a> registers it in Claude Code. Without the plugin, register it once:</p>
     <div class="code">
 <pre data-lang="sh">
 $ claude mcp add --scope user hydra -- hydra mcp     # Claude Code, every project
@@ -1169,7 +1190,7 @@ up {"services": ["worker"]}, then wait {"processes": ["worker"]}
     </div>
 
     <h3 id="mcp-update-all">Updating main and every worktree</h3>
-    <p>The server ships a prompt, <code>update_all</code>: the workflow for bringing main and every worktree up to date, with the agent resolving the conflicts <code>hydra update</code> leaves alone. Claude Code shows it as a command, in any repository where <code>hydra mcp</code> is registered:</p>
+    <p>The server ships a prompt, <code>update_all</code>: the workflow for bringing main and every worktree up to date, with the agent resolving the conflicts <code>hydra update</code> leaves alone. Claude Code shows it as a command, in any repository where <code>hydra mcp</code> is registered (<code>/mcp__plugin_hydra_hydra__update_all</code> when it came with the plugin, which also has the same workflow as the skill <code>/hydra:hydra-update-all</code>):</p>
     <div class="code">
 <pre data-lang="text">
 /mcp__hydra__update_all
@@ -1225,13 +1246,14 @@ Update in this order: a worktree after the one it is stacked on (└).
       "Bash(supabase db reset:*)"
     ],
     "ask": [
-      "mcp__hydra__update_main"
+      "mcp__hydra__update_main",
+      "mcp__plugin_hydra_hydra__update_main"
     ]
   }
 }
 </pre>
     </div>
-    <p><code>hydra update</code> pulls main and merges into every worktree. The agent gets <code>update_here</code> for its own, and <code>update_main</code> and <code>update_worktree</code> for <a href="#mcp-update-all">updating everything</a>. <code>update_main</code> changes your main checkout and stack: the ask rule has Claude Code ask you each time the agent calls it. Other tools write rules their own way; the commands to deny are the same.</p>
+    <p><code>hydra update</code> pulls main and merges into every worktree. The agent gets <code>update_here</code> for its own, and <code>update_main</code> and <code>update_worktree</code> for <a href="#mcp-update-all">updating everything</a>. <code>update_main</code> changes your main checkout and stack: the ask rule has Claude Code ask you each time the agent calls it. The second name is the same tool when the server came with <a href="#plugin">the plugin</a>. Other tools write rules their own way; the commands to deny are the same.</p>
   </section>
 
   <section id="troubleshooting">
@@ -1386,7 +1408,7 @@ note: changed, but in no service's paths, so nothing runs here for them: package
     <p>A PR stack is often checked out at its top only: <code>main ← schema ← core ← web</code>, with one worktree, for <code>web</code>. <code>web</code> runs <code>schema</code>'s and <code>core</code>'s code, so it is only as current as they are: if someone merged main straight into <code>web</code>, <code>web</code> is in step with main, but <code>schema</code> and <code>core</code> still lack main's commits, and the pull requests under <code>web</code> don't have them. hydra counts such branches as part of the chain:</p>
     <ul>
       <li><b>Where it finds them.</b> First in the stacks the <code>gh stack</code> extension keeps (<code>.git/gh-stack</code>): a stack on main that holds a worktree's branch says what each branch sits on, up to the highest one checked out. Otherwise from ancestry: the local branches the worktree's branch contains that main doesn't, when they form a strict chain, each containing the one under it. A branch that only took merges since (its parent merged in) still counts. <code>backup/*</code>, branches merged into main (or its remote-tracking branch), a sibling with commits of its own (a prototype cut from <code>schema</code>), and branches merged in from elsewhere that make no chain never do. Only branches under a worktree's branch count: one nobody runs needs nothing. Finding them never asks GitHub (only their <a href="#prs">PR status</a> does).</li>
-      <li><b>Where you see them.</b> In <a href="#status"><code>hydra status --all</code></a>, in <a href="#json"><code>hydra status --json</code></a> (<code>branches</code>), in <a href="#dashboard">the dashboard</a> (<code>◇ no checkout</code>) and in the <a href="#mcp"><code>worktrees</code></a> tool, each against its parent. <code>web</code> is then "on <code>core</code>", and <code>hydra status</code> there warns when one of them is behind its parent.</li>
+      <li><b>Where you see them.</b> In <a href="#status"><code>hydra status --all</code></a>, in <a href="#json"><code>hydra status --json</code></a> (<code>branches</code>), in <a href="#dashboard">the dashboard</a> (<code>⎇ branch only</code>) and in the <a href="#mcp"><code>worktrees</code></a> tool, each against its parent. <code>web</code> is then "on <code>core</code>", and <code>hydra status</code> there warns when one of them is behind its parent.</li>
       <li><b>How they are updated.</b> <code>hydra update</code> goes parents first, main, <code>schema</code>, <code>core</code>, <code>web</code>, and merges a branch with no worktree without a checkout; <code>hydra update --branch NAME</code> does one. A conflict needs a checkout: a temporary worktree (see <a href="#update-branch">a branch with no checkout</a>).</li>
       <li><b>What runs doesn't change.</b> A branch with no worktree has no files of its own to run from, and what it changed is in <code>web</code>'s worktree, so it runs there as part of <code>web</code>'s layer.</li>
     </ul>

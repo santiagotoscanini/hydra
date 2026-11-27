@@ -61,7 +61,7 @@ Use these tools, never a shell, to start, stop or restart the stack: never run p
 - logs and restart for a process that fails; down when you are done.
 - When status says this worktree is behind main, update_here merges main in.
 Main's stack belongs to the developer: the tools read it (main_status) but refuse to change it. When main's stack is down or broken, tell the developer what main_status says and let them fix it.
-Only when the developer asks to update main and every worktree: the update_all prompt is the workflow (worktrees, update_main, update_worktree).`
+Only when the developer asks to update main and every worktree: the update_all prompt (or the hydra-update-all skill) is the workflow (worktrees, update_main, update_worktree).`
 
 func mcpCmd(args []string) error {
 	if len(args) > 0 {

@@ -435,6 +435,14 @@ hydra command does. Rules:
   restarts nothing; `update_worktree` takes `since`, the commit before
   the merge, and restarts what changed since, with the code `hydra
   update` uses.
+- **Skills next to the server, as a plugin.** `plugins/hydra/` packages
+  the server with three skills (running the app in a worktree, setting
+  hydra up, updating everything), listed by marketplaces for Claude Code
+  and Codex, so one install gives an agent both. The skills are general;
+  what is particular to a repository stays in its own `AGENTS.md`.
+  `hydra-update-all` is the `update_all` prompt for tools that show skills
+  but not prompts; a test writes it from the prompt and fails when they
+  differ, so there is still one source.
 - **stdout is the protocol's.** Much of hydra prints to stdout, so while
   the server runs `os.Stdout` is stderr and the messages go to the stdout
   the process started with. The tests and `examples/demo/mcp.sh` check

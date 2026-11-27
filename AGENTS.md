@@ -13,6 +13,7 @@ main checkout's copies of the rest. See `README.md` for what it does and
 | `internal/` | `config` (the `x-hydra` keys), `plan` (what runs where, and what is out of step with main), `render` (the generated file), `stack` (stacked worktrees), `router` + `routes` + `hook` (routed services), `pc` (process-compose's HTTP API), `slots`, `gitx`, `glob`, `changes` |
 | `tui/` | The dashboard: an Ink (React) app in TypeScript. `npm run build` bundles it into `cmd/hydra/dashboard.mjs` and `dashboard.sum` (commit both; `make build` runs it); it reads `hydra status --json --watch` and runs hydra commands, nothing else |
 | `examples/demo/` | Mock stacks and scripts that run hydra end to end (`run.sh`, `stack.sh`, `routed.sh`, `update.sh`, `tls.sh`, `mcp.sh`, which talks MCP to `hydra mcp`, and `dashboard.sh`, which drives the dashboard in tmux) |
+| `plugins/hydra/` | The agent plugin: `hydra mcp` and three skills (`skills/*/SKILL.md`); `.claude-plugin/marketplace.json` (Claude Code) and `.agents/plugins/marketplace.json` (Codex) list it. `hydra-update-all` is written from the `update_all` prompt (`cmd/hydra/plugin_test.go`) |
 | `site/` | The site at <https://hydra.toscanini.me>: static HTML, no build step, deployed by `.github/workflows/pages.yml` on push to `main` |
 
 ## Keep the docs in sync with the code
@@ -34,6 +35,8 @@ in the same commit, every place that describes it:
 - `site/index.html` and `site/app.js` (the homepage, its animation and the
   planner demo, which reimplements `hydra plan` for a sample config)
 - `hydra --help` (`usage` in `cmd/hydra/main.go`)
+- the skills in `plugins/hydra/skills/`, which tell agents what to type and
+  what each message means
 
 Removed things are removed from all of them too; renamed things are renamed
 everywhere. Before committing, search the repo for the old name or

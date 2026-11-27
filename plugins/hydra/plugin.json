@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hydra",
+  "version": "0.1.0",
+  "description": "Skills for hydra, the process-compose wrapper that runs one full dev stack in the main checkout and only what each git worktree changed: running the app in a worktree, setting hydra up in a repository, and updating main and every worktree. Register the MCP server too: codex mcp add hydra -- hydra mcp.",
+  "author": {
+    "name": "Santiago Toscanini",
+    "url": "https://github.com/santiagotoscanini"
+  },
+  "homepage": "https://hydra.toscanini.me/docs/#plugin",
+  "repository": "https://github.com/santiagotoscanini/hydra",
+  "keywords": ["process-compose", "git-worktree", "dev-stack", "mcp", "agents"]
+}

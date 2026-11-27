@@ -1,0 +1,25 @@
+{
+  "name": "hydra",
+  "description": "hydra for coding agents: the hydra MCP server, so an agent starts, checks and stops its own worktree's stack and can't touch main's, and skills to run the app in a worktree, set hydra up in a repository, and update main and every worktree. Needs hydra on PATH.",
+  "author": {
+    "name": "Santiago Toscanini",
+    "url": "https://github.com/santiagotoscanini"
+  },
+  "homepage": "https://hydra.toscanini.me/docs/#plugin",
+  "repository": "https://github.com/santiagotoscanini/hydra",
+  "keywords": [
+    "process-compose",
+    "git-worktree",
+    "dev-stack",
+    "mcp",
+    "agents"
+  ],
+  "mcpServers": {
+    "hydra": {
+      "command": "hydra",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

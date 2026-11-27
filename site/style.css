@@ -338,3 +338,19 @@ pre.has-xh .ln:not(.xh) .k { color: var(--ink-3); }
 .term .hl { background: color-mix(in srgb, var(--sel) 22%, transparent); }
 
 kbd { font-size: 0.82em; padding: 0 5px; border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 3px; background: var(--panel); white-space: nowrap; }
+
+/* The landing's screens: one terminal at a time, picked by a tab. */
+.shots { margin-top: 16px; }
+.shots-bar { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.shots-bar button { border: 1px solid var(--line-2); background: none; cursor: pointer; padding: 4px 10px; border-radius: 3px; font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); }
+.shots-bar button:hover { color: var(--ink); border-color: var(--ink-3); }
+.shots-bar button[aria-selected="true"] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.shots .code { width: fit-content; max-width: 100%; }
+.shots .file { white-space: normal; width: 0; min-width: 100%; box-sizing: border-box; }
+/* 150 columns fit the page at desktop width; narrower, the box scrolls. */
+.term.wide pre { font-size: 10px; padding-left: 12px; padding-right: 12px; }
+.skills { margin: 14px 0 0; padding-left: 20px; }
+.skills li { margin: 8px 0; }
+/* ▣ and ⎇ come from a fallback font: hold each to one cell, so the box's
+   right edge stays straight. */
+.term .g { display: inline-block; width: 1ch; }

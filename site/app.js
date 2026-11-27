@@ -352,3 +352,17 @@ document.addEventListener("click", function (e) {
     if (el) io.observe(el);
   });
 })();
+
+// The landing's screens: a tab shows one, hides the others.
+document.querySelectorAll("[data-shots]").forEach(function (box) {
+  var tabs = box.querySelectorAll('[role="tab"]');
+  tabs.forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      tabs.forEach(function (t) {
+        var on = t === tab;
+        t.setAttribute("aria-selected", on ? "true" : "false");
+        document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+      });
+    });
+  });
+});

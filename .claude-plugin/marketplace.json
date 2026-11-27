@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "hydra",
+  "description": "hydra for coding agents: its MCP server, and skills to run the app in a worktree, set hydra up in a repository, and update main and every worktree.",
+  "owner": {
+    "name": "Santiago Toscanini",
+    "url": "https://github.com/santiagotoscanini"
+  },
+  "plugins": [
+    {
+      "name": "hydra",
+      "source": "./plugins/hydra",
+      "description": "The hydra MCP server (hydra mcp) and three skills: running the app in a worktree, setting hydra up in a repository, and updating main and every worktree.",
+      "category": "development"
+    }
+  ]
+}
