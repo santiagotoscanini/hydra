@@ -50,6 +50,9 @@ put() { mkdir -p "$(dirname "$1")"; echo "${2:-$1}" >"$1"; }
 fail() { echo "FAILED: $*" >&2; T capture-pane -p -t d >&2 || true; exit 1; }
 screen() { echo "--- $1"; T capture-pane -p -t d | sed -e "s#$repo#<repo>#g" -e 's/[[:space:]]*$//' | cat -s; echo; }
 waitfor() { for _ in $(seq 80); do T capture-pane -p -t d | grep -qE -- "$1" && return 0; sleep 0.25; done; fail "no /$1/ on the screen"; }
+# Until nothing on the screen matches: a slow machine (CI) is still
+# planning some worktrees when the list first shows.
+waitgone() { for _ in $(seq 240); do T capture-pane -p -t d | grep -qE -- "$1" || return 0; sleep 0.25; done; fail "/$1/ stayed on the screen"; }
 procs() { (cd "$1" && "$H" process list 2>/dev/null | tr '\n' ' '); }
 
 # A repository with five worktrees: one that changed the api, one the web
@@ -119,6 +122,7 @@ start() { # cols rows
   T new -d -s d -x "$1" -y "$2" -c "$repo/api" \
     "env PC_PORT_NUM=$PC_PORT_NUM HYDRA_CACHE_DIR=$repo/cache HYDRA_GH=$repo/bin/gh $H; echo EXITED-\$?; sleep 600"
   waitfor 'Checkouts [0-9]'
+  waitgone ' planning '
   sleep 1
 }
 
