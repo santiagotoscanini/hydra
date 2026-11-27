@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import type { Snapshot } from "./types.js";
 import { shQuote } from "./model.js";
 import { ASK, REPORT_OFF, REPORT_ON } from "./theme.js";
+import { MOUSE_OFF, MOUSE_ON } from "./mouse.js";
 
 export interface Result {
 	code: number;
@@ -124,9 +125,9 @@ function handOver(exe: string, cmd: TerminalCommand): number {
 	const out = process.stdout;
 	const stdin = process.stdin;
 	const wasRaw = stdin.isTTY ? stdin.isRaw : false;
-	// The command gets the terminal's keys, so no theme report may land
-	// among them; the dashboard asks again when it is back.
-	out.write(REPORT_OFF + ESC.clear + ESC.altOff + ESC.cursorOn);
+	// The command gets the terminal's keys, so no theme or mouse report may
+	// land among them; the dashboard asks again when it is back.
+	out.write(REPORT_OFF + MOUSE_OFF + ESC.clear + ESC.altOff + ESC.cursorOn);
 	if (stdin.isTTY) {
 		try {
 			stdin.setRawMode(false);
@@ -167,7 +168,7 @@ function handOver(exe: string, cmd: TerminalCommand): number {
 				stdin.setRawMode(wasRaw);
 			} catch {}
 		}
-		out.write(ESC.altOn + ESC.cursorOff + ESC.clear + REPORT_ON + ASK);
+		out.write(ESC.altOn + ESC.cursorOff + ESC.clear + REPORT_ON + ASK + MOUSE_ON);
 		redraw();
 	}
 	return status;

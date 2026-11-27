@@ -121,6 +121,11 @@ start() { # cols rows
   T kill-session -t d 2>/dev/null || true
   T new -d -s d -x "$1" -y "$2" -c "$repo/api" \
     "env PC_PORT_NUM=$PC_PORT_NUM HYDRA_CACHE_DIR=$repo/cache HYDRA_GH=$repo/bin/gh $H; echo EXITED-\$?; sleep 600"
+  # The tree is drawn as it stays from its first frame: no branch on main
+  # for a moment, waiting for the stacks.
+  for _ in $(seq 120); do T capture-pane -p -t d | grep -q 'ring-web' && break; sleep 0.05; done
+  T capture-pane -p -t d | grep -qE '│ {3}└─. ring-web' || fail "the first frame with ring-web doesn't have it under its stack"
+  T capture-pane -p -t d | grep -qE '▌▣ main' && fail "the first frame chose main, not the checkout hydra was started in"
   waitfor 'Checkouts [0-9]'
   waitgone ' planning '
   sleep 1
@@ -145,6 +150,21 @@ T capture-pane -p -t d | grep -qE '◆ Runs here, and why' || fail "the chosen w
 T capture-pane -p -t d | python3 -c 'import sys; sys.exit(any(len(l.rstrip("\n")) > 80 for l in sys.stdin))' || fail "a line is wider than 80 columns"
 T send-keys -t d '?'
 waitfor 'PR status from gh, read just now'
+T send-keys -t d Escape
+waitfor 'Checkouts [0-9]'
+# The mouse, as the terminal reports it (SGR, 1-based): a click on a row
+# chooses it, the wheel over the list moves the choice, a click on a key in
+# the footer presses it.
+cell() { # the 1-based column and row of the first match of $1
+  T capture-pane -p -t d | awk -v pat="$1" '{ i = index($0, pat); if (i) { print i, NR; exit } }'
+}
+click() { set -- $(cell "$1"); T send-keys -t d -l $'\e[<0;'"$1;$2"M; T send-keys -t d -l $'\e[<0;'"$1;$2"m; }
+click 'clash'
+waitfor '╭─ clash '
+set -- $(cell 'clash'); T send-keys -t d -l $'\e[<64;'"$1;$2"M
+waitfor '╭─ api '
+click '? help'
+waitfor 'PR status from gh'
 T send-keys -t d Escape
 waitfor 'Checkouts [0-9]'
 T send-keys -t d j j

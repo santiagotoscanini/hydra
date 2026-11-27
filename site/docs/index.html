@@ -698,7 +698,7 @@ ring-schema  main         ! 4 commits behind  ring-web
       <li>Its <b>problems</b>, the same texts as <a href="#messages">every message</a> that <a href="#status"><code>hydra status</code></a> prints, each with its fix (<code>f runs it</code> marks a fix that is a hydra command), or <code>✓ nothing wrong</code>.</li>
     </ol>
     <p>For main: every service it runs (the ones switched off on one line; while its stack is down, what it would run), how it stands against its upstream, and its problems. For a branch with no checkout: its PR, its chain, and that nothing runs it, naming the worktrees stacked on it that run its code.</p>
-    <p>At 120 columns or wider the two sit side by side, and the problems get a panel of their own under the list, so the fixes stay in view however long the detail is. Narrower, the list is on top and the detail ends with the problems. No line wraps at any width: what doesn't fit is cut with <code>…</code>, and <kbd>pgdn</kbd> scrolls the detail.</p>
+    <p>At 120 columns or wider the two sit side by side, and the problems get a panel of their own under the list, so the fixes stay in view however long the detail is. Narrower, the list is on top and the detail ends with the problems. No line wraps at any width: what doesn't fit is cut with <code>…</code>, and <kbd>pgdn</kbd> or the <a href="#dashboard-mouse">mouse wheel</a> scrolls the detail.</p>
 
     <h3>The keys</h3>
     <p>Each key runs the hydra command an agent would type, in the chosen checkout. Anything that stops a stack, runs a fix or moves a branch asks first.</p>
@@ -717,17 +717,31 @@ ring-schema  main         ! 4 commits behind  ring-web
       <tr><td><kbd>U</kbd></td><td>Update everything: <a href="#updating"><code>hydra update</code></a>, which pulls main. Shows the dry run, then asks.</td></tr>
       <tr><td><kbd>t</kbd></td><td>With a <a href="#tunnel">tunnel</a>: take it to the chosen worktree, <code>hydra tunnel take</code>; on main, or on the worktree that holds it, give it back, <code>hydra tunnel release</code>. Says whose copy the webhooks will reach, and asks.</td></tr>
       <tr><td><kbd>R</kbd></td><td>Read everything again now.</td></tr>
-      <tr><td><kbd>pgup</kbd> <kbd>pgdn</kbd></td><td>Scroll the detail.</td></tr>
+      <tr><td><kbd>pgup</kbd> <kbd>pgdn</kbd></td><td>Scroll the detail; in the help, or a command's output, <kbd>↑</kbd> <kbd>↓</kbd> too.</td></tr>
       <tr><td><kbd>?</kbd></td><td>List the keys and what the glyphs, lines and words in the list mean. esc closes it.</td></tr>
       <tr><td><kbd>q</kbd>, ctrl-c</td><td>Quit. Every stack keeps running.</td></tr>
     </table></div>
     <p>The line at the bottom shows only the keys that apply to the chosen checkout (<kbd>u</kbd> when its stack is down, <kbd>⏎</kbd> <kbd>d</kbd> <kbd>r</kbd> when it is up, <kbd>f</kbd> when a problem has a fix it can run, <kbd>m</kbd> when the worktree is behind its parent, named: <code>m merge fla-709</code>, and not on a merged PR; <kbd>p</kbd> when it has a PR; on a branch with no checkout, <kbd>m</kbd> and <kbd>p</kbd> alone), and on the right the ones that always do. Any other key on a branch with no checkout says it has none. <kbd>u</kbd>, <kbd>d</kbd> and <kbd>r</kbd> run in the background: the checkout's row and panel show a spinner and how far it got, a line above the keys says what runs, then how it went, and a command that fails shows its output in the panel. A question (<kbd>d</kbd>, <kbd>f</kbd>, the dry run of <kbd>m</kbd> and <kbd>U</kbd>) takes the panel's place in a yellow box, and <kbd>y</kbd> or <kbd>n</kbd> answers it. <kbd>⏎</kbd>, <kbd>l</kbd>, <kbd>f</kbd> and the yes of <kbd>m</kbd> and <kbd>U</kbd> take the whole terminal, and give it back when they end.</p>
 
+    <h3 id="dashboard-mouse">The mouse</h3>
+    <p>The mouse does what the keys do, where you point:</p>
+    <div class="table"><table>
+      <tr><th>Where</th><th>What it does</th></tr>
+      <tr><td>A checkout in the list</td><td>A click chooses it; the wheel moves the choice up and down.</td></tr>
+      <tr><td>A key at the bottom</td><td>A click presses it: <code>u up</code>, <code>m merge main</code>, <code>? help</code>, and the rest.</td></tr>
+      <tr><td>The detail, the problems, the help, a command's output</td><td>The wheel scrolls it.</td></tr>
+      <tr><td>A branch in the chain</td><td>A click chooses it (the one marked <code>← start here</code>, to update it with <kbd>m</kbd>).</td></tr>
+      <tr><td>A URL (a PR, a service's address)</td><td>A click opens it in the browser.</td></tr>
+      <tr><td>A question or a list to choose from</td><td>A click on <code>y yes, do it</code> or <code>n / esc no</code> answers it; on an item, chooses it.</td></tr>
+      <tr><td>The border between two panels</td><td>Dragging it resizes them: the list's bottom border makes it taller or shorter; at 120 columns or wider, its right border makes it wider. They stay that way until you quit.</td></tr>
+    </table></div>
+    <p>While the dashboard runs, the terminal sends it the mouse, so selecting text to copy needs a modifier: shift in most terminals (Ghostty, kitty, WezTerm, Alacritty, Terminal), option in iTerm2. A command that takes the terminal (<kbd>⏎</kbd>, <kbd>l</kbd>) gets it back as usual.</p>
+
     <h3 id="dashboard-open">Opening a stack, and coming back</h3>
     <p><kbd>⏎</kbd> hands the terminal to <code>process-compose attach</code> on the chosen checkout's stack: every process, its state and its log, the same as <code>hydra attach</code> there. To come back, press <b>F10</b> or <b>ctrl-c</b>. process-compose asks <code>Detach from the remote project?</code>; choose <b>Yes</b>. You are back in the dashboard, and the stack is still running. <kbd>q</kbd> does nothing on that screen.</p>
 
     <h3>How fresh it is</h3>
-    <p>A spinner in the header shows while it reads everything again (<kbd>R</kbd>) or works out a new worktree. Process states are read every second, memory every 5 seconds. What a worktree would run takes git a walk of its working tree, so it is worked out again every 30 seconds while its stack runs and every 2 minutes otherwise. Where a worktree stands against main is worked out again when its branch, main or the branch it is stacked on moves, when files are staged or a merge is begun, resolved or aborted there, and at least every 2 minutes. What moved goes first: after main moves, the worktree you just merged doesn't wait behind the rest. After a key's command, that checkout is read again at once; <kbd>R</kbd> reads everything. With 30 worktrees it costs about a tenth of one core, and it never takes git's index lock.</p>
+    <p>The tree is drawn as it stays from the first frame: where each branch sits in its stack is read before anything else, and the slower parts (how far behind, what would run) fill in after. A spinner in the header shows while it reads everything again (<kbd>R</kbd>) or works out a new worktree. Process states are read every second, memory every 5 seconds. What a worktree would run takes git a walk of its working tree, so it is worked out again every 30 seconds while its stack runs and every 2 minutes otherwise. Where a worktree stands against main is worked out again when its branch, main or the branch it is stacked on moves, when files are staged or a merge is begun, resolved or aborted there, and at least every 2 minutes. What moved goes first: after main moves, the worktree you just merged doesn't wait behind the rest. After a key's command, that checkout is read again at once; <kbd>R</kbd> reads everything. With 30 worktrees it costs about a tenth of one core, and it never takes git's index lock.</p>
     <p>PRs are asked of GitHub every 3 minutes, on <kbd>R</kbd>, and within 15 seconds of a new branch showing up: one <code>gh pr list</code> for every branch shown (one more per 25 branches), in the background, so a slow GitHub never holds up the screen; it gives up after 20 seconds. The answer is kept in <a href="#files">the cache</a>, so the next dashboard starts with it. <kbd>?</kbd> says when gh was last read, or why it can't be.</p>
     <p>New worktrees show up within a second, and removed ones go. Making and removing worktrees isn't the dashboard's job: <code>git worktree add</code>, or whatever makes them for you.</p>
 

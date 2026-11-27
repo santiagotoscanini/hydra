@@ -81,7 +81,8 @@ export function entries(s: Snapshot): Entry[] {
 			commit: w.commit,
 			subject: w.subject,
 			behind: w.behind,
-			parent: w.update?.parent,
+			// Before its git state is worked out, the stack says where it sits.
+			parent: w.update?.parent ?? parentIn(w.stack),
 			// A snapshot from before update.behind: on main, the two are one.
 			behindParent: w.update?.behind ?? ((w.stack?.length ?? 0) <= 1 ? w.behind : 0),
 			ahead: w.ahead,
@@ -113,7 +114,7 @@ export function entries(s: Snapshot): Entry[] {
 			commit: b.commit,
 			subject: b.subject,
 			behind: b.behind,
-			parent: b.update?.parent,
+			parent: b.update?.parent ?? parentIn(b.stack),
 			behindParent: b.update?.behind ?? 0,
 			ahead: b.ahead,
 			dirty: 0,
@@ -271,6 +272,11 @@ export type Staleness =
 	| { kind: "landed" }
 	/** main, or a worktree not worked out yet */
 	| { kind: "none" };
+
+/** The branch a chain (bottom first, its own last) puts it on. */
+function parentIn(stack?: string[]): string | undefined {
+	return stack && stack.length > 1 ? stack[stack.length - 2] : undefined;
+}
 
 /** A checkout's place in the tree: main the root, each worktree under its parent. */
 export interface Node {

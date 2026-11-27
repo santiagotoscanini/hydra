@@ -250,6 +250,11 @@ type snapshotter struct {
 	view    *stackView
 	viewErr error
 	bares   map[string]*wtGit
+	// Where each checkout sits in its stack before its git state is worked
+	// out (by root, or "bare:" and the branch): read from the stack view at
+	// once, so the first snapshot already has the tree its git state will
+	// have, instead of every branch on main for a moment.
+	early   map[string][]string
 	busy    map[string]bool   // a slow refresh of this worktree (or "bare:" branch) is under way
 	gitDirs map[string]string // by worktree root: its git directory, read once
 	changed chan struct{}     // a slow refresh finished
@@ -358,7 +363,7 @@ func newSnapshotter(here gitx.Checkout) (*snapshotter, error) {
 	}
 	return &snapshotter{
 		here: here, main: mainCo,
-		plans: map[string]*wtPlan{}, gits: map[string]*wtGit{}, bares: map[string]*wtGit{}, busy: map[string]bool{}, gitDirs: map[string]string{},
+		plans: map[string]*wtPlan{}, gits: map[string]*wtGit{}, bares: map[string]*wtGit{}, early: map[string][]string{}, busy: map[string]bool{}, gitDirs: map[string]string{},
 		changed: make(chan struct{}, 1),
 		prs:     newPRSource(mainCo.Root),
 	}, nil
@@ -483,6 +488,10 @@ func (s *snapshotter) refresh(wait, force bool, only string) {
 		}
 	}
 
+	if view != nil {
+		s.placeEarly(view, stackBase, mine)
+	}
+
 	s.mu.Lock()
 	s.wts = mine
 	s.view, s.viewErr = view, viewErr
@@ -544,12 +553,14 @@ func (s *snapshotter) refresh(wait, force bool, only string) {
 		for name := range s.bares {
 			if !liveBare[name] {
 				delete(s.bares, name)
+				delete(s.early, "bare:"+name)
 			}
 		}
 	}
 	for root := range s.plans {
 		if !live[root] {
 			delete(s.plans, root) // the worktree was removed
+			delete(s.early, root)
 			delete(s.gits, root)
 			delete(s.gitDirs, root)
 		}
@@ -757,6 +768,52 @@ func gitState(wt stack.Worktree, mainRoot, base, mainHead string, limit int, vie
 	return g
 }
 
+// placeEarly reads from the stack view where each checkout whose git state
+// isn't worked out yet sits, once: the worktrees at the same time, as it
+// holds up the first snapshot.
+func (s *snapshotter) placeEarly(view *stackView, base string, wts []stack.Worktree) {
+	s.mu.Lock()
+	var todo []stack.Worktree
+	for _, wt := range wts {
+		if _, done := s.early[wt.Root]; !done && s.gits[wt.Root] == nil {
+			todo = append(todo, wt)
+		}
+	}
+	var bares []string
+	for _, b := range view.st.Bare {
+		if _, done := s.early["bare:"+b.Name]; !done && s.bares[b.Name] == nil {
+			bares = append(bares, b.Name)
+		}
+	}
+	s.mu.Unlock()
+	if len(todo) == 0 && len(bares) == 0 {
+		return
+	}
+	found := make([][]string, len(todo))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, slowAtOnce)
+	for i, wt := range todo {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if _, chain, err := view.place(wt.Root, base); err == nil {
+				found[i] = chain
+			}
+		}()
+	}
+	wg.Wait()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, wt := range todo {
+		s.early[wt.Root] = found[i] // nil too: it isn't asked again
+	}
+	for _, b := range bares {
+		s.early["bare:"+b] = view.bareChain(b)
+	}
+}
+
 func snapUpdateOf(u *wtUpdate) *snapUpdate {
 	su := &snapUpdate{Parent: u.parent, Behind: u.behind, Action: u.action, Note: u.note, Hand: u.hand}
 	for _, line := range u.detail {
@@ -797,15 +854,18 @@ func (s *snapshotter) build() *snapshot {
 	wts := append([]stack.Worktree(nil), s.wts...)
 	plans := make([]*wtPlan, len(wts))
 	gits := make([]*wtGit, len(wts))
+	early := make([][]string, len(wts))
 	for i, wt := range wts {
-		plans[i], gits[i] = s.plans[wt.Root], s.gits[wt.Root]
+		plans[i], gits[i], early[i] = s.plans[wt.Root], s.gits[wt.Root], s.early[wt.Root]
 	}
 	var bares []stack.Bare
 	var bareGits []*wtGit
+	var bareEarly [][]string
 	if s.view != nil {
 		for _, b := range s.view.st.Bare {
 			bares = append(bares, b)
 			bareGits = append(bareGits, s.bares[b.Name])
+			bareEarly = append(bareEarly, s.early["bare:"+b.Name])
 		}
 	}
 	viewErr := s.viewErr
@@ -854,6 +914,9 @@ func (s *snapshotter) build() *snapshot {
 	}
 	for i, wt := range wts {
 		w := snapWorktreeOf(ms, wt, plans[i], gits[i], mem)
+		if gits[i] == nil && len(early[i]) > 1 {
+			w.Stack = early[i]
+		}
 		for _, v := range views {
 			if v.Holder == wt.Root {
 				w.Tunnel = append(w.Tunnel, v.Name)
@@ -865,6 +928,9 @@ func (s *snapshotter) build() *snapshot {
 	}
 	for i, b := range bares {
 		sb := snapBranchOf(b, bareGits[i])
+		if bareGits[i] == nil && len(bareEarly[i]) > 0 {
+			sb.Stack = bareEarly[i]
+		}
 		sb.PR = s.prs.of(b.Name)
 		snap.Branches = append(snap.Branches, sb)
 	}

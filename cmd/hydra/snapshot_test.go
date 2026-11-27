@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -159,6 +160,38 @@ func TestTheSnapshotSaysHowFarBehindItsParentAWorktreeIs(t *testing.T) {
 		g := gitState(stack.Worktree{Root: wt(name), Branch: name}, main, "main", mainHead, 0, nil)
 		if got := fmt.Sprintf("%s %d", g.update.Parent, g.update.Behind); got != w {
 			t.Errorf("%s: parent and behind = %q, want %q (%s)", name, got, w, g.update.Note)
+		}
+	}
+}
+
+// The first snapshot already has each worktree's place in its stack: the
+// tree is drawn as it will stay, not with every branch on main first.
+func TestTheFirstSnapshotKnowsTheStacks(t *testing.T) {
+	main, _ := stackedRepo(t)
+	all, err := stack.List(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wts []stack.Worktree
+	for _, w := range all {
+		if filepath.Base(w.Root) != "main" {
+			wts = append(wts, w)
+		}
+	}
+	view, err := loadStacks(main, "main", all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &snapshotter{gits: map[string]*wtGit{}, bares: map[string]*wtGit{}, early: map[string][]string{}}
+	s.placeEarly(view, "main", wts)
+	byName := map[string][]string{} // git may name the folders through /private
+	for root, chain := range s.early {
+		byName[filepath.Base(root)] = chain
+	}
+	want := map[string]string{"a": "a", "b": "a b", "c": "a b c", "d": "d"}
+	for name, w := range want {
+		if got := strings.Join(byName[name], " "); got != w {
+			t.Errorf("%s: chain %q, want %q", name, got, w)
 		}
 	}
 }

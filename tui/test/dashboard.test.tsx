@@ -827,3 +827,9 @@ test("where a service changed: the folder its files share, and up to three thing
 		"changed in core: a/\n  📁 b/\n  📁 d/\n  📄 f.go\n  … 2 more",
 	);
 });
+
+test("before its git state is worked out, a worktree already sits under the branch its stack names", () => {
+	const snap = snapOf([wt("a", "main", 0, { update: undefined }), wt("b", "a", 0, { update: undefined, stack: ["a", "b"] })]);
+	const nodes = tree(entries(snap));
+	assert.deepEqual(nodes.map((n) => `${n.depth}:${n.e.branch}`), ["0:main", "1:a", "2:b"]);
+});

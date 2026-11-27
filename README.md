@@ -305,7 +305,10 @@ chosen worktree (on main or its holder, gives it back), `R` reads everything aga
 `?` lists the keys, `q` quits and leaves every stack running. `⏎` opens the
 stack in `process-compose attach`; F10 or ctrl-c, then Yes, comes back with
 the stack still running. Whatever stops a stack or moves a branch asks
-first. It needs Node.js 20+; without a terminal (an agent, a script) or
+first. The mouse works too: a click chooses a checkout, presses a key in
+the footer or opens a URL, the wheel scrolls the panel under it, and
+dragging a panel's border resizes it (shift-drag, or option in iTerm2,
+selects text). It needs Node.js 20+; without a terminal (an agent, a script) or
 with any argument, `hydra` is process-compose as before, and process-compose's
 own TUI on a stack is `hydra up` or `hydra attach`.
 

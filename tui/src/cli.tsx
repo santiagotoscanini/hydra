@@ -6,6 +6,7 @@ import { render } from "ink";
 import App from "./App.js";
 import { ESC, realBackend } from "./hydra.js";
 import { watchTheme, type Theme } from "./theme.js";
+import { MOUSE_OFF, MOUSE_ON, mouseSource } from "./mouse.js";
 
 // By here every module has loaded: a test runs the bundle this far.
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -21,16 +22,19 @@ const backend = realBackend(exe, process.cwd());
 process.stdout.write(ESC.altOn + ESC.cursorOff + ESC.clear);
 // The selection's background and yellow have to suit the terminal's
 // background, which can change while the dashboard runs (theme.ts).
-const app = (theme: Theme) => <App backend={backend} theme={theme} home={process.env["HOME"]} />;
+// The mouse: clicks, the wheel and dragging a panel's border (mouse.ts).
+const mouse = mouseSource();
+const app = (theme: Theme) => <App backend={backend} theme={theme} home={process.env["HOME"]} mouse={mouse.source} />;
 let instance: ReturnType<typeof render> | undefined;
-const theme = watchTheme(process.stdin, (s) => process.stdout.write(s), (t) => instance?.rerender(app(t)));
+const theme = watchTheme(process.stdin, (s) => process.stdout.write(s), (t) => instance?.rerender(app(t)), { onMouse: mouse.emit });
+process.stdout.write(MOUSE_ON);
 
 let left = false;
 const leave = () => {
 	if (left) return;
 	left = true;
 	theme.stop();
-	process.stdout.write(ESC.altOff + ESC.cursorOn);
+	process.stdout.write(MOUSE_OFF + ESC.altOff + ESC.cursorOn);
 };
 process.on("exit", leave);
 

@@ -10,9 +10,10 @@
 // under it: terminals that report changes (mode 2031: Ghostty, kitty, tmux
 // 3.6+) say so, and the others are asked for their background again every
 // few seconds. The replies arrive on stdin, among the keys, so they are
-// taken out of it before Ink reads it.
+// taken out of it before Ink reads it, with the mouse's reports (mouse.ts).
 
 import { PassThrough } from "node:stream";
+import { takeMouse, type MouseEvent } from "./mouse.js";
 
 export type Mode = "light" | "dark";
 
@@ -103,7 +104,7 @@ export function watchTheme(
 	input: NodeJS.ReadStream,
 	write: (s: string) => void,
 	onChange: (t: Theme) => void,
-	{ waitMs = 200, everyMs = 2000 } = {},
+	{ waitMs = 200, everyMs = 2000, onMouse }: { waitMs?: number; everyMs?: number; onMouse?: (e: MouseEvent) => void } = {},
 ): ThemeWatch {
 	let mode: Mode | undefined;
 	let reports = false;
@@ -157,9 +158,12 @@ export function watchTheme(
 	input.setEncoding("utf8");
 	input.on("data", (chunk: string) => {
 		clearTimeout(flush);
-		const got = takeReplies(held + chunk);
-		held = got.held;
+		// The mouse's reports go too (mouse.ts).
+		const mouse = takeMouse(held + chunk);
+		const got = takeReplies(mouse.rest);
+		held = got.held + mouse.held;
 		got.replies.forEach(seen);
+		if (onMouse) mouse.events.forEach(onMouse);
 		if (got.rest) out.write(got.rest);
 		// What looked like the start of a reply and wasn't (alt-] typed
 		// alone) still reaches Ink, a moment late.

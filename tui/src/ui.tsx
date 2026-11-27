@@ -60,6 +60,40 @@ export interface Seg {
 	spin?: boolean;
 	/** a background of its own (a key drawn as a pill) */
 	bg?: string;
+	/** what a click on it does: open a URL, or choose a checkout (its root) */
+	link?: { url?: string; root?: string };
+	/** a key a click on it presses (the footer's) */
+	key?: string;
+}
+
+/** The segment of a row at column x, as Row draws it: for a click. */
+export function segAt(segs: Seg[], width: number, x: number): Seg | undefined {
+	let at = 0;
+	for (const s of fit(segs, width)) {
+		const n = s.spin ? 1 : len(s.text);
+		if (x >= at && x < at + n) return s;
+		at += n;
+	}
+	return undefined;
+}
+
+/** What a click at column x of a row does: its segment's link, or a URL
+ *  written in the text under it. */
+export function linkAt(segs: Seg[], width: number, x: number): { url?: string; root?: string } | undefined {
+	const s = segAt(segs, width, x);
+	if (!s) return undefined;
+	if (s.link) return s.link;
+	// A URL in the text: the one under the click.
+	let at = 0;
+	for (const t of fit(segs, width)) {
+		if (t === s) break;
+		at += t.spin ? 1 : len(t.text);
+	}
+	for (const m of s.text.matchAll(/https?:\/\/\S+/g)) {
+		const from = at + len(s.text.slice(0, m.index));
+		if (x >= from && x < from + len(m[0])) return { url: m[0] };
+	}
+	return undefined;
 }
 
 // Columns, not characters: 📁 takes two.
@@ -490,13 +524,14 @@ function chainRows(e: Entry, width: number, node?: Node, staleOf?: (e: Entry) =>
 		const all = [...node!.chain.filter((x) => x.kind !== "main"), e];
 		const names = labels(all.map((x) => x.branch));
 		const nameW = Math.min(28, Math.max(...all.map((x) => len(names.get(x.branch)!))) + 2);
-		add({ text: "  main", dim: true });
+		const main = node!.chain.find((x) => x.kind === "main");
+		add({ text: "  main", dim: true, link: main ? { root: main.root } : undefined });
 		let quiet: Entry[] = [];
 		const flush = () => {
 			if (quiet.length > 2) {
 				const span = `${names.get(quiet[0]!.branch)} … ${names.get(quiet[quiet.length - 1]!.branch)}`;
 				add({ text: "  │ ", color: "gray" }, { text: pad(span, nameW + 2) }, { text: `in step (${quiet.length})`, dim: true });
-			} else for (const q of quiet) add({ text: "  │ ", color: "gray" }, { text: pad(names.get(q.branch)!, nameW + 2) }, { text: "in step", dim: true });
+			} else for (const q of quiet) add({ text: "  │ ", color: "gray" }, { text: pad(names.get(q.branch)!, nameW + 2), link: { root: q.root } }, { text: "in step", dim: true });
 			quiet = [];
 		};
 		for (const x of all) {
@@ -509,7 +544,7 @@ function chainRows(e: Entry, width: number, node?: Node, staleOf?: (e: Entry) =>
 			const here = x === e;
 			add(
 				{ text: here ? "  └ " : "  │ ", color: "gray" },
-				{ text: pad(names.get(x.branch)!, nameW + 2), bold: here },
+				{ text: pad(names.get(x.branch)!, nameW + 2), bold: here, link: { root: x.root } },
 				{ text: w || "in step", color: w ? (w.includes("conflict") ? "red" : "yellow") : undefined, dim: !w },
 				{ text: x === first ? "   ← start here" : here ? "   ← this one" : "", color: x === first ? "yellow" : undefined, dim: x !== first },
 			);
@@ -636,22 +671,29 @@ export function ConfirmBody({ lines: raw, width, height }: { lines: string[]; wi
 			<Row
 				width={width}
 				segs={[
-					{ text: " y ", color: "black", bg: "yellow", bold: true },
-					{ text: " yes, do it    " },
-					{ text: "n", color: "cyan", bold: true },
-					{ text: " / ", dim: true },
-					{ text: "esc", color: "cyan", bold: true },
-					{ text: " no", dim: true },
+					{ text: " y ", color: "black", bg: "yellow", bold: true, key: "y" },
+					{ text: " yes, do it", key: "y" },
+					{ text: "    " },
+					{ text: "n", color: "cyan", bold: true, key: "n" },
+					{ text: " / ", dim: true, key: "n" },
+					{ text: "esc", color: "cyan", bold: true, key: "n" },
+					{ text: " no", dim: true, key: "n" },
 				]}
 			/>
 		</Box>
 	);
 }
 
+/** The first item a picker shows: the chosen one kept in the middle. */
+export function pickerStart(index: number, count: number, height: number): number {
+	const room = Math.max(1, height - 1);
+	return Math.max(0, Math.min(index - Math.floor(room / 2), count - room));
+}
+
 export function PickerBody({ items, index, width, height }: { items: string[]; index: number; width: number; height: number }) {
 	const { selectionBg } = useContext(ThemeContext);
 	const room = Math.max(1, height - 1);
-	const start = Math.max(0, Math.min(index - Math.floor(room / 2), items.length - room));
+	const start = pickerStart(index, items.length, height);
 	return (
 		<Box flexDirection="column" height={height}>
 			{items.slice(start, start + room).map((it, i) => {
@@ -664,17 +706,23 @@ export function PickerBody({ items, index, width, height }: { items: string[]; i
 	);
 }
 
-export function OutputBody({ text, width, height }: { text: string; width: number; height: number }) {
-	const lines = wrap(text.replace(/\s+$/, "") || "(it printed nothing)", width);
+/** The output's lines, wrapped: back is how many it is scrolled up from the end. */
+export function outputLines(text: string, width: number): string[] {
+	return wrap(text.replace(/\s+$/, "") || "(it printed nothing)", width);
+}
+
+export function OutputBody({ text, width, height, back = 0 }: { text: string; width: number; height: number; back?: number }) {
+	const lines = outputLines(text, width);
 	const room = Math.max(0, height - 1);
-	const shown = lines.length > room ? lines.slice(lines.length - room) : lines;
+	const end = lines.length - Math.min(back, Math.max(0, lines.length - room));
+	const shown = lines.slice(Math.max(0, end - room), end);
 	return (
 		<Box flexDirection="column" height={height}>
 			{shown.map((l, i) => (
 				<Row key={i} width={width} segs={[{ text: l }]} />
 			))}
 			<Box flexGrow={1} />
-			<Row width={width} segs={[{ text: "esc", color: "cyan", bold: true }, { text: " closes", dim: true }]} />
+			<Row width={width} segs={[{ text: "esc", color: "cyan", bold: true, key: "esc" }, { text: " closes", dim: true, key: "esc" }, ...(lines.length > room ? [{ text: "   ↑↓ or the wheel scroll", dim: true }] : [])]} />
 		</Box>
 	);
 }
@@ -697,6 +745,9 @@ export const KEYS: Array<[string, string]> = [
 	["t", "take the tunnel (x-hydra tunnel) to it, on main give it back: hydra tunnel take (asks first)"],
 	["R", "read everything again now"],
 	["pgup pgdn", "scroll the detail"],
+	["mouse", "click a checkout to choose it, a key in the footer to press it, a URL to open it;"],
+	["", "  the wheel scrolls what is under it; drag a panel's border to resize it"],
+	["", "  shift (option in iTerm2) and drag: select text as usual"],
 	["?", "this help"],
 	["q", "quit; every stack keeps running"],
 	["▣", "a worktree: its files on disk, where its services run"],
@@ -722,11 +773,12 @@ export function prSourceLine(prs?: PRSource, now = Date.now()): string {
 	return `PR status from gh, read ${min ? `${min} min ago` : "just now"}; again every 3 minutes, and on R`;
 }
 
-export function HelpBody({ width, height, prs }: { width: number; height: number; prs?: PRSource }) {
+export function HelpBody({ width, height, prs, from = 0 }: { width: number; height: number; prs?: PRSource; from?: number }) {
+	const start = Math.min(from, Math.max(0, KEYS.length - (height - 1)));
 	return (
 		<Box flexDirection="column" height={height}>
 			<Row width={width} segs={[{ text: prSourceLine(prs), dim: true }]} />
-			{KEYS.slice(0, Math.max(0, height - 1)).map(([k, what], i) => (
+			{KEYS.slice(start, start + Math.max(0, height - 1)).map(([k, what], i) => (
 				<Row key={i} width={width} segs={[{ text: pad(k, 11), color: "cyan", bold: true }, { text: what }]} />
 			))}
 		</Box>
@@ -758,11 +810,16 @@ export function footerKeys(e: Entry | undefined, tunnel = false): Array<[string,
 }
 
 /** The footer. In an overlay, the overlay says its own keys. */
-export function Footer({ e, width, overlay, tunnel }: { e: Entry | undefined; width: number; overlay?: boolean; tunnel?: boolean }) {
+export function Footer(props: { e: Entry | undefined; width: number; overlay?: boolean; tunnel?: boolean }) {
+	return <Row width={props.width} segs={footerSegs(props)} />;
+}
+
+/** The footer's segments; each key's carries the key a click presses. */
+export function footerSegs({ e, width, overlay, tunnel }: { e: Entry | undefined; width: number; overlay?: boolean; tunnel?: boolean }): Seg[] {
 	const left = overlay ? [] : footerKeys(e, tunnel);
 	const right: Array<[string, string]> = overlay ? [] : [["U", "update all"], ["?", "help"], ["q", "quit"]];
 	const segsOf = (keys: Array<[string, string]>, sep: string): Seg[] =>
-		keys.flatMap(([k, what], i) => [...(i ? [{ text: sep, dim: true }] : []), { text: k, color: "cyan", bold: true }, { text: " " + what, dim: true }]);
+		keys.flatMap(([k, what], i) => [...(i ? [{ text: sep, dim: true }] : []), { text: k, color: "cyan", bold: true, key: k }, { text: " " + what, dim: true, key: k }]);
 	const width_ = (segs: Seg[]) => segs.reduce((n, s) => n + len(s.text), 0);
 	// Narrower and narrower until it fits: tighter gaps, then shorter words.
 	const short = (keys: Array<[string, string]>) => keys.map(([k, w]): [string, string] => [k, w.split(" ")[0]!]);
@@ -774,7 +831,7 @@ export function Footer({ e, width, overlay, tunnel }: { e: Entry | undefined; wi
 		if (width_(l) + width_(r) + 3 <= width) break;
 	}
 	const gap = Math.max(1, width - 1 - width_(l) - width_(r));
-	return <Row width={width} segs={[{ text: " " }, ...l, { text: " ".repeat(gap) }, ...r]} />;
+	return [{ text: " " }, ...l, { text: " ".repeat(gap) }, ...r];
 }
 
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
