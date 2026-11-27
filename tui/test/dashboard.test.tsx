@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import React from "react";
 import { render } from "ink-testing-library";
 import App from "../src/App.js";
-import { ConfirmBody, Footer, ListRow, changedRow, detailRows, footerKeys, problemRows, Row } from "../src/ui.js";
+import { ConfirmBody, Footer, ListRow, changedRows, detailRows, footerKeys, problemRows, Row } from "../src/ui.js";
 import { badgeOf, branchName, changedIn, entries, fitPaths, fixCommand, stateOf, tree, wrap, type Entry, type Node } from "../src/model.js";
 import type { Branch, Snapshot, WorktreeState } from "../src/types.js";
 import { FakeBackend, plain, tick } from "./fake.js";
@@ -816,10 +816,10 @@ test("where a service changed: the folder its files share, and up to three thing
 			{ name: "internal", folder: true },
 		],
 	});
-	const row = (segs: ReturnType<typeof changedRow>) => segs.map((x) => x.text).join("");
-	assert.equal(row(changedRow("changed: services/core/cmd/api/main.go", ["services/core/cmd/api/main.go"], 70)), "changed: services/core/cmd/api/ 📄 main.go");
+	const rows = (r: ReturnType<typeof changedRows>) => r.map((segs) => segs.map((x) => x.text).join("")).join("\n");
+	assert.equal(rows(changedRows("changed: services/core/cmd/api/main.go", ["services/core/cmd/api/main.go"], 70)), "changed: services/core/cmd/api/ 📄 main.go");
 	assert.equal(
-		row(changedRow("changed in core: a/b/c.go", ["a/b/c.go", "a/d/e.go", "a/f.go", "a/g/h.go"], 70)),
-		"changed in core: a/ 📁 b/  📁 d/  📄 f.go  …",
+		rows(changedRows("changed in core: a/b/c.go", ["a/b/c.go", "a/d/e.go", "a/f.go", "a/g/h.go", "a/i/j.go"], 70)),
+		"changed in core: a/\n  📁 b/\n  📁 d/\n  📄 f.go\n  … 2 more",
 	);
 });
