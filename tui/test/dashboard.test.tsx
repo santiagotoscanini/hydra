@@ -740,3 +740,59 @@ test("p opens the PR; without gh there are no badges and the help says why", asy
 	r2.stdin.write("q");
 	r2.unmount();
 });
+
+/** The fixture with a tunnel cart holds. */
+function tunnelled(): Snapshot {
+	const s = fixture();
+	s.tunnels = [{ name: "hooks", url: "https://hooks.example.com", to: "api", port: 8079, holder: "/repo/cart", target: "cart:8180" }];
+	s.worktrees.find((w) => w.dir === "cart")!.tunnel = ["hooks"];
+	return s;
+}
+
+function tunnelApp(width = 80, rows = 30) {
+	const backend = new FakeBackend(tunnelled());
+	const r = render(<App backend={backend} size={{ columns: width, rows }} />);
+	return { backend, ...r, frame: () => plain(r.lastFrame()) };
+}
+
+test("the tunnel: its holder in the header and its row, a line in each detail, t in the footer; nothing wraps", async () => {
+	for (const width of [80, 160]) {
+		const { frame, unmount } = tunnelApp(width, 40);
+		await tick();
+		const f = frame();
+		noLineWiderThan(f, width);
+		assert.match(f, /├─✗ ⇄ cart-checkout/, "the holder's row");
+		assert.match(f, /⇄ Tunnel {2}hooks https:\/\/hooks\.example\.com comes here/);
+		assert.match(f, /t tunnel/);
+		if (width >= 120) assert.match(f, /⇄ tunnel: cart-checkout/);
+		unmount();
+	}
+	const main = entries(tunnelled()).find((e) => e.kind === "main")!;
+	const f = rows(detailRows(main, 76, { tunnels: [{ t: tunnelled().tunnels![0]!, holder: "cart-checkout" }] }));
+	assert.match(f, /⇄ Tunnel {2}hooks https:\/\/hooks\.example\.com goes to cart-checkout/);
+	assert.match(f, /t gives it back to main/);
+});
+
+test("t asks first, then takes the tunnel to the chosen worktree; in its holder it gives it back", async () => {
+	const { backend, stdin, frame, unmount } = tunnelApp(80, 40);
+	await tick();
+	stdin.write("t"); // on cart, which holds it: back to main
+	await tick();
+	assert.match(frame(), /Give tunnel hooks \(https:\/\/hooks\.example\.com\) back to main\?/);
+	stdin.write("n");
+	await tick();
+	stdin.write(DOWN);
+	await tick();
+	stdin.write("t");
+	await tick();
+	assert.match(frame(), /Move tunnel hooks \(https:\/\/hooks\.example\.com\) from cart-checkout to/);
+	assert.match(frame(), /Its webhooks will reach main's api, tagged as/);
+	assert.equal(backend.runs.length, 0, "nothing runs before the yes");
+	stdin.write("y");
+	await tick();
+	const taken = backend.runs.at(-1)!;
+	assert.deepEqual(taken.args, ["tunnel", "take", "hooks"]);
+	assert.notEqual(taken.cwd, "/repo/cart");
+	assert.notEqual(taken.cwd, "/repo/main");
+	unmount();
+});

@@ -8,6 +8,10 @@
 #
 # web and api also have a hosts port: <worktree>.localhost:21900 is that
 # worktree's web, whatever copy it uses, and localhost:21900 main's.
+#
+# hooks stands in for cloudflared: a public address whose requests arrive
+# on :21079, where hydra's router passes them to the api of whichever
+# checkout holds the tunnel (`hydra tunnel take`).
 version: "0.5"
 
 x-hydra:
@@ -51,3 +55,8 @@ processes:
       routed: true
       upstreams:
         API_URL: api
+
+  hooks:
+    command: sleep 1000000
+    x-hydra:
+      tunnel: { to: api, port: 21079, url: https://hooks.example.test }

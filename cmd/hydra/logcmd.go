@@ -217,6 +217,11 @@ func summary(r journal.Record) string {
 			return "stopping its stack after " + r.Str("after") + " idle failed: " + e
 		}
 		return "stopped its stack after " + r.Str("after") + " idle (idle_stop)"
+	case "tunnel":
+		if r.Str("action") == "take" {
+			return fmt.Sprintf("took tunnel %s from %s", r.Str("name"), filepath.Base(r.Str("from")))
+		}
+		return fmt.Sprintf("tunnel %s back to main from %s (%s)", r.Str("name"), filepath.Base(r.Str("from")), r.Str("why"))
 	case "log":
 		return indentAfterFirst(r.Str("msg"))
 	}

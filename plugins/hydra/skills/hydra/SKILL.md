@@ -32,6 +32,7 @@ in. Prefer its tools to the shell:
 | `down` | stop this worktree's stack, and nothing else |
 | `update_here` | merge main into this worktree and restart what that touched |
 | `main_status` | main's stack, read-only |
+| `tunnel` | the public tunnel for webhooks: `status`; `take` (its webhooks come to this worktree) and `release` (back to main) only when the developer asked |
 
 In the main checkout, the tools that change a stack refuse: main's stack is
 the developer's. Tell them what `main_status` says instead of fixing it.
@@ -62,6 +63,24 @@ hydra down             # stop this worktree's stack (never main's)
 - Stop the stack when the work is finished: it holds memory while it is up.
   A stack can also stop by itself after a while unused (`idle_stop`);
   `hydra status` says so and `hydra up -D` starts it again.
+
+## Webhooks: the tunnel
+
+A stack may have one public tunnel (`x-hydra.tunnel`, cloudflared or
+ngrok): webhooks from Twilio, Stripe and the like arrive through it, at
+main's copy of its service unless a worktree took it. `hydra tunnel` (or the
+`tunnel` tool, `action: "status"`) says who holds it.
+
+- When your task needs those webhooks in this worktree (testing a call
+  flow, a payment callback), ask the developer first: taking the tunnel
+  moves the webhooks away from whoever has them. Take it only when they say
+  so: `hydra tunnel take`, or the tool with `action: "take"`.
+- Give it back when done: `hydra tunnel release` (the tool's `release`).
+  `hydra down` gives it back too.
+- `hydra status` in the holder: `tunnel … comes here: api :PORT`. A ✗
+  "this worktree holds tunnel …, and its api is …" means every webhook gets
+  a 502: `hydra up -D api`, or release it. A `!` "webhooks through tunnel
+  … go to …'s api" in a worktree that runs the api is only a note.
 
 ## When `hydra up` refuses, or `hydra status` shows a ✗
 

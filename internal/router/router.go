@@ -13,6 +13,8 @@
 //     plain localhost main's.
 //   - A TLS front for a baseline service that asks for one: TLS is accepted
 //     there and the bytes go on, as they are, to the service's plain port.
+//   - A tunnel's port: what a public tunnel sends goes to the copy of its
+//     service in the checkout that holds the tunnel (see tunnel.go).
 //
 // In between, the routed service has to copy the tag from the request it is
 // serving onto the calls it makes. The router checks that it does before it
@@ -98,6 +100,8 @@ type State struct {
 	// new Cert is used from the next handshake on.
 	Fronts map[string]Front
 	Cert   *tls.Certificate
+	// Tunnels are the tunnels' ports, by tunnel name.
+	Tunnels map[string]Tunnel
 }
 
 // Router keeps its listeners in step with the state Load returns.
@@ -206,6 +210,11 @@ func (r *Router) Reconcile() {
 			want[fmt.Sprintf("entry %s %s :%d", tag, name, port)] = opener{port, fmt.Sprintf("%s for worktree %s", name, wt.Name),
 				func() (*listener, error) { return listen(st.Host, port, r.entry(tag, name)) }}
 		}
+	}
+	for name, t := range st.Tunnels {
+		name, port := name, t.Listen
+		want[fmt.Sprintf("tunnel %s :%d", name, port)] = opener{port, fmt.Sprintf("tunnel %s (to %s)", name, t.To),
+			func() (*listener, error) { return listen(st.Host, port, r.tunnel(name)) }}
 	}
 	if st.Cert != nil {
 		for name, f := range st.Fronts {

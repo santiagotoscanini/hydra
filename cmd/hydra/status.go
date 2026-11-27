@@ -86,6 +86,7 @@ func statusCmd(args []string) error {
 		}
 	}
 	printAddresses(ws.target.stack, config.HostLabel(ws.target.checkout.Root), "")
+	printTunnelLines(ms, ws.target.checkout.Root)
 	fmt.Println()
 	printWorktreeTable(ms, ws)
 
@@ -326,6 +327,7 @@ func mainProcState(ms *mainState, name string) string {
 func statusAll(co gitx.Checkout, ms *mainState, waited time.Duration) error {
 	printMainLine(ms)
 	printAddresses(ms.target.stack, "", "; a worktree's: <worktree>.localhost")
+	printTunnelLines(ms, "")
 	bad := false
 	if ms.Up {
 		fmt.Println()

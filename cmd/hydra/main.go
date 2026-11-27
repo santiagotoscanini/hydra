@@ -13,6 +13,7 @@
 //	hydra log [KIND...]            what hydra did and saw, in every checkout
 //	hydra report                   all of it in one file, to send for help
 //	hydra db reseed                a worktree's database again from main's data
+//	hydra tunnel [take|release]    who gets the public tunnel's requests
 //	hydra trust                    trust the CA behind TLS fronts
 //	hydra mcp                      an MCP server for coding agents, on stdio
 //	hydra version                  which hydra, which process-compose
@@ -118,7 +119,7 @@ Hydra's own commands:
                                  minute (--since D, 1h by default; --here: this
                                  checkout only; --errors; -f: follow; --json).
                                  KIND: command problem process usage slot idle
-                                 start log
+                                 tunnel start log
   hydra report [--since D] [-o FILE]  write one Markdown file to send to whoever
                                  helps: versions, every stack's state now, usage
                                  over time, what went wrong, and the journal
@@ -127,6 +128,13 @@ Hydra's own commands:
                                  x-hydra.seed_from_main: remove its database and
                                  make it again from main's data, then apply the
                                  branch's migrations; waits until it is ready
+  hydra tunnel                   each public tunnel (x-hydra.tunnel), who holds it
+                                 and where its requests (webhooks) go now
+  hydra tunnel take [NAME]       in a worktree: its requests come here (in main:
+                                 back to main); NAME only with more than one
+  hydra tunnel release [NAME]    back to main, from anywhere. A worktree also
+                                 gives it back on hydra down, an idle stop, and
+                                 when it is removed
   hydra trust [--remove|--print] make this machine trust the local CA behind
                                  hydra's TLS fronts (x-hydra.tls on a service)
   hydra plan   [flags]           show what this checkout runs and how it is wired
@@ -141,7 +149,8 @@ Hydra's own commands:
   hydra mcp                      an MCP server on stdin/stdout for coding agents:
                                  tools that start, wait for, read, restart and
                                  stop this checkout's stack (status, up, wait,
-                                 logs, restart, down, update_here, main_status);
+                                 logs, restart, down, update_here, main_status,
+                                 tunnel);
                                  the ones that change a stack refuse in main.
                                  worktrees, update_main and update_worktree, and
                                  the update_all prompt, bring main and every
@@ -246,6 +255,8 @@ func run(args []string) error {
 			return reapCmd(args[1:])
 		case "mcp":
 			return mcpCmd(args[1:])
+		case "tunnel":
+			return tunnelCmd(args[1:])
 		case "stop-idle":
 			return stopIdleCmd(args[1:])
 		}
@@ -517,7 +528,7 @@ func (t *target) render(p *plan.Plan, watch string) ([]byte, error) {
 	if p.Slot > 0 {
 		opt.HostLabel = config.HostLabel(t.checkout.Root)
 	}
-	if p.Slot == 0 && (t.stack.HasRouted() || t.stack.HasTLS() || t.stack.HasHosts()) {
+	if p.Slot == 0 && (t.stack.HasRouted() || t.stack.HasTLS() || t.stack.HasHosts() || t.stack.HasTunnel()) {
 		var err error
 		if opt.Router, err = routerCommand(t); err != nil {
 			return nil, err

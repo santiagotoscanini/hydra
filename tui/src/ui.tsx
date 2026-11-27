@@ -27,7 +27,7 @@ import {
 	type Node,
 	type Staleness,
 } from "./model.js";
-import type { PRSource, Service } from "./types.js";
+import type { PRSource, Service, Tunnel } from "./types.js";
 import { themeFor, type Theme } from "./theme.js";
 
 // ── Colours ───────────────────────────────────────────────────────────
@@ -211,12 +211,15 @@ export function ListRow({
 	const on = (c?: string) => (bg ? undefined : wordColor(c));
 	// A branch with no checkout is drawn muted: nothing runs there.
 	const muted = e.kind === "branch" && !bg;
+	// ⇄: the tunnel's requests come here (a worktree that holds one).
+	const held: Seg[] = e.kind === "worktree" && e.tunnels.length ? [{ text: "⇄ ", color: on("magenta"), bold: true }] : [];
 	const name: Seg[] = n.id
 		? [
+				...held,
 				{ text: n.id, bold: !muted, dim: muted, color: selected && !bg ? "cyan" : undefined },
 				{ text: " " + n.title, bold: selected, dim: muted },
 			]
-		: [{ text: n.title, bold: !muted, dim: muted, color: selected ? on("cyan") : e.kind === "main" ? "magenta" : undefined }];
+		: [...held, { text: n.title, bold: !muted, dim: muted, color: selected ? on("cyan") : e.kind === "main" ? "magenta" : undefined }];
 	const nameFit = fit(name, cols.name);
 	const nameLen = nameFit.reduce((k, s) => k + len(s.text), 0);
 	// The badge right-aligned: the longest way of saying it that fits.
@@ -302,6 +305,8 @@ export function detailRows(
 		prs?: PRSource;
 		/** the worktrees stacked on a branch with no checkout, which run its code */
 		via?: Entry[];
+		/** the stack's tunnels, each with what its holder is called */
+		tunnels?: TunnelHeld[];
 	} = {},
 ): Seg[][] {
 	const out: Seg[][] = [];
@@ -324,6 +329,7 @@ export function detailRows(
 		blank();
 		if (parts.length) add(...section("⇅", "Upstream", "yellow", [{ text: "  " + parts.join(" · "), color: "yellow" }]));
 		else add(...section("⇅", "Upstream", "cyan", [{ text: "  up to date", dim: true }]));
+		out.push(...tunnelRows(e, width, opts.tunnels));
 		if (opts.problems) out.push(...problemSection(e, width));
 		return out;
 	}
@@ -375,9 +381,36 @@ export function detailRows(
 	// 4. What it takes from main, on one line.
 	const fromMain = shown.filter((s) => s.runs !== "here");
 	if (fromMain.length || hidden) out.push(fromMainRow(fromMain, hidden, width));
+	out.push(...tunnelRows(e, width, opts.tunnels));
 
 	// 5. What is wrong, with the keys that fix it.
 	if (opts.problems) out.push(...problemSection(e, width));
+	return out;
+}
+
+/** A tunnel, and what its holder is called in the dashboard ("main" for
+ *  main). */
+export interface TunnelHeld {
+	t: Tunnel;
+	holder: string;
+}
+
+/** "⇄ Tunnel  hooks https://hooks.example.com comes here" for each tunnel:
+ *  here, or where it goes instead. */
+function tunnelRows(e: Entry, width: number, tunnels?: TunnelHeld[]): Seg[][] {
+	const out: Seg[][] = [];
+	for (const { t, holder } of tunnels ?? []) {
+		const here = e.tunnels.includes(t.name);
+		const what = `${t.name}${t.url ? " " + t.url : ""}`;
+		const where = here ? (t.down ? "comes here, and gets a 502: its stack isn't running" : "comes here") : `goes to ${holder}`;
+		const text = `  ${what} ${where}`;
+		const room = width - 9;
+		const segs: Seg[] = [{ text: len(text) <= room ? text : `  ${t.name} ${where}`, color: here ? (t.down ? "red" : "magenta") : undefined, dim: !here }];
+		out.push([], section("⇄", "Tunnel", here ? "magenta" : "gray", segs));
+		if (!here && e.kind === "worktree") out.push([{ text: "  t takes it here (asks first)", dim: true }]);
+		if (here && e.kind === "worktree") out.push([{ text: "  t gives it back to main (asks first)", dim: true }]);
+		if (!here && e.kind === "main") out.push([{ text: "  t gives it back to main (asks first)", dim: true }]);
+	}
 	return out;
 }
 
@@ -603,6 +636,7 @@ export const KEYS: Array<[string, string]> = [
 	["m", "merge its parent (main, or the branch it is stacked on) into it: hydra update --here (asks first)"],
 	["", "  on a branch with no worktree (⎇): hydra update --branch NAME"],
 	["U", "update all: hydra update, which pulls main (dry run, then asks)"],
+	["t", "take the tunnel (x-hydra tunnel) to it, on main give it back: hydra tunnel take (asks first)"],
 	["R", "read everything again now"],
 	["pgup pgdn", "scroll the detail"],
 	["?", "this help"],
@@ -611,6 +645,7 @@ export const KEYS: Array<[string, string]> = [
 	["", "  green up · grey down · blue stopped by hydra, unused for x-hydra idle_stop"],
 	["⠋ ✗", "starting (ready/total) or another action under way · failing"],
 	["⎇", "branch only: a stack's branch with no worktree; nothing runs it, only m applies"],
+	["⇄", "holds the tunnel: its requests (webhooks) come to this worktree"],
 	["├─ └─", "a branch under the one it is stacked on; main is the root"],
 	["in step", "has every commit of its parent, and so does every branch above it"],
 	["12 behind", "commits its parent has that it doesn't; bold: the chain goes stale here"],
@@ -642,7 +677,7 @@ export function HelpBody({ width, height, prs }: { width: number; height: number
 
 // ── The footer: the keys that apply to the selection ──────────────────
 
-export function footerKeys(e: Entry | undefined): Array<[string, string]> {
+export function footerKeys(e: Entry | undefined, tunnel = false): Array<[string, string]> {
 	const keys: Array<[string, string]> = [];
 	if (e?.kind === "branch") {
 		// Nothing to start, stop or look at: only its merge, and its PR.
@@ -659,13 +694,14 @@ export function footerKeys(e: Entry | undefined): Array<[string, string]> {
 		if (e.kind === "worktree" && !prDone(e.pr) && (e.behindParent > 0 || e.update?.action))
 			keys.push(["m", `merge ${e.parent && e.stack.length > 1 ? labelBeside(e.parent, e.branch) : "main"}`]);
 		if (e.pr?.url) keys.push(["p", "PR"]);
+		if (tunnel) keys.push(["t", "tunnel"]);
 	}
 	return keys;
 }
 
 /** The footer. In an overlay, the overlay says its own keys. */
-export function Footer({ e, width, overlay }: { e: Entry | undefined; width: number; overlay?: boolean }) {
-	const left = overlay ? [] : footerKeys(e);
+export function Footer({ e, width, overlay, tunnel }: { e: Entry | undefined; width: number; overlay?: boolean; tunnel?: boolean }) {
+	const left = overlay ? [] : footerKeys(e, tunnel);
 	const right: Array<[string, string]> = overlay ? [] : [["U", "update all"], ["?", "help"], ["q", "quit"]];
 	const segsOf = (keys: Array<[string, string]>, sep: string): Seg[] =>
 		keys.flatMap(([k, what], i) => [...(i ? [{ text: sep, dim: true }] : []), { text: k, color: "cyan", bold: true }, { text: " " + what, dim: true }]);

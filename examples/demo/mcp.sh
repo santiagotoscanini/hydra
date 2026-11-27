@@ -143,7 +143,7 @@ notify notifications/initialized
 rpc tools/list '{}'; out="$reply"
 tools="$(python3 -c 'import json,sys; print(" ".join(t["name"] for t in json.loads(sys.argv[1])["result"]["tools"]))' "$out")"
 echo "tools: $tools"
-expect "$tools" '^status up wait down restart logs update_here main_status worktrees update_main update_worktree$'
+expect "$tools" '^status up wait down restart logs update_here main_status worktrees update_main update_worktree tunnel$'
 
 echo "--- 3. status, up, wait"
 call status; echo "$out" | show
@@ -202,6 +202,10 @@ done
 call restart '{"process":"api"}'
 expect "$out" "^ERROR: refused"
 echo "$out" | show
+call tunnel '{"action":"take"}'
+expect "$out" "^ERROR: refused: this is the main checkout, and a tunnel is main's"
+call tunnel '{"action":"status"}'
+expect "$out" "^ERROR: this stack has no tunnel"
 call status; echo "$out" | show
 expect "$out" 'stack up'
 call logs '{"process":"api","lines":1}'; echo "$out" | show

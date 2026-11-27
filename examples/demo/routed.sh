@@ -15,6 +15,10 @@
 #  is its web (its own copy, or main's through its port), localhost:21900
 #  main's, and the same on :21910 for the api.
 #
+#  Then the tunnel (a stand-in for cloudflared on :21079): main's api answers
+#  it until `backend` takes it, a 502 says so while backend's api is stopped,
+#  and `hydra down` in backend gives it back to main.
+#
 #  Last, a worktree whose branch sets `idle_stop: 6s`: requests through its
 #  port keep its stack up, and once they stop hydra stops it, says so in
 #  `hydra status` and `hydra status --json`, and `hydra up` starts it again.
@@ -148,8 +152,47 @@ wait_for "$api_d"
 echo "docs    api   :$api_d    restarted by the second edit"
 
 echo
-echo "--- backend goes down: its port closes"
-(cd "$repo/backend" && "$H" down >/dev/null 2>&1)
+echo "--- the tunnel: main's api, until a worktree takes it"
+hook() { curl -s -m 5 -X POST "localhost:21079/hook" | python3 "$here/chain.py" 2>&1; }
+wait_for 21079
+got="$(hook)"; echo "tunnel :21079 -> $got"
+grep -q "^api(slot 0" <<<"$got" || fail "the tunnel before a take: $got"
+(cd "$main" && "$H" tunnel) | sed "s#$repo#<repo>#g"
+(cd "$repo/backend" && "$H" tunnel take) | sed "s#$repo#<repo>#g"
+for _ in $(seq 20); do hook | grep -q "^api(slot $b" && break; sleep 0.2; done
+got="$(hook)"; echo "tunnel :21079 -> $got"
+grep -q "^api(slot $b" <<<"$got" || fail "the tunnel after backend took it: $got"
+out="$(cd "$repo/backend" && "$H" status 2>&1 || true)"
+grep '^tunnel' <<<"$out"
+grep -q "^tunnel    hooks (https://hooks.example.test) comes here: api :$((21010 + b * 100))$" <<<"$out" || fail "backend's status: $out"
+out="$(cd "$repo/docs" && "$H" status 2>&1 || true)"
+grep -A1 'webhooks through tunnel' <<<"$out"
+grep -q "^! webhooks through tunnel hooks (https://hooks.example.test) go to backend's api, not this worktree's.$" <<<"$out" || fail "docs's status: $out"
+json="$(cd "$main" && "$H" status --json | python3 -c '
+import json, sys, os
+s = json.load(sys.stdin)
+t = s["tunnels"][0]
+w = {w["branch"]: w for w in s["worktrees"]}["backend"]
+print(t["name"], os.path.basename(t["holder"]), t["target"], w.get("tunnel"))')"
+echo "hydra status --json: $json"
+[ "$json" = "hooks backend backend:$((21010 + b * 100)) ['hooks']" ] || fail "status --json: $json"
+(cd "$repo/backend" && "$H" process stop api >/dev/null 2>&1)
+for _ in $(seq 20); do curl -s -m 2 -o /dev/null -w '%{http_code}' -X POST localhost:21079/hook | grep -q 502 && break; sleep 0.2; done
+body="$(curl -s -m 5 -X POST localhost:21079/hook)"
+echo "backend's api stopped: $body"
+grep -q "tunnel hooks is held by worktree backend, and its api isn't answering" <<<"$body" || fail "the 502: $body"
+out="$(cd "$repo/backend" && "$H" status 2>&1 || true)"
+grep -q "^✗ this worktree holds tunnel hooks (https://hooks.example.test), and its api is" <<<"$out" || fail "backend's status with its api stopped: $out"
+(cd "$repo/backend" && "$H" process start api >/dev/null 2>&1)
+for _ in $(seq 50); do hook | grep -q "^api(slot $b" && break; sleep 0.2; done
+grep -q '"ev":"tunnel".*"action":"take"' "$main"/.git/hydra-journal/*.jsonl || fail "no tunnel event in the journal"
+
+echo
+echo "--- backend goes down: its port closes, and the tunnel goes back to main"
+(cd "$repo/backend" && "$H" down 2>&1 >/dev/null | grep tunnel) || fail "hydra down didn't say it gave the tunnel back"
+for _ in $(seq 20); do hook | grep -q "^api(slot 0" && break; sleep 0.2; done
+got="$(hook)"; echo "tunnel :21079 -> $got"
+grep -q "^api(slot 0" <<<"$got" || fail "the tunnel after backend went down: $got"
 for _ in $(seq 50); do curl -s -m 1 "localhost:$web_b" >/dev/null 2>&1 || break; sleep 0.2; done
 curl -s -m 1 "localhost:$web_b" >/dev/null 2>&1 && echo "still answering on :$web_b" || echo "nothing listens on :$web_b"
 for _ in $(seq 50); do byname backend 21900 | grep -q 'no running worktree is called "backend"' && break; sleep 0.2; done

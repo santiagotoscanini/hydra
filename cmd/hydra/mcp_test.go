@@ -160,7 +160,7 @@ func TestMCPProtocol(t *testing.T) {
 			t.Errorf("%s: inputSchema %v", tl["name"], tl["inputSchema"])
 		}
 	}
-	if got := strings.Join(names, " "); got != "status up wait down restart logs update_here main_status worktrees update_main update_worktree" {
+	if got := strings.Join(names, " "); got != "status up wait down restart logs update_here main_status worktrees update_main update_worktree tunnel" {
 		t.Errorf("tools: %s", got)
 	}
 	code := func(id string) any { return r[id]["error"].(map[string]any)["code"] }

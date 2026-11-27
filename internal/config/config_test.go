@@ -420,3 +420,54 @@ func TestHostLabel(t *testing.T) {
 		}
 	}
 }
+
+const tunnelled = `
+x-hydra: { slot_stride: 100, max_slots: 5 }
+processes:
+  api:
+    command: x
+    x-hydra: { port: 7010 }
+  tunnel:
+    command: cloudflared tunnel run
+    x-hydra:
+      tunnel: { to: api, port: 7079, url: https://hooks.example.com }
+`
+
+func TestTunnelConfig(t *testing.T) {
+	st, err := Parse([]byte(tunnelled))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tn := st.Services["tunnel"]
+	if !tn.Shared || tn.Tunnel == nil || tn.Tunnel.To != "api" || tn.Tunnel.Port != 7079 || tn.Tunnel.URL != "https://hooks.example.com" {
+		t.Fatalf("tunnel = %+v (%+v)", tn, tn.Tunnel)
+	}
+	if got := strings.Join(st.Tunnels(), ","); got != "tunnel" || !st.HasTunnel() {
+		t.Errorf("Tunnels = %q", got)
+	}
+}
+
+func TestTunnelValidation(t *testing.T) {
+	cases := map[string]struct{ from, to, want string }{
+		"not shared false": {"tunnel: { to: api", "shared: false\n      tunnel: { to: api", "drop shared: false"},
+		"needs to":         {"to: api, ", "", "tunnel needs to:"},
+		"unknown to":       {"to: api", "to: nope", `no service is called "nope"`},
+		"to itself":        {"to: api", "to: tunnel", "names the tunnel itself"},
+		"needs a port":     {"port: 7079, ", "", "tunnel needs port:"},
+		"to has a port":    {"x-hydra: { port: 7010 }", "x-hydra: { url: q }", "api has no x-hydra.port"},
+		"collides":         {"port: 7079", "port: 7110", "port 7110: tunnel tunnel's port collides with api in slot 1"},
+		"not routed":       {"tunnel: { to: api", "routed: true\n      tunnel: { to: api", "can't be follow, routed"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			src := strings.Replace(tunnelled, c.from, c.to, 1)
+			if src == tunnelled {
+				t.Fatalf("%q isn't in the config", c.from)
+			}
+			_, err := Parse([]byte(src))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want %q", err, c.want)
+			}
+		})
+	}
+}

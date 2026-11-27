@@ -103,6 +103,13 @@ Rules that keep it right:
   Read the manual's sections on both before using them.
 - Don't add `x-hydra` to a process only main should run: without a block,
   a process is shared.
+- A public tunnel for webhooks (cloudflared, ngrok) that worktrees should be
+  able to take: `x-hydra: { tunnel: { to: api, port: 8079, url:
+  https://hooks.example.com } }` on its process (it stays shared). `to` is
+  the service its requests reach, `port` a free port where hydra's router
+  listens. Tell the developer the one step hydra can't do: point the
+  tunnel at `http://localhost:PORT` (for cloudflared, the public hostname's
+  service in Cloudflare's dashboard) instead of the service's own port.
 
 ## 3. Ignore hydra's files
 

@@ -214,6 +214,7 @@ func stopIdleCmd(args []string) error {
 		journal.Log("idle", journal.Fields{"after": after, "error": err.Error()})
 		return fmt.Errorf("stopping the idle stack of %s: %w", root, err)
 	}
+	releaseTunnelsOf(co.CommonDir, co.Root, "idle", nil) // nobody uses it, its webhooks either
 	note, _ := json.Marshal(idleNote{At: time.Now(), After: after})
 	if err := writeFile(idleNoteFile(co.Root), note); err != nil {
 		return err

@@ -38,6 +38,8 @@ export interface Entry {
 	pending: boolean;
 	error?: string;
 	current: boolean;
+	/** The tunnels it holds (main: those no worktree holds). */
+	tunnels: string[];
 }
 
 export function entries(s: Snapshot): Entry[] {
@@ -65,6 +67,7 @@ export function entries(s: Snapshot): Entry[] {
 			memory: m.memory,
 			pending: false,
 			current: s.current === m.root,
+			tunnels: (s.tunnels ?? []).filter((t) => !t.holder).map((t) => t.name),
 		});
 	}
 	for (const w of s.worktrees) {
@@ -96,6 +99,7 @@ export function entries(s: Snapshot): Entry[] {
 			pending: !!w.pending,
 			error: w.error,
 			current: s.current === w.root,
+			tunnels: w.tunnel ?? [],
 		});
 	}
 	for (const b of s.branches ?? []) {
@@ -123,6 +127,7 @@ export function entries(s: Snapshot): Entry[] {
 			memory: 0,
 			pending: !!b.pending,
 			current: false,
+			tunnels: [],
 		});
 	}
 	return out;

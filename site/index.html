@@ -226,7 +226,8 @@ you open  localhost:3400         slot 2's port for web. hydra's router answers,
       <li>If a worktree's API is down, its calls fail. They never fall back to main's API.</li>
     </ol>
     <p style="margin-top:14px">Ports move with the slot, so a name is easier to keep: with <code>hosts: 3900</code> on <code>web</code>, <code>api-paging.localhost:3900</code> is always that worktree's frontend, whichever copy serves it, and <code>localhost:3900</code> is main's.</p>
-    <p><a href="docs/#routed">How routing works, and its limits</a>, and <a href="docs/#hosts">an address per worktree</a>.</p>
+    <p>The same router moves the one public tunnel for webhooks (cloudflared, ngrok): <code>hydra tunnel take</code> in a worktree, and Twilio's or Stripe's callbacks reach that worktree's API until <code>hydra tunnel release</code> or <code>hydra down</code>. When its API is down they get a 502 that says so, never main's answer.</p>
+    <p><a href="docs/#routed">How routing works, and its limits</a>, <a href="docs/#hosts">an address per worktree</a>, and <a href="docs/#tunnel">a tunnel for webhooks</a>.</p>
   </div>
 </section>
 

@@ -159,6 +159,8 @@ type snapWorktree struct {
 	// FarBehind: more than behind_warn commits behind main, or merging main
 	// conflicts.
 	FarBehind *snapFarBehind `json:"farBehind,omitempty"`
+	// Tunnel names the tunnels it holds: their requests come to it.
+	Tunnel []string `json:"tunnel,omitempty"`
 	// Pending: not planned yet (the first seconds of a watch).
 	Pending   bool      `json:"pending,omitempty"`
 	PlannedAt time.Time `json:"plannedAt"`
@@ -190,8 +192,11 @@ type snapshot struct {
 	Branches []snapBranch `json:"branches,omitempty"`
 	// PRs: when gh was last asked for the branches' PRs, and why it can't
 	// be (prs.go). Absent when the snapshot has no main.
-	PRs   *snapPRSource `json:"prs,omitempty"`
-	Error string        `json:"error,omitempty"`
+	PRs *snapPRSource `json:"prs,omitempty"`
+	// Tunnels: each x-hydra tunnel, who holds it and where its requests go
+	// now (tunnel.go).
+	Tunnels []tunnelView `json:"tunnels,omitempty"`
+	Error   string       `json:"error,omitempty"`
 }
 
 // snapBranch is a branch of a PR stack that no worktree has checked out,
@@ -840,8 +845,18 @@ func (s *snapshotter) build() *snapshot {
 	snap.Main = snapMainOf(ms, mem)
 	snap.Main.Subject = subject
 	addStrays(&snap.Main.Strays, &snap.Main.Problems, strays[ms.target.checkout.Root])
+	views, tunErr := ms.tunnels()
+	snap.Tunnels = views
+	if tunErr != nil {
+		snap.Main.Problems = append(snap.Main.Problems, snapProblem{Text: "can't tell who holds the tunnels: " + tunErr.Error()})
+	}
 	for i, wt := range wts {
 		w := snapWorktreeOf(ms, wt, plans[i], gits[i], mem)
+		for _, v := range views {
+			if v.Holder == wt.Root {
+				w.Tunnel = append(w.Tunnel, v.Name)
+			}
+		}
 		w.PR = s.prs.of(wt.Branch)
 		addStrays(&w.Strays, &w.Problems, strays[wt.Root])
 		snap.Worktrees = append(snap.Worktrees, w)

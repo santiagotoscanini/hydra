@@ -211,6 +211,13 @@ func reap(co gitx.Checkout, e slots.Entry, how reaping) (reaped, error) {
 		}
 		r.left = left
 	}
+	why := "slot freed"
+	if state == removed {
+		why = "worktree removed"
+	}
+	for _, name := range releaseTunnelsOf(co.CommonDir, e.Root, why, nil) {
+		r.did = append(r.did, "gave tunnel "+name+" back to main")
+	}
 	routes.Remove(co.CommonDir, e.Slot)
 	os.Remove(sock)
 	os.Remove(runningFile(e.Root))

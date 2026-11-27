@@ -21,6 +21,7 @@ import (
 	"github.com/santiagotoscanini/hydra/internal/plan"
 	"github.com/santiagotoscanini/hydra/internal/router"
 	"github.com/santiagotoscanini/hydra/internal/routes"
+	"github.com/santiagotoscanini/hydra/internal/tunnels"
 )
 
 // routerCommand is the command line of the baseline's hydra-router process.
@@ -108,7 +109,8 @@ func routerState(commonDir, file, startedFrom string) (*router.State, error) {
 	if err != nil {
 		return nil, err
 	}
-	state := &router.State{Host: st.Hydra.Host, Services: map[string]router.Service{}, Worktrees: map[string]router.Worktree{}, Fronts: map[string]router.Front{}}
+	state := &router.State{Host: st.Hydra.Host, Services: map[string]router.Service{}, Worktrees: map[string]router.Worktree{},
+		Fronts: map[string]router.Front{}, Tunnels: map[string]router.Tunnel{}}
 	if st.HasTLS() {
 		// A front without a certificate can't open; say why and keep routing.
 		files, err := tlsFilesFor(&target{file: file, stack: st})
@@ -142,8 +144,21 @@ func routerState(commonDir, file, startedFrom string) (*router.State, error) {
 	if err != nil {
 		return nil, err
 	}
+	alive := map[string]bool{}
 	for _, f := range files {
-		if !f.Live() {
+		alive[f.Root] = f.Live()
+	}
+	if st.HasTunnel() {
+		held, err := tunnels.Read(commonDir)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range tunnelViews(st, held, files, func(f routes.File) bool { return alive[f.Root] }) {
+			state.Tunnels[v.Name] = v.routerTunnel()
+		}
+	}
+	for _, f := range files {
+		if !alive[f.Root] {
 			continue
 		}
 		wt := router.Worktree{Name: f.Name, Root: f.Root, Host: f.Host, Local: f.Local, Entries: map[string]router.Entry{}}
@@ -174,7 +189,7 @@ func warnOnce(key, msg string) {
 // take: the worktree's port for a routed service is the router's until that
 // service starts running here.
 func publishRoutes(t *target, p *plan.Plan) error {
-	if p.Slot == 0 || !(t.stack.HasRouted() || t.stack.HasHosts()) {
+	if p.Slot == 0 || !(t.stack.HasRouted() || t.stack.HasHosts() || t.stack.HasTunnel()) {
 		return nil
 	}
 	f := routes.File{

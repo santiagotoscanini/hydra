@@ -299,7 +299,8 @@ checkout: `u` `hydra up -D`, `d` `hydra down`, `r` `hydra process restart`,
 `l` `hydra process logs -f`, `o` opens an address by name (`hosts`) in
 the browser, `p` opens its PR, `f` a problem's fix, `m` `hydra update --here` (on a branch
 with no checkout, `hydra update --branch NAME`),
-`U` `hydra update` (both after their dry run), `R` reads everything again,
+`U` `hydra update` (both after their dry run), `t` takes the tunnel to the
+chosen worktree (on main or its holder, gives it back), `R` reads everything again,
 `?` lists the keys, `q` quits and leaves every stack running. `⏎` opens the
 stack in `process-compose attach`; F10 or ctrl-c, then Yes, comes back with
 the stack still running. Whatever stops a stack or moves a branch asks
@@ -334,6 +335,7 @@ In a project without an `x-hydra` block it lists no tools, so registering it for
 | `worktrees` | main and every worktree in the order to update them (a branch after the one it is stacked on), with a PR stack's branches that have no worktree (`checkout: false`): parent, behind/ahead, every conflicting file, uncommitted changes, what an update would do, stack, slot | reads |
 | `update_main` | `hydra update --main-only` (`dry_run`): pull main, bring its stack along; only when the developer asked | allowed |
 | `update_worktree` | `hydra update --here` in the named `worktree` (`dry_run`; `since`: after a merge by hand, restart what it touched); for a branch with no checkout, `hydra update --branch` | allowed |
+| `tunnel` | the public tunnel (`x-hydra.tunnel`): `action` `status`, `take` (its webhooks come to this worktree; only when the developer asked) or `release` (back to main) | `take` refused |
 
 Agents with a shell get it wrong: they start process-compose by hand, which
 runs everything on main's ports. They stop main's stack because theirs looks
@@ -343,8 +345,8 @@ the agent's own worktree's stack. In the main checkout it answers
 hydra printed them, and stdout carries nothing but protocol messages. The
 manual suggests deny rules for the shell commands the tools replace
 (`process-compose`, `hydra down`, `hydra update`, `supabase stop`,
-`supabase db reset`), and an ask rule for `mcp__hydra__update_main`
-(`mcp__plugin_hydra_hydra__update_main` with the plugin).
+`supabase db reset`), and ask rules for `mcp__hydra__update_main` and
+`mcp__hydra__tunnel` (`mcp__plugin_hydra_hydra__…` with the plugin).
 
 The server also ships a prompt, `update_all` (`/mcp__hydra__update_all` in
 Claude Code): the workflow for bringing main and every worktree up to date.
@@ -691,6 +693,30 @@ passed on, so websockets (a dev server's hot reload) and redirects work.
 - The service is told its address in `HYDRA_URL_WEB`. `hydra status`,
   `hydra up`, `status --json` (`address`) and the dashboard (`o`) show it.
 
+### A tunnel for webhooks
+
+One public tunnel (cloudflared, ngrok) for the whole repository, which any
+checkout can take:
+
+```yaml
+  tunnel:
+    command: exec cloudflared tunnel --no-autoupdate run
+    x-hydra:
+      tunnel: { to: api, port: 8079, url: https://hooks.example.com }
+```
+
+Point the tunnel at `port` once (for cloudflared, the public hostname's
+service in Cloudflare becomes `http://localhost:8079`). Hydra's router
+listens there, in main, and passes each request to the copy of `to` in the
+checkout that holds the tunnel: main's, until `hydra tunnel take` in a
+worktree. A holder that runs no copy of its own gets main's, with its
+worktree header, so routed services downstream serve it. When the holder's
+copy is down, the request gets a 502 that says so, never main's answer.
+`hydra tunnel release` gives it back; so do `hydra down` in the holder, an
+idle stop, and removing it. `hydra tunnel` says who holds it; `hydra status`,
+`status --json` (`tunnels`), the dashboard (`⇄`, key `t`) and the MCP
+`tunnel` tool show and move it.
+
 ### Kinds
 
 Some services need more than a port to get a copy per worktree. `kind`
@@ -842,7 +868,8 @@ web-b worktree : web-b(slot 1, :20101) -> api(slot 1, :20110) -> db(slot 0, :200
 
 `./examples/demo/stack.sh` builds a throwaway stack of worktrees and shows
 the watcher starting and stopping services as files change in them.
-`./examples/demo/routed.sh` shows one frontend serving every worktree, and
+`./examples/demo/routed.sh` shows one frontend serving every worktree (and
+a tunnel moving to a worktree and back), and
 `./examples/demo/tls.sh` a TLS front, and `./examples/demo/dashboard.sh`
 drives the dashboard in tmux. `./examples/demo/mcp.sh` plays an agent's
 tool and talks MCP to `hydra mcp`: up, wait, status, logs, restart and down

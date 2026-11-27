@@ -61,6 +61,7 @@ Use these tools, never a shell, to start, stop or restart the stack: never run p
 - logs and restart for a process that fails; down when you are done.
 - When status says this worktree is behind main, update_here merges main in.
 Main's stack belongs to the developer: the tools read it (main_status) but refuse to change it. When main's stack is down or broken, tell the developer what main_status says and let them fix it.
+The public tunnel (webhooks), when the stack has one, is main's until a worktree takes it: tunnel take only when the developer asked for webhooks here, and tunnel release when done.
 Only when the developer asks to update main and every worktree: the update_all prompt (or the hydra-update-all skill) is the workflow (worktrees, update_main, update_worktree).`
 
 func mcpCmd(args []string) error {
@@ -574,7 +575,62 @@ func init() {
 			}, "worktree"),
 			changes: true, inMain: true, run: mcpUpdateWorktree,
 		},
+		{
+			name: "tunnel", title: "The public tunnel for webhooks",
+			description: "The stack's public tunnel (x-hydra tunnel: cloudflared, ngrok), one for every checkout: its requests (webhooks) reach main's copy of its service until a worktree takes it. " +
+				"status: each tunnel, its public URL, who holds it and where its requests go now. take: this worktree takes it (`hydra tunnel take`), so the webhooks reach this worktree's copy; " +
+				"refused in the main checkout. release: it goes back to main (`hydra tunnel release`), from any checkout. " +
+				"Take it only when the developer asked for webhooks in this worktree, since it moves them away from whoever had them, and release it when done. name is needed only when the stack has more than one tunnel.",
+			schema: object(map[string]any{
+				"action": map[string]any{"type": "string", "enum": []string{"status", "take", "release"}, "description": "status (read-only), take or release."},
+				"name":   map[string]any{"type": "string", "description": "The tunnel (its process name); only when there is more than one."},
+			}, "action"),
+			changes: true, inMain: true, run: mcpTunnel,
+		},
 	}
+}
+
+func mcpTunnel(_ context.Context, c *mcpCall) (toolResult, error) {
+	var a struct {
+		Action string `json:"action"`
+		Name   string `json:"name"`
+	}
+	if err := c.decode(&a); err != nil {
+		return toolResult{}, err
+	}
+	if strings.HasPrefix(a.Name, "-") {
+		return toolResult{}, fmt.Errorf("bad tunnel name %q", a.Name)
+	}
+	switch a.Action {
+	case "status":
+		st := mainStackOf(c.co)
+		if st == nil || !st.HasTunnel() {
+			return toolResult{}, fmt.Errorf("this stack has no tunnel (no x-hydra.tunnel in main's process-compose.yaml)")
+		}
+		views, err := loadTunnels(c.co.CommonDir, st)
+		if err != nil {
+			return toolResult{}, err
+		}
+		var b strings.Builder
+		printTunnels(&b, views)
+		return toolResult{summary: strings.TrimRight(b.String(), "\n"), data: map[string]any{"tunnels": views}}, nil
+	case "take":
+		if c.co.IsMain() {
+			return toolResult{}, errRefused("refused: this is the main checkout, and a tunnel is main's unless a worktree takes it. To give it back to main, use action release.")
+		}
+	case "release":
+	default:
+		return toolResult{}, fmt.Errorf("action: want status, take or release, got %q", a.Action)
+	}
+	args := []string{"tunnel", a.Action}
+	if a.Name != "" {
+		args = append(args, a.Name)
+	}
+	out, err := c.hydra(args...)
+	if err != nil {
+		return toolResult{}, err
+	}
+	return toolResult{summary: out, data: map[string]any{"output": out}}, nil
 }
 
 // statusResult is the status tool's data.

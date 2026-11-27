@@ -55,6 +55,7 @@
   <a href="#prs">Pull requests</a>
   <a href="#routed">One copy for every worktree</a>
   <a href="#hosts">An address per worktree</a>
+  <a href="#tunnel">A tunnel for webhooks</a>
   <a href="#supabase">A database per worktree</a>
   <a href="#temporal">Temporal workers</a>
   <a href="#tls">HTTPS in front of a service</a>
@@ -581,6 +582,14 @@ ring-schema  main         ! 4 commits behind  ring-web
       <div><p class="said">! changed, but in no service's paths, so nothing runs here for them: packages/billing/src/tax.ts</p><p>The branch changed a file that no service lists, so you keep getting main's copy of the code you changed. If a service uses the file, add it to that service's <code>paths</code> (<code>hydra up SERVICE</code> runs it here meanwhile). If none does, add it to <code>x-hydra.ignore</code>.</p></div>
       <div><p class="said">! db is shared, but its paths changed: db/migrations/0042_orders.sql; main's copy is used</p><p>The branch changed files of a service that only ever runs in main. Nothing runs here for them.</p></div>
     </div>
+    <p><b>About the tunnel.</b> See <a href="#tunnel">a tunnel for webhooks</a>.</p>
+    <div class="msgs">
+      <div><p class="said">! webhooks through tunnel tunnel (https://hooks.example.com) go to main's api, not this worktree's.</p><p>This worktree runs its own <code>api</code>, and the tunnel's requests go to main's (or to another worktree's: <code>go to fla-709's api</code>). A note: only if you need them here, <code>hydra tunnel take</code>; <code>hydra tunnel release</code> gives it back.</p></div>
+      <div><p class="said">✗ this worktree holds tunnel tunnel (https://hooks.example.com), and its api is exited with code 1: the tunnel's requests get a 502.</p><p>The worktree took the tunnel and its copy of the service isn't up, so every webhook fails. <code>hydra up -D api</code> starts it (on a stack that is up, it adds it); or give the tunnel back: <code>hydra tunnel release</code>.</p></div>
+      <div><p class="said">✗ this worktree holds tunnel tunnel (https://hooks.example.com), and its stack isn't running: the tunnel's requests get a 502.</p><p>Its process-compose was killed, or the tunnel was taken before the stack started. <code>hydra up -D</code>, or <code>hydra tunnel release</code>.</p></div>
+      <div><p class="said">hydra: tunnel tunnel goes to main again (fla-709 held it)</p><p>Nothing to do. Printed by <code>hydra down</code> in the worktree that held it.</p></div>
+      <div><p class="said">hydra: tunnel tunnel is held by worktree fla-709, and its api isn't answering on :9080 (…). There: `hydra up -D api`, or give the tunnel back: `hydra tunnel release tunnel`</p><p>Not in <code>hydra status</code>: the body of the 502 the tunnel's caller gets (in the webhook provider's delivery log). <code>… and its stack isn't running</code> is the same with the whole stack down; <code>main's api isn't answering</code> means main's own copy is down.</p></div>
+    </div>
     <p>The watcher runs two of these checks all the time. It writes to the worktree's log when main's stack stops answering and when the branch falls out of step with main.</p>
     <p><b>About worktrees that were removed.</b> These are lines of <code>hydra up</code>, <code>hydra update</code> and <code>hydra down --worktrees</code>, in any checkout. See <a href="#cleanup">when a worktree is removed</a>.</p>
     <div class="msgs">
@@ -706,6 +715,7 @@ ring-schema  main         ! 4 commits behind  ring-web
       <tr><td><kbd>f</kbd></td><td>Run the fix of one of its problems. Shows the problem and the command, and asks.</td></tr>
       <tr><td><kbd>m</kbd></td><td>In a worktree: merge its parent into it (main, or the branch it is stacked on), <a href="#update-here"><code>hydra update --here</code></a>. On a branch with no checkout: <a href="#update-branch"><code>hydra update --branch NAME</code></a>, from the main checkout, which needs no checkout. Shows the dry run, then asks. On a branch in step with its parent under one that is behind, it says which branch to update first instead.</td></tr>
       <tr><td><kbd>U</kbd></td><td>Update everything: <a href="#updating"><code>hydra update</code></a>, which pulls main. Shows the dry run, then asks.</td></tr>
+      <tr><td><kbd>t</kbd></td><td>With a <a href="#tunnel">tunnel</a>: take it to the chosen worktree, <code>hydra tunnel take</code>; on main, or on the worktree that holds it, give it back, <code>hydra tunnel release</code>. Says whose copy the webhooks will reach, and asks.</td></tr>
       <tr><td><kbd>R</kbd></td><td>Read everything again now.</td></tr>
       <tr><td><kbd>pgup</kbd> <kbd>pgdn</kbd></td><td>Scroll the detail.</td></tr>
       <tr><td><kbd>?</kbd></td><td>List the keys and what the glyphs, lines and words in the list mean. esc closes it.</td></tr>
@@ -793,6 +803,7 @@ ring-schema  main         ! 4 commits behind  ring-web
       <tr><td><code>farBehind</code></td><td>The branch is <a href="#far-behind">far behind main</a>: <code>behind</code> (commits), <code>limit</code> (<code>behind_warn</code>) and <code>conflicts</code> (the files merging main into it conflicts in, when it does). Absent otherwise.</td></tr>
       <tr><td><code>update</code></td><td>What <code>hydra update</code> would do to it now: <code>parent</code> (what is merged in: main, or the branch it is stacked on), <code>behind</code> (commits the parent has that it doesn't), <code>action</code> (<code>merge</code>, <code>fast-forward</code>, or absent when it is left alone), <code>note</code> (the update's line for it), <code>hand</code> (someone has to step in) and <code>conflicts</code>.</td></tr>
       <tr><td><code>strays</code></td><td>Programs outside any stack that hold one of its ports, each with <code>port</code>, <code>service</code>, <code>pid</code>, <code>command</code>, <code>dir</code> (its working directory) and <code>dirGone</code> (that directory no longer exists). Absent when there are none; each one is also in <code>problems</code>. Looked for every 15 seconds in a watch.</td></tr>
+      <tr><td><code>tunnels</code></td><td>With a <a href="#tunnel">tunnel</a>: each one, with <code>name</code>, <code>url</code>, <code>to</code>, <code>port</code>, <code>holder</code> (the root of the worktree that holds it, <code>""</code> for main), <code>branch</code> and <code>since</code> (when it was taken), <code>target</code> (where requests go now: <code>fla-709:9080</code>, <code>main:8080</code>, or <code>main:8080 for fla-709</code> for a holder that runs no copy) and <code>down</code> (why requests get a 502 now). Absent without one. On a worktree, <code>tunnel</code> names the tunnels it holds.</td></tr>
       <tr><td><code>idleStopped</code></td><td>The stack isn't running because nobody used it for <a href="#idle"><code>idle_stop</code></a>: <code>at</code> (when hydra stopped it) and <code>after</code> (the <code>idle_stop</code>, <code>"2h"</code>). Absent otherwise.</td></tr>
       <tr><td><code>pending</code></td><td>Not planned yet: the first seconds of a watch.</td></tr>
       <tr><td><code>pr</code></td><td>The branch's <a href="#prs">pull request</a>, on a worktree and on each of <code>branches</code>: <code>number</code>, <code>state</code> (<code>open</code>, <code>draft</code>, <code>merged</code>, <code>closed</code>), <code>review</code> (<code>approved</code>, <code>changes requested</code>, <code>review required</code>), <code>checks</code> (<code>passing</code>, <code>failing</code>, <code>pending</code>), <code>url</code>, <code>base</code> (the branch it merges into) and <code>mergedLocally</code> (its commits are in <code>origin/main</code>, merged with a merge commit: git alone says so; without gh, <code>state</code> is then <code>merged</code> and there is no number). Absent when no PR is known.</td></tr>
@@ -1149,6 +1160,7 @@ $ codex mcp add hydra -- hydra mcp                   # Codex
       <tr><td><code>worktrees</code></td><td>Main and every worktree of the repository, in the order to update them: each worktree right before the branches stacked on it. For each worktree: its branch, its parent (main, or the branch it is stacked on), commits behind and ahead of it, every file merging the parent in conflicts in, uncommitted changes, what <code>update_worktree</code> would do (<code>next</code>: <code>merge</code>, <code>resolve</code>, <code>skip</code> or <code>nothing</code>), its stack (<code>up</code>, <code>down</code>, <code>idle-stopped</code>) and slot, and its <a href="#prs">PR</a> (<code>pr</code>, as in <a href="#json"><code>hydra status --json</code></a>; one merged or closed has <code>next</code> <code>skip</code>: nothing left to do). The branches of a PR stack that a worktree sits on but no worktree has checked out are listed in their place too, with <code>checkout: false</code>, no path, the branch as their name and stack <code>none</code> (see <a href="#stacks-bare">branches with no worktree</a>). For main: how far behind its upstream it is as of the last fetch, uncommitted changes, whether its stack is up.</td><td>Reads</td></tr>
       <tr><td><code>update_main</code></td><td><a href="#updating"><code>hydra update --main-only</code></a>: pulls main (fast-forward only) and brings its stack to the new commit. No worktree is merged. <code>dry_run: true</code> fetches and says how far main would move and what would restart. Its description tells the agent to call it only when you asked; an <a href="#mcp-rules">ask rule</a> makes sure.</td><td>Allowed</td></tr>
       <tr><td><code>update_worktree</code></td><td><a href="#update-here"><code>hydra update --here</code></a>, run in the <code>worktree</code> named (its folder, branch or path): merges its parent in and restarts what that touched in its stack. Main is left alone. A conflict comes back as an error naming every file, with the worktree as it was. <code>since</code>: after a merge made by hand, the commit before it; what the merge touched is restarted too. Given a branch with no checkout, it runs <a href="#update-branch"><code>hydra update --branch</code></a> instead: a clean merge without a checkout; a conflict comes back as an error with the steps for a temporary worktree. <code>dry_run: true</code> says what it would do.</td><td>Allowed</td></tr>
+      <tr><td><code>tunnel</code></td><td>The stack's <a href="#tunnel">tunnel</a>. <code>action: "status"</code>: each tunnel, who holds it and where its requests go. <code>"take"</code>: <code>hydra tunnel take</code>, its webhooks come to this worktree. <code>"release"</code>: <code>hydra tunnel release</code>, back to main. <code>name</code> only with more than one tunnel. Its description tells the agent to take it only when you asked for webhooks in its worktree, and to give it back when done.</td><td><code>take</code> refused; <code>status</code> and <code>release</code> allowed</td></tr>
     </table></div>
     <p>What the tools answer that isn't a message of <code>hydra status</code>:</p>
     <div class="msgs">
@@ -1247,13 +1259,15 @@ Update in this order: a worktree after the one it is stacked on (└).
     ],
     "ask": [
       "mcp__hydra__update_main",
-      "mcp__plugin_hydra_hydra__update_main"
+      "mcp__plugin_hydra_hydra__update_main",
+      "mcp__hydra__tunnel",
+      "mcp__plugin_hydra_hydra__tunnel"
     ]
   }
 }
 </pre>
     </div>
-    <p><code>hydra update</code> pulls main and merges into every worktree. The agent gets <code>update_here</code> for its own, and <code>update_main</code> and <code>update_worktree</code> for <a href="#mcp-update-all">updating everything</a>. <code>update_main</code> changes your main checkout and stack: the ask rule has Claude Code ask you each time the agent calls it. The second name is the same tool when the server came with <a href="#plugin">the plugin</a>. Other tools write rules their own way; the commands to deny are the same.</p>
+    <p><code>hydra update</code> pulls main and merges into every worktree. The agent gets <code>update_here</code> for its own, and <code>update_main</code> and <code>update_worktree</code> for <a href="#mcp-update-all">updating everything</a>. <code>update_main</code> changes your main checkout and stack, and <code>tunnel</code> moves the webhooks away from whoever had them: the ask rules have Claude Code ask you each time the agent calls one. The second name is the same tool when the server came with <a href="#plugin">the plugin</a>. Other tools write rules their own way; the commands to deny are the same.</p>
   </section>
 
   <section id="troubleshooting">
@@ -1289,6 +1303,7 @@ Update in this order: a worktree after the one it is stacked on (└).
       <tr><td><code>usage</code></td><td>Once a minute for each stack that runs: the resident memory and CPU of each process and its children, and of the checkout's native Supabase stack, which runs detached. Main's also records the machine's free memory and swap.</td></tr>
       <tr><td><code>idle</code></td><td>hydra stopped a worktree's stack that nobody used for <a href="#idle"><code>idle_stop</code></a> (<code>after</code>), or failed to (<code>error</code>).</td></tr>
       <tr><td><code>slot</code></td><td>A worktree takes its slot on <code>hydra up</code>, or the slot of a stopped one.</td></tr>
+      <tr><td><code>tunnel</code></td><td>A worktree takes a <a href="#tunnel">tunnel</a> (<code>action</code> <code>take</code>, <code>from</code>), or it goes back to main (<code>release</code>, and <code>why</code>: <code>hydra tunnel</code>, <code>hydra down</code>, <code>idle</code>, <code>worktree removed</code>, <code>slot freed</code>).</td></tr>
       <tr><td><code>start</code>, <code>log</code></td><td>The watcher, the router or the dashboard starts; every line the watcher and the router print.</td></tr>
       <tr><td><code>killed</code></td><td><code>hydra down</code> killed a process that didn't stop within 60 seconds of being asked to (or its own <code>shutdown.timeout_seconds</code> and 10 more): its name, pid and how long it was given.</td></tr>
     </table></div>
@@ -1499,6 +1514,51 @@ const queue = globalThis.__hydra?.upstream('JOBS_QUEUE') ?? process.env.JOBS_QUE
       <li><b><code>HYDRA_URL_&lt;SERVICE&gt;</code>.</b> The service's own process gets its address in that checkout: <code>HYDRA_URL_WEB=http://fla-709.localhost:3900</code> in fla-709, <code>http://localhost:3900</code> in main. Main's copy of a routed service has main's, also while it serves a worktree; take the request's <code>Host</code> header there. Adding <code>hosts</code> changes that one process's environment, so the next <code>hydra update</code> restarts it in main.</li>
       <li>A request at a worktree's address counts as using it, for <a href="#idle"><code>idle_stop</code></a>. <code>hydra status</code>, <code>hydra up</code>, <code>hydra status --json</code> (<code>address</code>) and the dashboard (<kbd>o</kbd> opens it) show the address.</li>
     </ul>
+  </section>
+
+  <section id="tunnel">
+    <h2>A tunnel for webhooks</h2>
+    <p>A public tunnel (cloudflared, ngrok) gives the dev stack one public address, for the webhooks of Twilio, Stripe, LiveKit and the like. There is one tunnel, it runs in main, and it points at one local port: main's API. A worktree that changes the API and needs those webhooks to test it can't get them. With <code>x-hydra.tunnel</code> the tunnel stays one, and any checkout can take it:</p>
+    <div class="code">
+<pre data-lang="yaml">
+  tunnel:
+    command: TUNNEL_TOKEN="$(security find-generic-password -s cloudflared-dev -w)" exec cloudflared tunnel --no-autoupdate run
+    x-hydra:
+      tunnel:
+        to: api                          # the service its requests reach (it needs a port)
+        port: 8079                       # where the tunnel sends them; hydra's router listens here
+        url: https://hooks.example.com   # its public address, shown only
+</pre>
+    </div>
+    <p><b>Once:</b> point the tunnel at <code>port</code> instead of the API. For a remotely managed cloudflared tunnel, that is the public hostname's service in Cloudflare's dashboard: <code>http://localhost:8079</code> instead of <code>http://localhost:8080</code>. Until then nothing changes: the tunnel reaches main's API directly, and hydra's port is unused. hydra never starts, stops or configures the tunnel itself.</p>
+    <p>hydra's router, in main, listens on <code>port</code> and passes each request to the copy of <code>to</code> in the checkout that holds the tunnel: main's, until a worktree takes it.</p>
+    <div class="code term">
+      <div class="file">in a worktree that runs its own api</div>
+<pre>$ hydra tunnel take
+tunnel tunnel (https://hooks.example.com) now comes here; main had it
+its requests reach this worktree's api on :9080
+give it back with: hydra tunnel release
+
+$ hydra tunnel
+tunnel tunnel (https://hooks.example.com)
+  reaches  api, through :8079 (hydra-router)
+  held by  fla-709 (santiago/fla-709-call-flow) since 14:02
+  goes to  fla-709:9080</pre>
+    </div>
+    <div class="table wrap"><table>
+      <tr><th>Command</th><th>What it does</th></tr>
+      <tr><td><code>hydra tunnel</code></td><td>Each tunnel: its public address, its service and port, who holds it and since when, and where its requests go now.</td></tr>
+      <tr><td><code>hydra tunnel take [NAME]</code></td><td>In a worktree: the tunnel's requests come here, and it says who had it. In the main checkout: it goes back to main. <code>NAME</code> (the tunnel's process name) only when there is more than one.</td></tr>
+      <tr><td><code>hydra tunnel release [NAME]</code></td><td>Back to main, from any checkout.</td></tr>
+    </table></div>
+    <ul>
+      <li><b>Where requests go.</b> To the holder's own copy of <code>to</code> when it runs one. A holder that runs none gets main's copy, with its worktree's header, so the <a href="#routed">routed</a> services those requests reach serve the holder: useful when only a frontend or a worker downstream changed. The header the caller sent is dropped, and the tunnel's own <code>X-Forwarded-*</code> and <code>Host</code> are passed on as they came, so a webhook's signature still checks against the public URL. Websockets and streams go through.</li>
+      <li><b>Never main's instead.</b> When the holder's copy doesn't answer, or its stack isn't running, each request gets a 502 that says which worktree holds the tunnel and what to do (<code>hydra up -D api</code> there, or <code>hydra tunnel release</code>). Falling back to main would hand the webhook you moved the tunnel for to code that isn't yours.</li>
+      <li><b>It comes back by itself</b> on <code>hydra down</code> in the holder (also <code>hydra down --worktrees</code>; it says so), when the holder's stack is stopped for being <a href="#idle">idle</a>, and when the holder is removed or its slot freed. A webhook through the tunnel counts as using the holder, for <code>idle_stop</code>.</li>
+      <li><b>Who holds it</b> is <code>hydra-tunnels.json</code> in the shared <code>.git</code>; the router reads it twice a second, so a move takes effect at once, without a restart. Every take and give-back is in <a href="#journal">the journal</a> (<code>hydra log tunnel</code>).</li>
+      <li><code>tunnel</code> makes the process <code>shared</code>: it runs in main only. <code>shared: false</code>, <code>follow</code>, <code>routed</code> or a <code>kind</code> with it is an error, and so is a <code>port</code> another service uses in any slot. Several tunnels are fine, each with its own port.</li>
+    </ul>
+    <p><code>hydra status</code> shows it at the top: in the holder, <code>tunnel    tunnel (https://hooks.example.com) comes here: api :9080</code>; in the main checkout, where each tunnel goes. A worktree that runs <code>to</code> and doesn't hold the tunnel gets a note saying whose copy gets the webhooks (see <a href="#messages">the messages</a>). In <a href="#dashboard">the dashboard</a>, the header says <code>⇄ tunnel: fla-709</code>, the holder's row has <code>⇄</code> before its name, each checkout's detail says whether the tunnel comes there, and <kbd>t</kbd> moves it to the chosen checkout, asking first. Agents have the <a href="#mcp"><code>tunnel</code> tool</a>, and take it only when you ask for webhooks in their worktree.</p>
   </section>
 
   <section id="supabase">
@@ -1822,6 +1882,7 @@ supabase:
       <tr><td><code>hosts</code><span class="type">integer</span></td><td class="def">none</td><td>A port where the router serves each worktree's copy by name, <code>http://&lt;worktree&gt;.localhost:PORT</code>, and main's at <code>localhost:PORT</code>; a worktree that doesn't run the service gets what it uses instead. Needs <code>port</code> and an HTTP <code>url</code>; not on a <code>shared</code> service. See <a href="#hosts">an address per worktree</a>.</td></tr>
       <tr><td><code>pool</code><span class="type">integer or map</span></td><td class="def">none</td><td>On a database's service: a port where one <a href="#pool">PgBouncer</a> in main stands in front of main's copy, and every worktree that takes the database from main connects through it. <code>pool: 6432</code>, or <code>pool: { port: 6432, size: 40, of: db }</code>: <code>size</code> is how many connections it keeps to Postgres for all worktrees together (20), <code>of</code> the named port it stands in front of (<code>db</code> when the service has one, else <code>port</code>). One service per stack. Needs <code>pgbouncer</code> installed.</td></tr>
       <tr><td><code>seed_from_main</code><span class="type">boolean</span></td><td class="def">false</td><td>On a <code>kind: supabase</code> service: a worktree's own database starts from main's data instead of the seed files, and the branch's migrations run on it. See <a href="#supabase-data">main's data in a worktree</a>.</td></tr>
+      <tr><td><code>tunnel</code><span class="type">map</span></td><td class="def">none</td><td>On a public tunnel's process (cloudflared, ngrok): <code>{ to: api, port: 8079, url: https://… }</code>. The router listens on <code>port</code> and passes each request to the copy of <code>to</code> in the checkout that holds the tunnel; <code>hydra tunnel take</code> moves it. Makes the process shared. See <a href="#tunnel">a tunnel for webhooks</a>.</td></tr>
       <tr><td><code>baseline_command</code><span class="type">string</span></td><td class="def">none</td><td>Replaces the process's <code>command</code> in the main checkout, where the code only changes on <code>hydra update</code>: a production build, say, where worktrees run a dev server.</td></tr>
     </table></div>
     <p>Three process-compose keys of your own matter to hydra as well:</p>
@@ -1919,6 +1980,7 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>hydra slots free [PATH]</code></td><td>Stops a worktree's stack and frees its slot. The default is this worktree.</td></tr>
       <tr><td><code>hydra throttle NAME N -- COMMAND…</code></td><td>Runs <code>COMMAND</code> once fewer than <code>N</code> commands of the same <code>NAME</code> run on this machine, and waits its turn otherwise. For the build step of a service's command. See <a href="#many">many worktrees at once</a>.</td></tr>
       <tr><td><code>hydra db reseed</code></td><td>In a worktree with its own Supabase and <code>seed_from_main</code>: removes its database, makes it again from main's data, applies the branch's migrations, and waits until it is ready. See <a href="#supabase-data">main's data in a worktree</a>.</td></tr>
+      <tr><td><code>hydra tunnel</code></td><td>Each <a href="#tunnel">tunnel</a>, who holds it and where its requests go. <code>hydra tunnel take [NAME]</code>: this worktree takes it (in main: back to main). <code>hydra tunnel release [NAME]</code>: back to main.</td></tr>
       <tr><td><code>hydra trust</code></td><td>Makes this machine trust the local CA behind <a href="#tls">TLS fronts</a>. <code>--remove</code> undoes it; <code>--print</code> prints the CA's file.</td></tr>
       <tr><td><code>hydra mcp</code></td><td>An MCP server on stdin and stdout, for coding agents: tools that start, wait for, read, restart and stop this checkout's stack, and refuse to change main's; tools and a prompt (<code>update_all</code>) that bring main and every worktree up to date. See <a href="#mcp">for agents: hydra mcp</a>.</td></tr>
       <tr><td><code>hydra version</code></td><td>The commit hydra was built from, and the process-compose it found.</td></tr>
@@ -1975,6 +2037,7 @@ $ hydra plan --route web.api=local       # also starts api here
       <tr><td><code>.process-compose/idle-stopped</code><span class="type">in a worktree</span></td><td>When hydra stopped the stack for being <a href="#idle">idle</a>, and after how long. There until the stack starts again.</td></tr>
       <tr><td><code>.hydra.local.yaml</code><span class="type">in a worktree</span></td><td>Yours, and optional: <a href="#local">per-worktree settings</a>. hydra only reads it.</td></tr>
       <tr><td><code>hydra-slots.json</code><span class="type">shared .git</span></td><td>Which worktree holds which slot.</td></tr>
+      <tr><td><code>hydra-tunnels.json</code><span class="type">shared .git</span></td><td>Which worktree holds each <a href="#tunnel">tunnel</a>, since when. No entry: main. Written by <code>hydra tunnel</code>, and when the holder stops or goes.</td></tr>
       <tr><td><code>gh-stack</code><span class="type">shared .git</span></td><td>The <code>gh stack</code> extension's, not hydra's: its PR stacks. hydra only reads it, to find a stack's <a href="#stacks-bare">branches with no worktree</a>.</td></tr>
       <tr><td><code>hydra-baseline.json</code><span class="type">shared .git</span></td><td>The commit main's stack was last brought to, and where its process-compose listens. Written when main's stack starts and after a successful <code>hydra update</code>.</td></tr>
       <tr><td><code>hydra-routes/slot-N.json</code><span class="type">shared .git</span></td><td>What a running worktree runs, and its name for <a href="#hosts"><code>hosts</code></a>, for main's router.</td></tr>

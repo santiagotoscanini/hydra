@@ -37,6 +37,7 @@ import {
 	problemRows,
 	problemsTitle,
 	type Seg,
+	type TunnelHeld,
 } from "./ui.js";
 
 type Overlay =
@@ -132,6 +133,11 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 	if (index < 0) index = 0;
 	const sel: Entry | undefined = list[index];
 	const mainRoot = snap?.main?.root ?? snap?.repo ?? "";
+	// Each tunnel with what its holder is called here.
+	const tunnelsHeld: TunnelHeld[] = (snap?.tunnels ?? []).map((t) => {
+		const h = t.holder ? list.find((e) => e.root === t.holder) : undefined;
+		return { t, holder: !t.holder ? "main" : h ? called(h) : t.holder.slice(t.holder.lastIndexOf("/") + 1) };
+	});
 
 	const select = (i: number) => {
 		const e = list[Math.max(0, Math.min(list.length - 1, i))];
@@ -388,6 +394,52 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 				);
 				return;
 			}
+			case "tunnel": {
+				const all = tunnelsHeld;
+				if (all.length === 0) {
+					setMessage({ text: "this stack has no tunnel (x-hydra tunnel on the tunnel's process)", color: "yellow" });
+					return;
+				}
+				const move = ({ t, holder }: TunnelHeld) => {
+					const title = `${t.name}${t.url ? ` (${t.url})` : ""}`;
+					const back = e.kind === "main" || t.holder === e.root;
+					if (back && !t.holder) {
+						setOverlay(undefined);
+						setMessage({ text: `tunnel ${title} goes to main already; select a worktree and t to take it there`, color: "yellow" });
+						return;
+					}
+					if (back) {
+						setOverlay({
+							kind: "confirm",
+							title: `Give tunnel ${title} back to main? (hydra tunnel release)`,
+							lines: [`Its webhooks will reach main's ${t.to} instead of ${holder}'s.`],
+							onYes: () => {
+								setOverlay(undefined);
+								runQuiet(["tunnel", "release", t.name], mainRoot, "main", "taking the tunnel back");
+							},
+						});
+						return;
+					}
+					const own = e.services.some((s) => s.name === t.to && s.runs === "here" && !s.off);
+					setOverlay({
+						kind: "confirm",
+						title: `Move tunnel ${title} from ${holder} to ${called(e)}? (hydra tunnel take)`,
+						lines: [
+							own
+								? `Its webhooks will reach ${called(e)}'s ${t.to}.`
+								: `Its webhooks will reach main's ${t.to}, tagged as ${called(e)}'s: ${called(e)} runs no ${t.to} of its own.`,
+							...(e.up ? [] : [`${called(e)}'s stack isn't running: they get a 502 until u starts it.`]),
+						],
+						onYes: () => {
+							setOverlay(undefined);
+							runQuiet(["tunnel", "take", t.name], e.root, called(e), "taking the tunnel");
+						},
+					});
+				};
+				if (all.length === 1) return move(all[0]!);
+				setOverlay({ kind: "pick", title: "Which tunnel?", items: all.map(({ t, holder }) => `${t.name} (now ${holder})`), index: 0, onPick: (i) => move(all[i]!) });
+				return;
+			}
 			case "update":
 				dryThenDo(
 					["update", "--dry-run"],
@@ -457,6 +509,7 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 			f: "fix",
 			m: "merge",
 			U: "update",
+			t: "tunnel",
 		};
 		if (key.return) return act("open", sel);
 		if (keys[input]) act(keys[input]!, sel);
@@ -530,7 +583,7 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 		const at = node ? nodes.indexOf(node) : -1;
 		const via: Entry[] = [];
 		for (let i = at + 1; node && i < nodes.length && nodes[i]!.depth > node.depth; i++) if (nodes[i]!.e.kind === "worktree") via.push(nodes[i]!.e);
-		const lines = detailRows(sel, detailInner, { home, busy: verbOf(sel), problems: !wide, node, staleOf, prs: snap?.prs, via });
+		const lines = detailRows(sel, detailInner, { home, busy: verbOf(sel), problems: !wide, node, staleOf, prs: snap?.prs, via, tunnels: tunnelsHeld });
 		const max = Math.max(0, lines.length - detailRoom);
 		const from = Math.min(scroll, max);
 		const shown = lines.slice(from, from + detailRoom);
@@ -621,10 +674,29 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 				? [{ text: "   " }, { text: "", spin: true, color: "cyan" }, { text: reading ? " reading everything again" : " planning" }]
 				: [];
 		const repo: Seg[] = [{ text: snap ? "  " + snap.repo.slice(snap.repo.lastIndexOf("/") + 1) : "", bold: true }];
-		const segs = (withRepo: boolean): Seg[] => [{ text: " hydra", bold: true, color: "magenta" }, ...(withRepo ? repo : []), ...main, ...busyNote];
+		// Where the tunnel's requests go: "⇄ tunnel: cart" (main's: dim).
+		const tunnel: Seg[] = tunnelsHeld.length
+			? [
+					{ text: " · " },
+					{ text: "⇄ ", color: "magenta", bold: true },
+					{ text: `tunnel${tunnelsHeld.length > 1 ? "s" : ""}: ` },
+					...tunnelsHeld.flatMap(({ t, holder }, i): Seg[] => [
+						...(i ? [{ text: ", " }] : []),
+						t.holder ? { text: holder, color: t.down ? "red" : "magenta", bold: true } : { text: holder, dim: true },
+					]),
+				]
+			: [];
+		const segs = (withRepo: boolean, withTunnel = true): Seg[] => [
+			{ text: " hydra", bold: true, color: "magenta" },
+			...(withRepo ? repo : []),
+			...main,
+			...(withTunnel ? tunnel : []),
+			...busyNote,
+		];
 		const width_ = (x: Seg[]) => x.reduce((k, s) => k + (s.spin ? 1 : Array.from(s.text).length), 0);
-		// Narrow: the repository's name goes first, it is the least news.
-		return width_(segs(true)) <= w ? segs(true) : segs(false);
+		// Narrow: the repository's name goes first, it is the least news; then the tunnel.
+		if (width_(segs(true)) <= w) return segs(true);
+		return width_(segs(false)) <= w ? segs(false) : segs(false, false);
 	}
 
 	if (blank) return <Box />;
@@ -653,7 +725,7 @@ export default function App({ backend, size: fixedSize, initial, theme = themeFo
 					</>
 				)}
 				{status.length ? <Row width={width} segs={[{ text: " " }, ...status]} /> : null}
-				<Footer e={sel} width={width} overlay={!!overlay} />
+				<Footer e={sel} width={width} overlay={!!overlay} tunnel={tunnelsHeld.length > 0} />
 			</Box>
 		</ThemeContext.Provider>
 	);

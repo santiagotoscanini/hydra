@@ -141,6 +141,10 @@ func wrap(args []string) error {
 	if a.sub == "down" && contains(a.rest, "--worktrees") {
 		return downWorktrees(co)
 	}
+	if a.sub == "down" && !co.IsMain() && os.Getenv("HYDRA_DRY_RUN") == "" {
+		// First, so the tunnel's requests reach main while this stops.
+		releaseTunnelsOf(co.CommonDir, co.Root, "hydra down", os.Stderr)
+	}
 	server := ownServer(co, a.rest)
 	if a.sub == "down" && !server.Alive() {
 		return downStopped(co, a.file)
@@ -534,12 +538,14 @@ func downWorktrees(co gitx.Checkout) error {
 		if !pc.Unix(sock).Alive() {
 			// Not running, or killed: then part of it still is.
 			var said bytes.Buffer
+			releaseTunnelsOf(co.CommonDir, wco.Root, "hydra down --worktrees", os.Stdout)
 			if slotOf(wco) >= 0 && stopRemains(wco, "", database(wco.Root), &said) {
 				fmt.Printf("%s: its process-compose was gone, part of its stack wasn't\n%s", filepath.Base(wco.Root), indent(said.String(), "  "))
 				stopped++
 			}
 			continue
 		}
+		releaseTunnelsOf(co.CommonDir, wco.Root, "hydra down --worktrees", os.Stdout)
 		fmt.Printf("stopping %s ... ", filepath.Base(wco.Root))
 		kills, err := downSocket(sock, 3*time.Minute)
 		if err != nil {

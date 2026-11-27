@@ -293,11 +293,41 @@ type Service struct {
 	// hydra applies the migrations main's database has, copies main's rows
 	// in, and only then applies the migrations that are the branch's own.
 	SeedFromMain bool `yaml:"seed_from_main"`
+	// Tunnel marks a public tunnel (cloudflared, ngrok) that any checkout
+	// can take: it sends its requests to Tunnel.Port, where hydra's router
+	// passes them to the copy of Tunnel.To in the checkout that holds the
+	// tunnel. A tunnel is shared: it only runs in the main checkout.
+	Tunnel *Tunnel `yaml:"tunnel"`
 
 	// DependsOn lists the process names this process waits for, from the
 	// regular process-compose `depends_on`.
 	DependsOn []string `yaml:"-"`
 }
+
+// Tunnel is a service's `x-hydra.tunnel` block (Service.Tunnel).
+type Tunnel struct {
+	// To names the service the tunnel reaches; it needs a port.
+	To string `yaml:"to"`
+	// Port is where the tunnel sends its requests, and hydra's router
+	// listens.
+	Port int `yaml:"port"`
+	// URL is the tunnel's public address, for messages only.
+	URL string `yaml:"url"`
+}
+
+// Tunnels returns the names of the services that are tunnels, sorted.
+func (st *Stack) Tunnels() []string {
+	var out []string
+	for _, name := range st.Names() {
+		if st.Services[name].Tunnel != nil {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// HasTunnel reports whether any service is a tunnel.
+func (st *Stack) HasTunnel() bool { return len(st.Tunnels()) > 0 }
 
 // Routing is how a routed service passes the worktree tag along.
 type Routing string
@@ -568,6 +598,15 @@ func (st *Stack) Names() []string {
 	return names
 }
 
+// sharedProbe finds an explicit `shared: false`, which a tunnel can't have.
+type sharedProbe struct {
+	Processes map[string]struct {
+		Hydra struct {
+			Shared *bool `yaml:"shared"`
+		} `yaml:"x-hydra"`
+	} `yaml:"processes"`
+}
+
 type typedFile struct {
 	Hydra     Global `yaml:"x-hydra"`
 	Processes map[string]struct {
@@ -605,6 +644,10 @@ func Parse(data []byte) (*Stack, error) {
 	}
 	var raw map[string]any
 	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	var shared sharedProbe
+	if err := yaml.Unmarshal(data, &shared); err != nil {
 		return nil, err
 	}
 
@@ -666,6 +709,14 @@ func Parse(data []byte) (*Stack, error) {
 				s.Pool.Size = 20
 			}
 		}
+		if s.Tunnel != nil {
+			// One tunnel, in main: which checkout it reaches is the router's
+			// to decide, not where the process runs.
+			if v := shared.Processes[name].Hydra.Shared; v != nil && !*v {
+				return nil, fmt.Errorf("%s: a tunnel only runs in the main checkout (x-hydra.tunnel makes it shared); drop shared: false", name)
+			}
+			s.Shared = true
+		}
 		if s.URL == "" {
 			s.URL = "http://{host}:{port}"
 		}
@@ -702,6 +753,23 @@ func Parse(data []byte) (*Stack, error) {
 func (st *Stack) validate() error {
 	for _, name := range st.Names() {
 		s := st.Services[name]
+		if s.Tunnel != nil {
+			to := st.Services[s.Tunnel.To]
+			switch {
+			case s.Follow || s.Routed != NotRouted || s.Kind != "":
+				return fmt.Errorf("%s: a tunnel runs once, in the main checkout; it can't be follow, routed or have a kind", name)
+			case s.Tunnel.To == "":
+				return fmt.Errorf("%s: tunnel needs to:, the service its requests reach", name)
+			case to == nil:
+				return fmt.Errorf("%s: tunnel.to: no service is called %q", name, s.Tunnel.To)
+			case to == s:
+				return fmt.Errorf("%s: tunnel.to names the tunnel itself; name the service its requests reach", name)
+			case to.Port == 0:
+				return fmt.Errorf("%s: tunnel.to: %s has no x-hydra.port for the router to pass requests to", name, to.Name)
+			case s.Tunnel.Port == 0:
+				return fmt.Errorf("%s: tunnel needs port:, where the tunnel sends its requests and hydra's router listens", name)
+			}
+		}
 		if s.Shared && s.Follow {
 			return fmt.Errorf("%s: shared and follow can't both be set", name)
 		}
@@ -858,6 +926,14 @@ func (st *Stack) checkPorts() error {
 			return fmt.Errorf("port %d: %s collides with %s; change it, slot_stride, max_slots or the base ports", s.Pool.Port, who, prev)
 		}
 		owner[s.Pool.Port] = who
+	}
+	for _, name := range st.Tunnels() {
+		port := st.Services[name].Tunnel.Port
+		who := "tunnel " + name + "'s port"
+		if prev, taken := owner[port]; taken {
+			return fmt.Errorf("port %d: %s collides with %s; change it, slot_stride, max_slots or the base ports", port, who, prev)
+		}
+		owner[port] = who
 	}
 	for _, name := range st.Dispatched() {
 		p := st.DispatchPort(st.Services[name])

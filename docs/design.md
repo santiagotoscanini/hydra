@@ -1224,6 +1224,56 @@ web:
   and the dashboard shows it and opens it (`o`). A request at a worktree's
   name is activity, for `idle_stop`.
 
+## Tunnels
+
+A public tunnel (cloudflared, ngrok) is one address for webhooks, and it
+can only point at one local port. Main runs it (it is `shared`), so the
+webhooks reach main's API, and a worktree that changed the API can't test a
+call flow. `x-hydra.tunnel` on its process makes the one tunnel movable:
+
+```yaml
+tunnel:
+  x-hydra: { tunnel: { to: api, port: 8079, url: https://hooks.example.com } }
+```
+
+- **The router sits in between.** A remotely managed cloudflared tunnel has
+  its target (`http://localhost:8080`) in Cloudflare's dashboard; hydra
+  can't change where cloudflared sends traffic without a token and an API
+  call per move, and restarting the tunnel with another target drops its
+  connections. So the developer points it once at `port`, and the router
+  (main's, already running for routing) listens there and picks the copy
+  per request. Moving the tunnel is writing a file; nothing restarts.
+- **Who holds it** is `hydra-tunnels.json` in the shared `.git`, under an
+  flock like the slots: tunnel name → `{root, branch, since}`, no entry for
+  main. The router reads it with the routes on every reload (twice a
+  second), so a take or release reaches it at once.
+- **Where requests go.** The holder's own copy of `to` when its routes file
+  (live: its process-compose answers) lists it; otherwise main's copy with
+  the holder's `X-Hydra-Worktree`, so routed services downstream serve the
+  holder (useful when only a frontend or worker changed). The caller's
+  `X-Hydra-*` headers are dropped: only the holder decides the tag. `Host`
+  and the tunnel's `X-Forwarded-*` pass through, since a webhook's
+  signature is computed over the public URL. A webhook is activity for the
+  holder (`idle_stop`).
+- **No fallback.** A holder whose copy refuses the connection, or whose
+  stack isn't running, gets a 502 naming the holder and the two ways out
+  (`hydra up -D api` there, `hydra tunnel release`). Sending the request to
+  main instead would hide that the developer's code never saw it, the same
+  reason routed calls never fall back.
+- **It goes back by itself** when nobody can be using it any more: `hydra
+  down` in the holder (and `down --worktrees`), the idle stop, and the reap
+  of a removed worktree or a freed slot. A killed process-compose doesn't
+  release it (nothing runs then to notice); the 502 and `hydra status` say
+  so instead. Every take and release is a `tunnel` event in the journal.
+- **Taking it is explicit.** A worktree that runs `to` gets a note (`!`), not
+  an error, that the webhooks go elsewhere: several worktrees may run the
+  API and only one can have the tunnel, and moving it away from someone is
+  their business. Agents take it through the MCP tool only when asked, and
+  the manual's ask rule covers the tool.
+- **Validation:** `to` names a service with a port, `port` collides with no
+  port of any slot, TLS front, hosts port, pool or router port, and a
+  tunnel can't be `shared: false`, `follow`, `routed` or a `kind`.
+
 ## Slots
 
 `hydra-slots.json` in the shared `.git` directory maps worktree paths to

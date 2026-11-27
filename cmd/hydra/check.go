@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/santiagotoscanini/hydra/internal/config"
@@ -126,6 +127,32 @@ type mainState struct {
 	// ConfigStale: the stack file (or hydra) changed since the stack's
 	// file was rendered.
 	ConfigStale bool
+
+	tun *tunnelCache // shared by the copies a snapshot makes
+}
+
+// tunnelCache is where each tunnel's requests go, as of at.
+type tunnelCache struct {
+	mu    sync.Mutex
+	views []tunnelView
+	err   error
+	at    time.Time
+}
+
+// tunnels is where each tunnel's requests go now, looked up at most once a
+// second: every worktree's status asks.
+func (ms *mainState) tunnels() ([]tunnelView, error) {
+	if ms.tun == nil {
+		ms.tun = &tunnelCache{}
+	}
+	c := ms.tun
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if time.Since(c.at) >= time.Second {
+		c.views, c.err = loadTunnels(ms.target.checkout.CommonDir, ms.target.stack)
+		c.at = time.Now()
+	}
+	return c.views, c.err
 }
 
 // loadMain reads the main checkout's state. co may be any checkout of the
@@ -139,7 +166,7 @@ func loadMain(co gitx.Checkout) (*mainState, error) {
 	if err != nil {
 		return nil, err
 	}
-	ms := &mainState{target: t, Client: mainClient(co.CommonDir), Record: readBaseline(co.CommonDir)}
+	ms := &mainState{target: t, Client: mainClient(co.CommonDir), Record: readBaseline(co.CommonDir), tun: &tunnelCache{}}
 	if ms.Head, err = gitx.Head(mainCo.Root); err != nil {
 		return nil, err
 	}
@@ -654,6 +681,7 @@ func worktreeProblems(ms *mainState, ws *wtState, started bool) []problem {
 	}
 
 	if started {
+		out = append(out, tunnelProblems(ms, ws)...)
 		switch {
 		case !ws.Up:
 			pr := problem{Blocks: true, Text: "this worktree's stack isn't running.", Fix: "hydra up -D"}

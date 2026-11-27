@@ -101,6 +101,8 @@ export interface WorktreeState {
 	idleStopped?: { at: string; after: string };
 	/** More than behind_warn commits behind main, or merging main conflicts. */
 	farBehind?: { behind: number; limit: number; conflicts?: string[] };
+	/** The tunnels it holds: their requests (webhooks) come to it. */
+	tunnel?: string[];
 	pending?: boolean;
 	plannedAt: string;
 	gitAt: string;
@@ -126,6 +128,24 @@ export interface Branch {
 	gitAt: string;
 }
 
+/** A public tunnel (x-hydra tunnel) and where its requests go now. */
+export interface Tunnel {
+	name: string;
+	url?: string;
+	/** The service its requests reach. */
+	to: string;
+	/** Where the tunnel sends them: hydra-router's port. */
+	port: number;
+	/** The root of the worktree that holds it; "" for main. */
+	holder: string;
+	branch?: string;
+	since?: string;
+	/** Where requests go now: "cart:9080", "main:8080", "main:8080 for cart". */
+	target: string;
+	/** Why requests get a 502 now (the holder's stack isn't running). */
+	down?: string;
+}
+
 export interface Snapshot {
 	version: number;
 	repo: string;
@@ -137,5 +157,7 @@ export interface Snapshot {
 	/** Stack branches with no checkout (absent from older hydras). */
 	branches?: Branch[];
 	prs?: PRSource;
+	/** The stack's tunnels (absent when it has none, and from older hydras). */
+	tunnels?: Tunnel[];
 	error?: string;
 }
