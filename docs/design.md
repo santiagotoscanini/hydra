@@ -648,7 +648,12 @@ branch count: a branch nobody runs needs nothing (`internal/stack`,
   nothing is inferred. A branch that only took merges since a commit the
   worktree has (schema after main was merged into it) still counts as
   under it, at that commit; a sibling with commits of its own (a prototype
-  cut from schema) doesn't. Only a chain with a branch that has no
+  cut from schema) doesn't. Several branches at the same commit (copies
+  of a stack under other names, `port/3-repository` beside
+  `you/feature/3-repository`) count as one, named by the one checked out,
+  else the one whose path shares most with the worktree's branch, else
+  the first by name: otherwise the copies would hide the whole stack.
+  Only a chain with a branch that has no
   checkout changes anything: worktrees alone are found as above.
 - **Never:** `backup/*`, the base branch, a branch at the same commit as
   the worktree's, a branch main or its remote-tracking branch contains.

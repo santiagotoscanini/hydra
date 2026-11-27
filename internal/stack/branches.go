@@ -240,7 +240,7 @@ func findStacks(main, base, refs, ghFile string, checked []string) (*Stacks, err
 				at[c] = x
 			}
 		}
-		chain, ok := g.strictChain(under, at)
+		chain, ok := g.strictChain(oneEach(b, under, at, isChecked), at)
 		if !ok {
 			continue
 		}
@@ -336,6 +336,38 @@ func (g *graph) under(b, c string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// oneEach keeps one branch per commit among those under b. Copies of a
+// stack's branches at the same commits (port/3-repository beside
+// you/feature/3-repository, made to move the stack elsewhere) would
+// otherwise make it no chain at all, so the whole stack would vanish. The
+// one kept: a checked-out one, else the one whose name shares the most of
+// b's path ("you/feature/"), else the first by name.
+func oneEach(b string, under []string, at map[string]string, isChecked map[string]bool) []string {
+	score := func(c string) int {
+		if isChecked[c] {
+			return 1 << 20
+		}
+		n, bs, cs := 0, strings.Split(b, "/"), strings.Split(c, "/")
+		for n < len(bs)-1 && n < len(cs)-1 && bs[n] == cs[n] {
+			n++
+		}
+		return n
+	}
+	kept := map[string]string{} // commit -> branch
+	for _, c := range under {   // in order of name
+		if k, ok := kept[at[c]]; !ok || score(c) > score(k) {
+			kept[at[c]] = c
+		}
+	}
+	var out []string
+	for _, c := range under {
+		if kept[at[c]] == c {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // strictChain orders branches so each contains the one before it, and

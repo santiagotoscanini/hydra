@@ -165,3 +165,27 @@ func TestFindStacksCache(t *testing.T) {
 		t.Errorf("bare = %s: schema is in main now", got)
 	}
 }
+
+// Copies of a stack's branches at the same commits (another name for each,
+// made to move the stack) don't hide the stack: one name per commit is
+// kept, the one that shares the worktree's branch's path.
+func TestFindStacksWithCopiesOfItsBranches(t *testing.T) {
+	main, web := ringRepo(t)
+	g := func(args ...string) string { return gitIn(t, main, args...) }
+	g("branch", "-m", "schema", "me/ring/schema")
+	g("branch", "-m", "core", "me/ring/core")
+	gitIn(t, web, "branch", "-m", "web", "me/ring/web")
+	g("branch", "port/schema", "me/ring/schema")
+	g("branch", "port/core", "me/ring/core")
+	wts, err := List(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := FindStacks(main, "main", wts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := bareNames(st), "me/ring/core<me/ring/schema(ancestry) me/ring/schema<main(ancestry)"; got != want {
+		t.Errorf("bare = %s, want %s", got, want)
+	}
+}
