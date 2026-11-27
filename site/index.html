@@ -279,18 +279,18 @@ you open  localhost:3400         slot 2's port for web. hydra's router answers,
 <span class="s">│</span>     <span class="s">└─</span><span class="g c">▣</span> deeper            <span class="c">down</span>          <b class="m">#8 merged</b>   <b class="m">PR merged: nothing to do</b> <span class="s">│</span>
 <span class="s">╰──────────────────────────────────────────────────────────────────────────────╯</span>
 <span class="s">╭─</span> api  ○ <span class="c">down</span> <span class="s">────────────────────────────────────────────────────────────────╮</span>
-<span class="s">│</span> api · ~/code/shop/api                                                        <span class="s">│</span>
-<span class="s">│</span> 2c059c488 api: orders                                                        <span class="s">│</span>
+<span class="s">│</span> <span class="c">branch</span>  api                                                                  <span class="s">│</span>
+<span class="s">│</span> <span class="c">folder</span>  ~/code/shop/api                                                      <span class="s">│</span>
+<span class="s">│</span> <span class="c">commit</span>  a108e8809 api: orders                                                <span class="s">│</span>
 <span class="s">│</span>                                                                              <span class="s">│</span>
 <span class="s">│</span> <b>◎ PR</b>  #7 open · review required · checks passing                             <span class="s">│</span>
 <span class="s">│</span>   <span class="s">https://example.invalid/demo/repo/pull/7</span>  <span class="c">p opens it</span>                       <span class="s">│</span>
 <span class="s">│</span>                                                                              <span class="s">│</span>
 <span class="s">│</span> <b>⇅ vs main</b>  1 behind · 1 ahead                                                <span class="s">│</span>
-<span class="s">│</span>   <span class="c">update: main would be merged in (1 commit)                                 </span><span class="s">│</span>
 <span class="s">│</span>                                                                              <span class="s">│</span>
 <span class="s">│</span> <b>◆ Runs here, and why</b>  1                                                      <span class="s">│</span>
 <span class="s">│</span>   ○ api    not started                                                       <span class="s">│</span>
-<span class="s">│</span>     <span class="c">↳ changed: apps/api/ 📄 orders.go</span>                                         <span class="s">│</span>
+<span class="s">│</span>     <span class="c">↳ changed: apps/api/</span> 📄 orders.go                                        <span class="s">│</span>
 <span class="s">│</span> <b>◇ From main</b>  <span class="x">● </span>db <span class="c">· 1 unused</span>                                                 <span class="s">│</span>
 <span class="s">│</span>                                                                              <span class="s">│</span>
 <span class="s">│</span> <span class="x">✓ nothing in the way: u starts it</span>                                            <span class="s">│</span>
@@ -301,57 +301,57 @@ you open  localhost:3400         slot 2's port for web. hydra's router answers,
  u <span class="x">up</span>  ·  l logs  ·  m merge main  ·  p PR    U update all  ·  ? help  ·  q quit</pre>
     </div>
     <div class="code term" id="shot-stack" role="tabpanel" hidden>
-      <div class="file">A PR stack checked out at its top only: ring-schema and ring-core are branches (⎇), ring-web the worktree (▣) that runs their code.</div>
+      <div class="file">A PR stack checked out at its top only: ring-schema and ring-core are branches (⎇), ring-web the worktree (▣) that runs their code. Its chain says which branch to update first.</div>
 <pre> hydra  main   main <b class="x">up</b> · 0 of 6 worktrees up · <b class="w">8 out of date</b> · <b class="m">1 on a merged PR</b>
 <span class="s">╭─</span> Checkouts 9 <span class="s">────────────────────────────────────────────────────────────────╮</span>
 <span class="s">│</span> <span class="g x">▣</span> <span class="m">main</span>                    <span class="x">up</span>                                      <span class="c">up to date</span> <span class="s">│</span>
 <span class="s">│</span> <span class="s">├─</span><span class="g c">▣</span> api                   <span class="c">down</span>          <span class="x">#7 ✓</span>                   <span class="w">1 behind main</span> <span class="s">│</span>
 <span class="s">│</span> <span class="s">├─</span><span class="g c">▣</span> clash                 <span class="c">down</span>                    <span class="r">1 behind main · 1 conflict</span> <span class="s">│</span>
-<span class="s">│▌├─</span><span class="g c">⎇</span> ring-schema           <span class="c">branch only</span>                          <span class="w">1 behind main</span> <span class="s">│</span>
+<span class="s">│</span> <span class="s">├─</span><span class="g c">⎇</span> ring-schema           <span class="c">branch only</span>                          <span class="w">1 behind main</span> <span class="s">│</span>
 <span class="s">│</span> <span class="s">│</span> <span class="s">└─</span><span class="g c">⎇</span> ring-core           <span class="c">branch only</span>                <span class="w">↑ ring-schema is behind</span> <span class="s">│</span>
-<span class="s">│</span> <span class="s">│</span>   <span class="s">└─</span><span class="g c">▣</span> ring-web          <span class="c">down</span>                       <span class="w">↑ ring-schema is behind</span> <span class="s">│</span>
+<span class="s">│▌│</span>   <span class="s">└─</span><span class="g c">▣</span> ring-web          <span class="c">down</span>                       <span class="w">↑ ring-schema is behind</span> <span class="s">│</span>
 <span class="s">│</span> <span class="s">└─</span><span class="g c">▣</span> web                   <span class="c">down</span>                                 <span class="w">1 behind main</span> <span class="s">│</span>
 <span class="s">│</span>   <span class="s">└─</span><span class="g c">▣</span> stacked             <span class="c">down</span>                               <span class="w">↑ web is behind</span> <span class="s">│</span>
 <span class="s">│</span>     <span class="s">└─</span><span class="g c">▣</span> deeper            <span class="c">down</span>          <b class="m">#8 merged</b>   <b class="m">PR merged: nothing to do</b> <span class="s">│</span>
 <span class="s">╰──────────────────────────────────────────────────────────────────────────────╯</span>
-<span class="s">╭─</span> ring-schema  <span class="g c">⎇</span> <span class="c">branch only</span> <span class="s">─────────────────────────────────────────────────╮</span>
-<span class="s">│</span> ring-schema · <span class="c">branch only: no worktree, no files on disk</span>                     <span class="s">│</span>
-<span class="s">│</span> 98db69954 ring: schema                                                       <span class="s">│</span>
+<span class="s">╭─</span> ring-web  ○ <span class="c">down</span> <span class="s">───────────────────────────────────────────────────────────╮</span>
+<span class="s">│</span> <span class="c">branch</span>  ring-web                                                             <span class="s">│</span>
+<span class="s">│</span> <span class="c">folder</span>  ~/code/shop/ring                                                     <span class="s">│</span>
+<span class="s">│</span> <span class="c">commit</span>  c8c165803 Merge branch 'main' into ring-web                          <span class="s">│</span>
 <span class="s">│</span>                                                                              <span class="s">│</span>
 <span class="s">│</span> <b>◎ PR</b>  none for this branch                                                   <span class="s">│</span>
 <span class="s">│</span>                                                                              <span class="s">│</span>
-<span class="s">│</span> <b>⇅ vs main</b>  1 behind · 1 ahead                                                <span class="s">│</span>
-<span class="s">│</span>   <span class="c">update: main would be merged in (1 commit), without a checkout             </span><span class="s">│</span>
+<span class="s">│</span> <b>⇅ Chain</b>  <span class="w">ring-schema needs an update first</span>                                   <span class="s">│</span>
+<span class="s">│</span>   main                                                                       <span class="s">│</span>
+<span class="s">│</span>   <span class="s">│</span> ring-schema    <span class="w">1 behind main</span>   <span class="w">← start here</span>                              <span class="s">│</span>
+<span class="s">│</span>   <span class="s">│</span> ring-core      <span class="c">in step</span>                                                   <span class="s">│</span>
+<span class="s">│</span>   <span class="s">└</span> ring-web       <span class="c">in step   ← this one</span>                                      <span class="s">│</span>
+<span class="s">│</span>   <span class="c">m on ring-schema, or U for every branch, in order</span>                          <span class="s">│</span>
 <span class="s">│</span>                                                                              <span class="s">│</span>
-<span class="s">│</span> <b>◆ Runs here</b>  nothing: no worktree has it checked out                         <span class="s">│</span>
-<span class="s">│</span>   ring-web, stacked on it, runs its code. m merges its parent into it        <span class="s">│</span>
-<span class="s">│</span>   without a checkout (hydra update --branch).                                <span class="s">│</span>
-<span class="s">│</span>                                                                              <span class="s">│</span>
-<span class="s">│</span>                                                                              <span class="s">│</span>
-<span class="s">│</span>                                                                              <span class="s">│</span>
-<span class="s">│</span>                                                                              <span class="s">│</span>
-<span class="s">│</span>                                                                              <span class="s">│</span>
-<span class="s">│</span>                                                                              <span class="s">│</span>
-<span class="s">│</span>                                                                              <span class="s">│</span>
+<span class="s">│</span> <b>◆ Runs here, and why</b>  2                                                      <span class="s">│</span>
+<span class="s">│</span>   ○ api    not started                                                       <span class="s">│</span>
+<span class="s">│</span>     <span class="c">↳ changed: apps/api/</span> 📄 ring.go                                          <span class="s">│</span>
+<span class="s">│</span>   ○ web    not started                                                       <span class="s">│</span>
+<span class="s">│</span> … 8 more lines (pgdn)                                                        <span class="s">│</span>
 <span class="s">╰──────────────────────────────────────────────────────────────────────────────╯</span>
- m merge main                                 U update all  ·  ? help  ·  q quit</pre>
+ u <span class="x">up</span>  ·  l logs                              U update all  ·  ? help  ·  q quit</pre>
     </div>
     <div class="code term wide" id="shot-wide" role="tabpanel" hidden>
       <div class="file">u started api's stack: wide terminals get the panels side by side.</div>
 <pre> hydra  main   main <b class="x">up</b> · 1 of 6 worktrees up · <b class="w">8 out of date</b> · <b class="m">1 on a merged PR</b>
 <span class="s">╭─</span> Checkouts 9 <span class="s">─────────────────────────────────────────────────────────╮╭─</span> api  ● <b class="x">up</b> <span class="s">───────────────────────────────────────────────────────────────╮</span>
-<span class="s">│</span> <span class="g x">▣</span> <span class="m">main</span>             <span class="x">up</span>                                      <span class="c">up to date</span> <span class="s">││</span> api · ~/code/shop/api                                                     <span class="s">│</span>
-<span class="s">│▌├─</span><span class="g x">▣</span> api            <span class="x">up</span>            <span class="x">#7 ✓</span>                   <span class="w">1 behind main</span> <span class="s">││</span> 2c059c488 api: orders                                                     <span class="s">│</span>
-<span class="s">│</span> <span class="s">├─</span><span class="g c">▣</span> clash          <span class="c">down</span>                    <span class="r">1 behind main · 1 conflict</span> <span class="s">││</span>                                                                           <span class="s">│</span>
-<span class="s">│</span> <span class="s">├─</span><span class="g c">⎇</span> ring-schema    <span class="c">branch only</span>                          <span class="w">1 behind main</span> <span class="s">││</span> <b>◎ PR</b>  #7 open · review required · checks passing                          <span class="s">│</span>
-<span class="s">│</span> <span class="s">│</span> <span class="s">└─</span><span class="g c">⎇</span> ring-core    <span class="c">branch only</span>                <span class="w">↑ ring-schema is behind</span> <span class="s">││</span>   <span class="s">https://example.invalid/demo/repo/pull/7</span>  <span class="c">p opens it</span>                    <span class="s">│</span>
-<span class="s">│</span> <span class="s">│</span>   <span class="s">└─</span><span class="g c">▣</span> ring-web   <span class="c">down</span>                       <span class="w">↑ ring-schema is behind</span> <span class="s">││</span>                                                                           <span class="s">│</span>
-<span class="s">│</span> <span class="s">└─</span><span class="g c">▣</span> web            <span class="c">down</span>                                 <span class="w">1 behind main</span> <span class="s">││</span> <b>⇅ vs main</b>  1 behind · 1 ahead                                             <span class="s">│</span>
-<span class="s">│</span>   <span class="s">└─</span><span class="g c">▣</span> stacked      <span class="c">down</span>                               <span class="w">↑ web is behind</span> <span class="s">││</span>   <span class="c">update: main would be merged in (1 commit)                              </span><span class="s">│</span>
+<span class="s">│</span> <span class="g x">▣</span> <span class="m">main</span>             <span class="x">up</span>                                      <span class="c">up to date</span> <span class="s">││</span> <span class="c">branch</span>  api                                                               <span class="s">│</span>
+<span class="s">│▌├─</span><span class="g x">▣</span> api            <span class="x">up</span>            <span class="x">#7 ✓</span>                   <span class="w">1 behind main</span> <span class="s">││</span> <span class="c">folder</span>  ~/code/shop/api                                                   <span class="s">│</span>
+<span class="s">│</span> <span class="s">├─</span><span class="g c">▣</span> clash          <span class="c">down</span>                    <span class="r">1 behind main · 1 conflict</span> <span class="s">││</span> <span class="c">commit</span>  a108e8809 api: orders                                             <span class="s">│</span>
+<span class="s">│</span> <span class="s">├─</span><span class="g c">⎇</span> ring-schema    <span class="c">branch only</span>                          <span class="w">1 behind main</span> <span class="s">││</span>                                                                           <span class="s">│</span>
+<span class="s">│</span> <span class="s">│</span> <span class="s">└─</span><span class="g c">⎇</span> ring-core    <span class="c">branch only</span>                <span class="w">↑ ring-schema is behind</span> <span class="s">││</span> <b>◎ PR</b>  #7 open · review required · checks passing                          <span class="s">│</span>
+<span class="s">│</span> <span class="s">│</span>   <span class="s">└─</span><span class="g c">▣</span> ring-web   <span class="c">down</span>                       <span class="w">↑ ring-schema is behind</span> <span class="s">││</span>   <span class="s">https://example.invalid/demo/repo/pull/7</span>  <span class="c">p opens it</span>                    <span class="s">│</span>
+<span class="s">│</span> <span class="s">└─</span><span class="g c">▣</span> web            <span class="c">down</span>                                 <span class="w">1 behind main</span> <span class="s">││</span>                                                                           <span class="s">│</span>
+<span class="s">│</span>   <span class="s">└─</span><span class="g c">▣</span> stacked      <span class="c">down</span>                               <span class="w">↑ web is behind</span> <span class="s">││</span> <b>⇅ vs main</b>  1 behind · 1 ahead                                             <span class="s">│</span>
 <span class="s">│</span>     <span class="s">└─</span><span class="g c">▣</span> deeper     <span class="c">down</span>          <b class="m">#8 merged</b>   <b class="m">PR merged: nothing to do</b> <span class="s">││</span>                                                                           <span class="s">│</span>
 <span class="s">╰───────────────────────────────────────────────────────────────────────╯│</span> <b>◆ Runs here, and why</b>  1/1 ready                                           <span class="s">│</span>
 <span class="s">╭─</span> Problems <span class="s">────────────────────────────────────────────────────────────╮│</span>   <span class="x">● </span>api    running                                                        <span class="s">│</span>
-<span class="s">│</span> <span class="x">✓ nothing wrong</span>                                                       <span class="s">││</span>     <span class="c">↳ changed: apps/api/ 📄 orders.go</span>                                      <span class="s">│</span>
+<span class="s">│</span> <span class="x">✓ nothing wrong</span>                                                       <span class="s">││</span>     <span class="c">↳ changed: apps/api/</span> 📄 orders.go                                     <span class="s">│</span>
 <span class="s">│</span>                                                                       <span class="s">││</span> <b>◇ From main</b>  <span class="x">● </span>db <span class="c">· 1 unused</span>                                              <span class="s">│</span>
 <span class="s">│</span>                                                                       <span class="s">││</span>                                                                           <span class="s">│</span>
 <span class="s">│</span>                                                                       <span class="s">││</span>                                                                           <span class="s">│</span>

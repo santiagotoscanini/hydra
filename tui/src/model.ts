@@ -348,7 +348,7 @@ export function outOfDate(n: Node): boolean {
 	return n.stale.kind === "behind" || n.stale.kind === "inherits";
 }
 
-const plural = (n: number, one: string, many = one + "s") => `${n} ${n === 1 ? one : many}`;
+export const plural = (n: number, one: string, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 
 /** How a checkout stands against its parent, for the list. texts are the
  *  ways to say it, longest first: the row shows the first that fits. */
@@ -393,22 +393,6 @@ export function badgeOf(n: Node): Badge {
 			if (e.outOfStep.length > 0 && e.mainBehind) return { texts: ["in step · main is older", "main is older"], color: "yellow" };
 			return { texts: ["in step"], dim: true };
 	}
-}
-
-/** The chain from main to a checkout, each stale branch with how far
- *  behind: "main → fla-709 (69 behind) → fla-710". */
-export function chainText(n: Node, staleOf: (e: Entry) => Staleness): string {
-	const all = [...n.chain, n.e];
-	const names = labels(all.filter((e) => e.kind !== "main").map((e) => e.branch));
-	return all
-		.map((e) => {
-			const name = e.kind === "main" ? "main" : names.get(e.branch)!;
-			const s = staleOf(e);
-			if (s.kind !== "behind") return name;
-			const what = [s.behind ? `${s.behind} behind` : "", s.conflicts ? plural(s.conflicts, "conflict") : ""].filter(Boolean);
-			return `${name} (${what.join(", ")})`;
-		})
-		.join(" → ");
 }
 
 /** The branch to update first for a checkout to be current, and how. */

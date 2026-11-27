@@ -252,8 +252,9 @@ minutes in the background; one whose PR is merged or closed says `PR
 merged: nothing to do`, and the header counts them, so worktrees still
 running a merged branch stand out. gh is optional: without it there are no
 PR badges, and `?` says why. In a panel for the chosen one, what runs
-there and why, in this order: its PR and link, its chain of branches up to
-main and what to update first, each service it runs with the files that
+there and why, in this order: its branch, folder, commit and memory, one a
+line under its label; its PR and link; its chain of branches from main
+down to it, one a line, marking the one to update first; each service it runs with the files that
 made it run here, what it takes from main, its problems with their fixes. At 120 columns or wider the panels sit side by side. It uses
 the terminal's own colours and follows its light or dark theme, also when
 the terminal switches while it runs.
@@ -272,18 +273,18 @@ the terminal switches while it runs.
 │     └─▣ deeper            down          #8 merged   PR merged: nothing to do │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ api  ○ down ────────────────────────────────────────────────────────────────╮
-│ api · ~/code/shop/api                                                        │
-│ 85fb02ad0 api: orders                                                        │
+│ branch  api                                                                  │
+│ folder  ~/code/shop/api                                                      │
+│ commit  a108e8809 api: orders                                                │
 │                                                                              │
 │ ◎ PR  #7 open · review required · checks passing                             │
 │   https://example.invalid/demo/repo/pull/7  p opens it                       │
 │                                                                              │
 │ ⇅ vs main  1 behind · 1 ahead                                                │
-│   update: main would be merged in (1 commit)                                 │
 │                                                                              │
 │ ◆ Runs here, and why  1                                                      │
 │   ○ api    not started                                                       │
-│     ↳ changed: apps/api/ 📄 orders.go                                         │
+│     ↳ changed: apps/api/ 📄 orders.go                                        │
 │ ◇ From main  ● db · 1 unused                                                 │
 │                                                                              │
 │ ✓ nothing in the way: u starts it                                            │

@@ -150,9 +150,17 @@ waitfor 'Checkouts [0-9]'
 T send-keys -t d j j
 waitfor '▌├─⎇ ring-schema'
 screen "a branch with no checkout, chosen"
-T capture-pane -p -t d | grep -qE 'ring-schema · branch only' || fail "the detail doesn't say it has no checkout"
+T capture-pane -p -t d | grep -qE 'folder  none: a branch only, no worktree' || fail "the detail doesn't say it has no checkout"
 T capture-pane -p -t d | grep -qE 'nothing: no worktree has it checked out' || fail "the detail doesn't say nothing runs it"
 T capture-pane -p -t d | grep -qE '^ m merge main +U update all' || fail "the footer doesn't offer m alone"
+T send-keys -t d j j
+waitfor '▌│   └─▣ ring-web'
+screen "a stacked worktree, chosen"
+T capture-pane -p -t d | grep -qE '⇅ Chain  ring-schema needs an update first' || fail "the chain doesn't say which branch to update first"
+T capture-pane -p -t d | grep -qE '│ ring-schema +1 behind main   ← start here' || fail "the chain doesn't mark where to start"
+T capture-pane -p -t d | grep -qE '└ ring-web +in step   ← this one' || fail "the chain doesn't end at the chosen worktree"
+T send-keys -t d k k
+waitfor '▌├─⎇ ring-schema'
 T send-keys -t d u
 waitfor 'ring-schema is a branch only, with no worktree: nothing runs it'
 start 150 24

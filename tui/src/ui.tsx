@@ -19,7 +19,8 @@ import {
 	fitPaths,
 	changedIn,
 	badgeOf,
-	chainText,
+	labels,
+	plural,
 	firstToUpdate,
 	labelBeside,
 	prColor,
@@ -340,9 +341,13 @@ export function detailRows(
 	// Who it is: its name and state are in the panel's title (detailTitle).
 	if (e.idleStopped && !e.up) add({ text: `nobody used it for ${e.idleStopped}, so hydra stopped it: u starts it`, color: "blue" });
 	else if (e.kind === "main" && !e.up && !e.pending && !opts.busy) add({ text: "not running: the worktrees that use main's services need it", color: "red" });
-	if (e.kind === "branch") add({ text: `${e.branch} · ` }, { text: "branch only: no worktree, no files on disk", dim: true });
-	else add({ text: `${e.branch} · ${tildePath(e.root, opts.home)}` }, { text: e.memory ? ` · ${bytes(e.memory)}` : "" });
-	if (e.commit) add({ text: e.commit + " ", bold: true }, { text: e.subject });
+	// Who it is, one fact a line, each under a label.
+	const field = (label: string, ...value: Seg[]) => add({ text: pad(label, 8), dim: true }, ...fit(value, width - 8));
+	field("branch", { text: e.branch });
+	if (e.kind === "branch") field("folder", { text: "none: a branch only, no worktree", dim: true });
+	else field("folder", { text: fitPaths(tildePath(e.root, opts.home), width - 8) });
+	if (e.commit) field("commit", { text: e.commit + " ", bold: true }, { text: e.subject });
+	if (e.memory) field("memory", { text: bytes(e.memory) });
 
 	if (e.kind === "main") {
 		blank();
@@ -456,46 +461,73 @@ function prRows(e: Entry, prs?: PRSource): Seg[][] {
 	return out;
 }
 
-/** Where a branch stands against its parent, the chain up to main, and
- *  what to update first. */
+/** How it stands against its parent, simply. On main: one line, how far
+ *  behind and ahead, and the files a merge would conflict in. In a stack:
+ *  the chain from main down to it, one branch a line, the ones in step
+ *  between folded into one, and which to update first. */
 function chainRows(e: Entry, width: number, node?: Node, staleOf?: (e: Entry) => Staleness): Seg[][] {
 	const out: Seg[][] = [];
 	const add = (...segs: Seg[]) => out.push(segs);
+	const of = staleOf ?? (() => ({ kind: "none" }) as Staleness);
+	const what = (x: Entry): string => {
+		const s = x === e && node ? node.stale : of(x);
+		if (s.kind !== "behind") return "";
+		const parentName = x.parent && x.stack.length > 1 ? labelBeside(x.parent, x.branch) : "main";
+		return [s.behind ? `${s.behind} behind ${parentName}` : "", s.conflicts ? plural(s.conflicts, "conflict") : ""].filter(Boolean).join(" · ");
+	};
 	const conflicts = conflictCount(e);
-	const counts: string[] = [];
-	if (e.behind > 0) counts.push(`${e.behind} behind`);
-	if (e.ahead > 0) counts.push(`${e.ahead} ahead`);
-	const vsMainText = counts.join(" · ") || "up to date";
-	const s = node?.stale;
-	const color = conflicts ? "red" : s?.kind === "behind" || s?.kind === "inherits" || e.farBehind || e.outOfStep.length ? "yellow" : "cyan";
-	const parent = e.parent && e.stack.length > 1 ? labelBeside(e.parent, e.branch) : undefined;
-	if (!parent) add(...section("⇅", "vs main", color, [{ text: "  " + vsMainText }]));
-	else {
-		const own = s?.kind === "behind" ? [s.behind ? `${s.behind} behind` : "", s.conflicts ? `${s.conflicts} conflict${s.conflicts === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ") : "in step";
-		add(...section("⇅", `vs ${parent}`, color, [{ text: "  " + own }, { text: `   vs main: ${vsMainText}`, dim: true }]));
+	const stacked = !!node && node.chain.length > 1;
+	const stale = node?.stale.kind === "behind" || node?.stale.kind === "inherits";
+	const color = conflicts && !stacked ? "red" : stale || e.farBehind || e.outOfStep.length ? "yellow" : "cyan";
+
+	if (!stacked) {
+		const counts = [e.behind > 0 ? `${e.behind} behind` : "", e.ahead > 0 ? `${e.ahead} ahead` : ""].filter(Boolean).join(" · ");
+		add(...section("⇅", "vs main", color, [{ text: "  " + (counts || "up to date") }]));
+	} else {
+		const first = firstToUpdate(node!);
+		const title = first ? `${labelBeside(first.branch, e.branch)} needs an update first` : "every branch is in step";
+		add(...section("⇅", "Chain", color, [{ text: "  " + title, color: first ? "yellow" : undefined }]));
+		const all = [...node!.chain.filter((x) => x.kind !== "main"), e];
+		const names = labels(all.map((x) => x.branch));
+		const nameW = Math.min(28, Math.max(...all.map((x) => len(names.get(x.branch)!))) + 2);
+		add({ text: "  main", dim: true });
+		let quiet: Entry[] = [];
+		const flush = () => {
+			if (quiet.length > 2) {
+				const span = `${names.get(quiet[0]!.branch)} … ${names.get(quiet[quiet.length - 1]!.branch)}`;
+				add({ text: "  │ ", color: "gray" }, { text: pad(span, nameW + 2) }, { text: `in step (${quiet.length})`, dim: true });
+			} else for (const q of quiet) add({ text: "  │ ", color: "gray" }, { text: pad(names.get(q.branch)!, nameW + 2) }, { text: "in step", dim: true });
+			quiet = [];
+		};
+		for (const x of all) {
+			const w = what(x);
+			if (!w && x !== e) {
+				quiet.push(x);
+				continue;
+			}
+			flush();
+			const here = x === e;
+			add(
+				{ text: here ? "  └ " : "  │ ", color: "gray" },
+				{ text: pad(names.get(x.branch)!, nameW + 2), bold: here },
+				{ text: w || "in step", color: w ? (w.includes("conflict") ? "red" : "yellow") : undefined, dim: !w },
+				{ text: x === first ? "   ← start here" : here ? "   ← this one" : "", color: x === first ? "yellow" : undefined, dim: x !== first },
+			);
+		}
+		if (first) add({ text: `  m on ${labelBeside(first.branch, e.branch)}, or U for every branch, in order`, dim: true });
 	}
-	if (node && node.chain.length > 1) {
-		for (const l of wrap(chainText(node, staleOf ?? (() => ({ kind: "none" }))), width - 2)) add({ text: "  " + l });
-	}
-	// Which branch to bring up to date first: the top of the stale part.
-	const first = node && firstToUpdate(node);
-	if (first && first !== e) {
-		const name = labelBeside(first.branch, e.branch);
-		for (const l of wrap(`${name} is behind ${first.parent ? labelBeside(first.parent, first.branch) : "main"}: update it first (select it, m), or U updates every branch, parents first`, width - 2))
-			add({ text: "  " + l, color: "yellow" });
-	}
+
+	// What this branch itself would need: the files a merge conflicts in,
+	// and the notes that aren't about the chain.
 	const u = e.update;
-	if (u) {
-		const c = u.hand ? (u.conflicts?.length ? "red" : "yellow") : undefined;
-		for (const l of wrap(`update: ${u.note}`, width - 2)) add({ text: "  " + l, color: c });
-	}
-	const files = u?.conflicts?.length ? u.conflicts : (e.farBehind?.conflicts ?? []);
-	const into = u?.conflicts?.length && parent ? parent : "main";
+	const files = u?.conflicts?.length ? u.conflicts : !stacked ? (e.farBehind?.conflicts ?? []) : [];
 	if (files.length) {
-		const shown = files.slice(0, 3).map((f) => f.slice(f.lastIndexOf("/") + 1));
-		add({ text: `  merging ${into} conflicts in ${files.length} file${files.length === 1 ? "" : "s"}: `, color: "red" }, { text: shown.join(", ") + (files.length > 3 ? ` +${files.length - 3}` : "") });
-	}
-	if (e.farBehind && !files.length) add({ text: `  far behind: ${e.farBehind.behind} commits, and the merge only gets harder`, color: "yellow" });
+		const into = u?.conflicts?.length && e.parent && e.stack.length > 1 ? labelBeside(e.parent, e.branch) : "main";
+		add({ text: `  merging ${into} conflicts in:`, color: "red" });
+		for (const f of files.slice(0, 3)) add({ text: "    📄 " }, { text: fitPaths(f, width - 7) });
+		if (files.length > 3) add({ text: `    … ${files.length - 3} more`, dim: true });
+	} else if (u?.hand) for (const l of wrap(u.note, width - 2)) add({ text: "  " + l, color: "yellow" });
+	if (e.farBehind && !files.length && !stacked) add({ text: `  far behind: ${e.farBehind.behind} commits, and the merge only gets harder`, color: "yellow" });
 	if (e.outOfStep.length && !files.length) {
 		add({ text: e.mainBehind ? `  main is older than this branch in: ${e.outOfStep.join(", ")}` : `  main changed what this uses from it: ${e.outOfStep.join(", ")}`, color: "yellow" });
 	}

@@ -66,9 +66,11 @@ test("the detail lists what runs here, what comes from main, and the problems wi
 	await tick();
 	const f = frame();
 	assert.match(f, /╭─ cart-checkout {2}✗ failing/);
-	assert.match(f, /santiago\/cart-checkout · \/repo\/cart · 300M/);
+	assert.match(f, /branch  santiago\/cart-checkout/);
+	assert.match(f, /folder  \/repo\/cart/);
+	assert.match(f, /commit  def456abc cart: checkout button/);
+	assert.match(f, /memory  300M/);
 	assert.match(f, /⇅ vs main {2}3 behind · 1 ahead/);
-	assert.match(f, /update: main would be merged in \(3 commits\)/);
 	assert.match(f, /◆ Runs here, and why {2}1\/2 ready/);
 	assert.match(f, /● web\s+running\s+http:\/\/cart\.localhost:3900\s*│\n│\s+↳ changed: apps\/web\/cart\.tsx/);
 	assert.match(f, /✗ worker\s+exited with code 1\s+:8120/);
@@ -110,11 +112,12 @@ test("detail of a conflicting, a stacked and a still planned worktree", () => {
 	const node = (i: number) => nodes.find((n) => n.e === list[i])!;
 	const staleOf = (e: (typeof list)[number]) => nodes.find((n) => n.e === e)!.stale;
 	const all = (i: number) => rows([...detailRows(list[i]!, 80, { node: node(i), staleOf }), ...problemRows(list[i]!, 80)]);
-	assert.match(all(2), /merging main conflicts in 1 file: users\.go/);
+	assert.match(all(2), /merging main conflicts in:\s*\n\s*📄 apps\/api\/users\.go/);
 	assert.match(all(2), /✓ nothing in the way: u starts it/);
-	assert.match(all(3), /⇅ vs cart-checkout {2}in step {3}vs main: 2 ahead/);
-	assert.match(all(3), /main → cart-checkout \(3 behind\) → more/);
-	assert.match(all(3), /cart-checkout is behind main: update it first \(select it, m\), or U updates\s+every branch, parents first/);
+	assert.match(all(3), /⇅ Chain {2}cart-checkout needs an update first/);
+	assert.match(all(3), /│ cart-checkout\s+3 behind main {3}← start here/);
+	assert.match(all(3), /└ more\s+in step {3}← this one/);
+	assert.match(all(3), /m on cart-checkout, or U for every branch, in order/);
 	assert.match(all(4), /working out what runs here/);
 });
 
@@ -393,7 +396,7 @@ test("a worktree far behind main is marked, and the row still fits 80 columns", 
 	const row = once(<ListRow node={n} selected={false} width={78} />);
 	noLineWiderThan(row, 78);
 	assert.match(row, /312 behind · 2 conflicts/, "the parent's name goes when it doesn't fit");
-	assert.match(rows(detailRows(e, 80)), /merging main conflicts in 2 files: users\.go, cart\.tsx/);
+	assert.match(rows(detailRows(e, 80)), /merging main conflicts in:\s*\n\s*📄 apps\/api\/users\.go\s*\n\s*📄 apps\/web\/cart\.tsx/);
 
 	w.farBehind = { behind: 312, limit: 100 };
 	w.outOfStep = [];
@@ -617,10 +620,11 @@ test("a branch with no checkout: its detail, and only m in the footer", () => {
 	const nodes = tree(es);
 	const node = nodes.find((n) => n.e === core)!;
 	const text = rows(detailRows(core, 80, { node, staleOf: (e) => nodes.find((n) => n.e === e)!.stale }));
-	assert.match(text, /santiago\/scrm-264-app-ring-core · branch only: no worktree, no files on disk/);
-	assert.match(text, /vs schema +in step/);
-	assert.match(text, /main → schema \(10 behind\) → core/);
-	assert.match(text, /schema is behind main: update it first/);
+	assert.match(text, /branch  santiago\/scrm-264-app-ring-core/);
+	assert.match(text, /folder  none: a branch only, no worktree/);
+	assert.match(text, /⇅ Chain {2}schema needs an update first/);
+	assert.match(text, /│ schema\s+10 behind main {3}← start here/);
+	assert.match(text, /└ core\s+in step {3}← this one/);
 	assert.match(text, /◆ Runs here {2}nothing: no worktree has it checked out/);
 	assert.doesNotMatch(text, /From main/);
 	assert.match(once(<>{problemRows(core, 60).map((s, i) => <Row key={i} segs={s} width={60} />)}</>), /nothing runs it: branch only, no worktree/);
@@ -697,8 +701,8 @@ test("the detail says, in order: the PR, the chain, what runs here; a branch wit
 	const text = rows(detailRows(web.e, 80, { node: web, staleOf, prs: snap.prs }));
 	assert.match(text, /◎ PR {2}#10266 open · review required · checks passing/);
 	assert.match(text, /https:\/\/github\.com\/o\/r\/pull\/10266 {2}p opens it/);
-	assert.match(text, /main → schema \(10 behind\) → core → web/);
-	assert.ok(text.indexOf("◎ PR") < text.indexOf("main → schema") && text.indexOf("main → schema") < text.indexOf("◆ Runs here"));
+	assert.match(text, /│ schema\s+10 behind main {3}← start here\n {2}│ core\s+in step\n {2}└ web\s+in step {3}← this one/);
+	assert.ok(text.indexOf("◎ PR") < text.indexOf("⇅ Chain") && text.indexOf("⇅ Chain") < text.indexOf("◆ Runs here"));
 
 	const schema = nodes[1]!;
 	const s = rows(detailRows(schema.e, 80, { node: schema, staleOf, prs: snap.prs, via: [web.e] }));
