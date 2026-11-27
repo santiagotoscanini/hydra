@@ -506,6 +506,33 @@ export function wrap(text: string, width: number, more = "  "): string[] {
 	});
 }
 
+/** One line of at most width: the paths in it shortened in the middle
+ *  (apps/web/…/activity.constants.ts), longest first, keeping the file's
+ *  name, and only then the end cut with …. Why a service runs is one fact:
+ *  wrapped, a long path broke into pieces on lines of their own. */
+export function fitPaths(text: string, width: number): string {
+	const n = (s: string) => Array.from(s).length;
+	const words = text.split(" ");
+	for (;;) {
+		const line = words.join(" ");
+		if (n(line) <= width) return line;
+		// the longest path that can still give up a directory
+		let at = -1;
+		for (let i = 0; i < words.length; i++) {
+			const parts = words[i]!.split("/");
+			if (parts.length > 2 && !(parts.length === 3 && parts[1] === "…") && (at < 0 || n(words[i]!) > n(words[at]!))) at = i;
+		}
+		if (at < 0) break;
+		const parts = words[at]!.split("/");
+		// drop the directory just before the file (or the …), keep the first
+		const rest = parts.slice(1, -1).filter((d) => d !== "…");
+		rest.pop();
+		words[at] = [parts[0], ...rest, "…", parts[parts.length - 1]].join("/");
+	}
+	const chars = Array.from(words.join(" "));
+	return chars.length <= width ? chars.join("") : chars.slice(0, Math.max(0, width - 1)).join("") + "…";
+}
+
 /** A path with the home directory as ~. */
 export function tildePath(p: string, home: string | undefined): string {
 	if (home && (p === home || p.startsWith(home + "/"))) return "~" + p.slice(home.length);

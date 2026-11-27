@@ -15,6 +15,7 @@ import {
 	stateOf,
 	tildePath,
 	wrap,
+	fitPaths,
 	badgeOf,
 	chainText,
 	firstToUpdate,
@@ -375,7 +376,7 @@ export function detailRows(
 	const stateW = Math.min(24, Math.max(0, ...here.map((s) => len(s.state))));
 	for (const s of here) {
 		add(...serviceRow(s, nameW, whereW, stateW));
-		if (s.why) for (const l of wrap(s.why, width - 6, "")) add({ text: "    ↳ ", color: "gray" }, { text: l, dim: true });
+		if (s.why) add({ text: "    ↳ ", color: "gray" }, { text: fitPaths(s.why, width - 6), dim: true });
 	}
 
 	// 4. What it takes from main, on one line.

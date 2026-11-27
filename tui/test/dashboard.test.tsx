@@ -4,7 +4,7 @@ import React from "react";
 import { render } from "ink-testing-library";
 import App from "../src/App.js";
 import { ConfirmBody, Footer, ListRow, detailRows, footerKeys, problemRows, Row } from "../src/ui.js";
-import { badgeOf, branchName, entries, fixCommand, stateOf, tree, wrap, type Entry, type Node } from "../src/model.js";
+import { badgeOf, branchName, entries, fitPaths, fixCommand, stateOf, tree, wrap, type Entry, type Node } from "../src/model.js";
 import type { Branch, Snapshot, WorktreeState } from "../src/types.js";
 import { FakeBackend, plain, tick } from "./fake.js";
 import { fixture } from "./fixture.js";
@@ -795,4 +795,13 @@ test("t asks first, then takes the tunnel to the chosen worktree; in its holder 
 	assert.notEqual(taken.cwd, "/repo/cart");
 	assert.notEqual(taken.cwd, "/repo/main");
 	unmount();
+});
+
+test("why a service runs stays on one line: long paths give up their middle", () => {
+	const why = "changed: apps/web/app/(auth)/[org-slug]/(default)/agent/components/agent-workspace/activity/activity.constants.ts";
+	const got = fitPaths(why, 60);
+	assert.ok(Array.from(got).length <= 60, got);
+	assert.match(got, /^changed: apps\/.*…\/activity\.constants\.ts$/);
+	assert.equal(fitPaths("changed: apps/api/orders.go", 60), "changed: apps/api/orders.go");
+	assert.equal(fitPaths("needed by api", 60), "needed by api");
 });
