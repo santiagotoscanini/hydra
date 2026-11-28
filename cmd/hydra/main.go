@@ -128,8 +128,9 @@ Hydra's own commands:
                                  x-hydra.seed_from_main: remove its database and
                                  make it again from main's data, then apply the
                                  branch's migrations; waits until it is ready
-  hydra tunnel                   each public tunnel (x-hydra.tunnel), who holds it
-                                 and where its requests (webhooks) go now
+  hydra tunnel                   each public tunnel (x-hydra.tunnel), who holds it,
+                                 where its requests (webhooks) go now, and a check
+                                 through its address that they pass hydra-router
   hydra tunnel take [NAME]       in a worktree: its requests come here (in main:
                                  back to main); NAME only with more than one
   hydra tunnel release [NAME]    back to main, from anywhere. A worktree also

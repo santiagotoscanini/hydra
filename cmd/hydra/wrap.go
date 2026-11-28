@@ -111,6 +111,16 @@ func parsePC(args []string) pcArgs {
 	return a
 }
 
+// strayHints answer the commands people and agents guess, from other tools.
+var strayHints = map[string]string{
+	"logs":    "a process's output is hydra process logs NAME (hydra log is hydra's own journal)",
+	"wait":    "to wait for the stack to be ready, hydra status --wait",
+	"ps":      "hydra status shows what runs, and hydra process list every process",
+	"start":   "hydra up -D starts the stack; hydra process start NAME one process in it",
+	"restart": "hydra process restart NAME",
+	"stop":    "hydra down stops the stack; hydra process stop NAME one process in it",
+}
+
 // wrap runs process-compose for this checkout.
 func wrap(args []string) error {
 	pc, err := exec.LookPath("process-compose")
@@ -121,7 +131,10 @@ func wrap(args []string) error {
 	// process-compose takes no process names without up or run, and starts
 	// the whole stack for a word it doesn't know: refuse a typo instead.
 	if a.stray != "" {
-		return fmt.Errorf("unknown command %q (hydra --help lists them; to start some processes, hydra up %s)", a.stray, a.stray)
+		if hint, ok := strayHints[a.stray]; ok {
+			return fmt.Errorf("unknown command %q: %s", a.stray, hint)
+		}
+		return fmt.Errorf("unknown command %q (hydra --help lists them; to start a process by name, hydra up NAME)", a.stray)
 	}
 
 	co, err := gitx.Find(".")

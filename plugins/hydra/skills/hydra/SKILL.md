@@ -81,6 +81,10 @@ main's copy of its service unless a worktree took it. `hydra tunnel` (or the
   "this worktree holds tunnel …, and its api is …" means every webhook gets
   a 502: `hydra up -D api`, or release it. A `!` "webhooks through tunnel
   … go to …'s api" in a worktree that runs the api is only a note.
+- `checked  ✗ requests to … don't come through hydra-router` (from `hydra
+  tunnel` or `take`, exit 1): the tunnel goes straight to a service, so
+  taking it moves nothing. Tell the developer; it is their tunnel's or
+  main's config to change, not yours.
 
 ## When `hydra up` refuses, or `hydra status` shows a ✗
 

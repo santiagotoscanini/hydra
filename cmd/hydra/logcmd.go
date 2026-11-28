@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -453,6 +454,12 @@ func reportCommands(w io.Writer, recs []journal.Record) {
 				break
 			}
 		}
+		switch {
+		case name == "hydra router" || name == "hydra watch":
+			continue // they run as long as the stack: not commands anyone waits for
+		case slices.Contains(args, "--wait"):
+			name += " --wait" // waiting for a stack is not the time a look takes
+		}
 		a := by[name]
 		if a == nil {
 			a = &agg{}
@@ -485,6 +492,45 @@ func dur(ms float64) string {
 	return (time.Duration(ms) * time.Millisecond).Round(100 * time.Millisecond).String()
 }
 
+// processTrouble is what went wrong with a process, for a heading: "exited
+// 1", "health check failed", "killed".
+func processTrouble(r journal.Record) string {
+	switch n := int(r.Num("exit")); {
+	case n > 0:
+		return fmt.Sprintf("exited %d", n)
+	case r.Str("health") == "failed":
+		return "health check failed"
+	case n < 0:
+		return "killed"
+	}
+	return strings.ToLower(r.Str("status"))
+}
+
+// cameBack says that recs[i], a process event, was no failure: the process
+// didn't exit with an error of its own (killed by a restart the watcher or
+// hydra asked for, or a health check failing while it was busy) and was up
+// again within half a minute.
+func cameBack(recs []journal.Record, i int) bool {
+	r := recs[i]
+	if r.Kind != "process" || r.Num("exit") > 0 {
+		return false
+	}
+	for _, n := range recs[i+1:] {
+		if n.Time.Sub(r.Time) > 30*time.Second {
+			return false
+		}
+		if n.Kind == "process" && n.Checkout == r.Checkout && n.Str("name") == r.Str("name") {
+			if n.Num("exit") > 0 || n.Str("health") == "failed" {
+				return false
+			}
+			if n.Str("health") == "up" || n.Str("health") == "done" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func reportErrors(w io.Writer, recs []journal.Record) {
 	type agg struct {
 		n           int
@@ -494,13 +540,17 @@ func reportErrors(w io.Writer, recs []journal.Record) {
 	}
 	by := map[string]*agg{}
 	var order []string
-	for _, r := range recs {
-		if !bad(r) {
+	for i, r := range recs {
+		if !bad(r) || cameBack(recs, i) {
 			continue
 		}
 		key := r.Kind + ": " + firstLine(summary(r), "")
-		if r.Kind == "process" {
-			key = "process: " + r.Str("name") + " " + r.Str("health")
+		switch r.Kind {
+		case "command":
+			// The same command failing is one entry, whatever it took.
+			key = "command: hydra " + strings.Join(strs(r.Raw["args"]), " ")
+		case "process":
+			key = "process: " + r.Str("name") + " " + processTrouble(r)
 		}
 		a := by[key]
 		if a == nil {

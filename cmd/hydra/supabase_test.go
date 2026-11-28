@@ -283,3 +283,23 @@ func TestMigrationsThatDidNotApplyAreAProblem(t *testing.T) {
 		t.Errorf("fix = %q", pr.Fix)
 	}
 }
+
+// A database with migrations its files no longer have: the fix names them,
+// and the repair is always --local.
+func TestMigrationsGoneFix(t *testing.T) {
+	out := []string{
+		"Connecting to local database...",
+		"Remote migration versions not found in local migrations directory.",
+		"",
+		"Make sure your local git repo is up-to-date. If the error persists, try repairing the migration history table:",
+		"supabase migration repair --status reverted 20261125230903 20261125230904",
+	}
+	fix, ok := migrationsGoneFix(out, "supabase")
+	if !ok || !strings.Contains(fix, "has migrations 20261125230903 20261125230904 that supabase/migrations no longer has") ||
+		!strings.Contains(fix, "supabase migration repair --status reverted 20261125230903 20261125230904 --local, then hydra process restart supabase") {
+		t.Errorf("fix = %q, %v", fix, ok)
+	}
+	if _, ok := migrationsGoneFix([]string{"ERROR: syntax error at or near"}, "supabase"); ok {
+		t.Error("another failure is no missing migration")
+	}
+}

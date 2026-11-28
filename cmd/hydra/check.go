@@ -747,6 +747,9 @@ func localProblems(ms *mainState, ws *wtState) []problem {
 			pr := problem{Blocks: true,
 				Text: fmt.Sprintf("%s here %s.%s", name, p.Describe(), tail),
 				Fix:  "hydra process restart " + name}
+			if fix, ok := migrationsGoneFix(lines, name); ok {
+				pr.Fix = fix
+			}
 			if h := portTaken(st, sources[name], ws.Plan.Slot, lines); h != nil {
 				text, fix := takenBy(h, st, ws.Plan.Slot, name, ws.target.checkout.Root, "hydra process restart "+name)
 				pr.Text += text

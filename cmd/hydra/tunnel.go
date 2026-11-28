@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -171,6 +173,8 @@ func tunnelCmd(args []string) error {
 	action, rest := "", args
 	if len(args) > 0 && (args[0] == "take" || args[0] == "release") {
 		action, rest = args[0], args[1:]
+	} else if len(args) > 0 && (args[0] == "status" || args[0] == "show") {
+		rest = args[1:] // what agents type for the bare command
 	}
 	if len(rest) > 1 || (len(rest) == 1 && strings.HasPrefix(rest[0], "-")) {
 		return fmt.Errorf("usage: hydra tunnel [take|release] [NAME]")
@@ -184,7 +188,9 @@ func tunnelCmd(args []string) error {
 		if err != nil {
 			return err
 		}
-		printTunnels(os.Stdout, views)
+		if printTunnels(os.Stdout, views) {
+			return errBypassed
+		}
 		return nil
 	case "take":
 		name, err := tunnelName(st, rest)
@@ -219,7 +225,10 @@ func tunnelName(st *config.Stack, rest []string) (string, error) {
 	return rest[0], nil
 }
 
-func printTunnels(w io.Writer, views []tunnelView) {
+// printTunnels says where each tunnel goes, and checks through its public
+// address that it comes through hydra-router at all; true when one doesn't.
+func printTunnels(w io.Writer, views []tunnelView) bool {
+	bypassed := false
 	for i, v := range views {
 		if i > 0 {
 			fmt.Fprintln(w)
@@ -232,6 +241,54 @@ func printTunnels(w io.Writer, views []tunnelView) {
 		} else {
 			fmt.Fprintf(w, "  goes to  %s\n", v.Target)
 		}
+		if text, bad := checkTunnel(v); text != "" {
+			fmt.Fprintf(w, "  checked  %s\n", text)
+			bypassed = bypassed || bad
+		}
+	}
+	return bypassed
+}
+
+// errBypassed is the exit of a tunnel command that found the tunnel not
+// coming through hydra-router: what it printed says why.
+var errBypassed = errExit(1)
+
+// tunnelCheck asks the tunnel's public address for the path hydra-router
+// answers itself (router.TunnelCheckPath), and returns the copy the router
+// says requests go to: "" when something else answered. A tunnel pointed
+// at the service's own port reaches it directly, whoever holds the tunnel,
+// and nothing else can tell.
+var tunnelCheck = func(v tunnelView) (servedBy string, status int, err error) {
+	c := &http.Client{Timeout: 6 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := c.Get(strings.TrimRight(v.URL, "/") + router.TunnelCheckPath)
+	if ue, ok := err.(*url.Error); ok {
+		return "", 0, ue.Err // the address is in what the caller says
+	} else if err != nil {
+		return "", 0, err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	return resp.Header.Get(router.ServedByHeader), resp.StatusCode, nil
+}
+
+// checkTunnel is what tunnelCheck found, for a person ("" for a tunnel with
+// no url), and whether it found the tunnel going around hydra-router.
+func checkTunnel(v tunnelView) (string, bool) {
+	if v.URL == "" {
+		return "", false
+	}
+	by, code, err := tunnelCheck(v)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("couldn't ask %s whether it comes through hydra-router: %v", v.URL, err), false
+	case by == "" && code == 530:
+		return fmt.Sprintf("✗ %s isn't connected (HTTP 530 from the tunnel's provider): is main's %s process running?", v.URL, v.Name), true
+	case by == "":
+		return fmt.Sprintf("✗ requests to %s don't come through hydra-router: something else answered (HTTP %d), "+
+			"and gets them whoever holds the tunnel. The tunnel has to send them to localhost:%d, where hydra-router listens: "+
+			"point it there, or, when it can't change, give %s another port and make the tunnel's port the one it sends to", v.URL, code, v.Port, v.To), true
+	default:
+		return fmt.Sprintf("a request to %s came through hydra-router to %s", v.URL, by), false
 	}
 }
 
@@ -279,6 +336,12 @@ func takeTunnel(co gitx.Checkout, st *config.Stack, name string, w io.Writer) er
 		fmt.Fprintf(w, "this worktree runs no %s of its own: its requests reach main's (:%d), tagged as this worktree's, so routed services serve them here\n", v.To, v.port)
 	}
 	fmt.Fprintf(w, "give it back with: hydra tunnel release%s\n", nameArg(st, name))
+	if text, bad := checkTunnel(v); bad {
+		fmt.Fprintln(w, text)
+		return errBypassed
+	} else if text != "" {
+		fmt.Fprintln(w, "checked: "+text)
+	}
 	return nil
 }
 

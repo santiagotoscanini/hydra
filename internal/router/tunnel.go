@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -77,6 +78,13 @@ func (r *Router) tunnel(name string) http.Handler {
 		t, ok := r.state.Load().Tunnels[name]
 		if !ok {
 			fail(w, http.StatusNotFound, "no tunnel %s in the stack file any more", name)
+			return
+		}
+		if req.URL.Path == TunnelCheckPath {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set(ServedByHeader, t.Label)
+			w.Header().Set("Cache-Control", "no-store")
+			fmt.Fprintf(w, "hydra-router: tunnel %s reaches %s\n", name, t.Label)
 			return
 		}
 		if t.Down != "" {

@@ -1248,6 +1248,14 @@ tunnel:
   connections. So the developer points it once at `port`, and the router
   (main's, already running for routing) listens there and picks the copy
   per request. Moving the tunnel is writing a file; nothing restarts.
+- **Checked through the public address.** Pointing the tunnel at `port`
+  is a step hydra can't take or see, and until it's taken a take moves
+  nothing. So `hydra tunnel` and `take` request `url` +
+  `/__hydra/tunnel`, which the router answers itself (with
+  `X-Hydra-Served-By`) and never passes on, and say ✗ and exit 1 when the
+  answer lacks the header. When the target can't change at all, the
+  layout turns around: the API gets another port and the tunnel's `port`
+  is the one the tunnel already sends to.
 - **Who holds it** is `hydra-tunnels.json` in the shared `.git`, under an
   flock like the slots: tunnel name → `{root, branch, since}`, no entry for
   main. The router reads it with the routes on every reload (twice a
@@ -1660,7 +1668,11 @@ a JSON-lines file per local day, deleted after 30 days.
 - **`hydra report`** is for asking for help: one Markdown file with
   versions, `hydra status --all` and `hydra slots` now, usage and command
   timings summarised from the journal, what went wrong grouped with counts,
-  and the journal's lines (without the usage samples it summarised).
+  and the journal's lines (without the usage samples it summarised). A
+  failure is grouped by command (never by how long a run took) or by
+  process and how it failed; a process that didn't exit with an error of
+  its own (killed for a restart, a health check failing while busy) and was
+  up again within 30 seconds isn't one: those are the watcher at work.
 
 ## Open problems
 

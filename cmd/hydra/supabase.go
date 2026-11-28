@@ -253,8 +253,36 @@ func migrationsProblem(root, name string) *problem {
 		}
 		text += "\n    | " + l
 	}
-	return &problem{Blocks: true, Text: text,
+	pr := &problem{Blocks: true, Text: text,
 		Fix: "correct the migration file: hydra applies it when the file changes   (to rebuild this worktree's database from the files, losing its data: supabase db reset, typed at this worktree's root)"}
+	if fix, ok := migrationsGoneFix(strings.Split(string(data), "\n"), name); ok {
+		pr.Fix = fix
+	}
+	return pr
+}
+
+// repairLine is the command the Supabase CLI suggests when the database has
+// migrations its files don't: "supabase migration repair --status reverted
+// V1 V2".
+var repairLine = regexp.MustCompile(`supabase migration repair --status reverted((?: \d+)+)`)
+
+// migrationsGoneFix is the fix for a worktree's database that has applied
+// migrations supabase/migrations no longer has (renamed or dropped on the
+// branch since): the CLI then refuses to migrate at all, and restarting
+// changes nothing. The CLI's own advice leaves out --local, and run as it
+// says it would repair the linked project's history, not this database's.
+func migrationsGoneFix(lines []string, name string) (string, bool) {
+	all := strings.Join(lines, "\n")
+	if !strings.Contains(all, "Remote migration versions not found in local migrations directory") {
+		return "", false
+	}
+	versions := "<the versions it names>"
+	if m := repairLine.FindStringSubmatch(all); m != nil {
+		versions = strings.TrimSpace(m[1])
+	}
+	return fmt.Sprintf("this worktree's database has migrations %s that supabase/migrations no longer has (renamed or dropped on this branch), so none apply. "+
+		"Rebuild it from the files, losing its data: supabase db reset; or keep its data and forget them: supabase migration repair --status reverted %s --local, then hydra process restart %s. "+
+		"Both typed at this worktree's root; never without --local, which would change the linked project's history", versions, versions, name), true
 }
 
 // supabaseBranchNote is the problem to report when a worktree's Supabase

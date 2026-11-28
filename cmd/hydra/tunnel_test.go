@@ -26,6 +26,45 @@ processes:
     x-hydra: { tunnel: { to: api, port: 7079, url: https://hooks.example.com } }
 `
 
+func init() {
+	// No test asks the real address; TestTunnelCheck swaps in its own.
+	tunnelCheck = func(v tunnelView) (string, int, error) { return v.routerTunnel().Label, 200, nil }
+}
+
+// The check through the public address: through hydra-router, around it,
+// a tunnel that isn't connected, and one that can't be asked.
+func TestTunnelCheck(t *testing.T) {
+	defer func(f func(tunnelView) (string, int, error)) { tunnelCheck = f }(tunnelCheck)
+	v := tunnelView{Name: "tunnel", URL: "https://hooks.example.com", To: "api", Port: 7079}
+	cases := []struct {
+		by   string
+		code int
+		err  error
+		want string
+		bad  bool
+	}{
+		{"api@fix", 200, nil, "a request to https://hooks.example.com came through hydra-router to api@fix", false},
+		{"", 404, nil, "✗ requests to https://hooks.example.com don't come through hydra-router: something else answered (HTTP 404)", true},
+		{"", 530, nil, "✗ https://hooks.example.com isn't connected (HTTP 530 from the tunnel's provider): is main's tunnel process running?", true},
+		{"", 0, os.ErrDeadlineExceeded, "couldn't ask https://hooks.example.com whether it comes through hydra-router", false},
+	}
+	for _, c := range cases {
+		tunnelCheck = func(tunnelView) (string, int, error) { return c.by, c.code, c.err }
+		got, bad := checkTunnel(v)
+		if !strings.HasPrefix(got, c.want) || bad != c.bad {
+			t.Errorf("%q %d %v: %q %v", c.by, c.code, c.err, got, bad)
+		}
+	}
+	if got, _ := checkTunnel(tunnelView{Name: "tunnel", To: "api"}); got != "" {
+		t.Errorf("no url, nothing to ask: %q", got)
+	}
+	tunnelCheck = func(tunnelView) (string, int, error) { return "", 404, nil }
+	var out bytes.Buffer
+	if !printTunnels(&out, []tunnelView{v}) || !strings.Contains(out.String(), "  checked  ✗ requests to") {
+		t.Errorf("hydra tunnel said:\n%s", out.String())
+	}
+}
+
 // Where a tunnel's requests go: main's api; a holder's own api, with its
 // tag; main's api with the holder's tag when the holder runs none; and
 // nowhere when the holder's stack isn't running.

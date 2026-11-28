@@ -54,6 +54,11 @@ const (
 	// StatusPath, on a worktree's port for a routed service, is answered by
 	// the router itself: whether main's copy can serve that worktree.
 	StatusPath = "/__hydra/status"
+	// TunnelCheckPath, on a tunnel's port, is answered by the router itself
+	// with ServedByHeader, never passed on: hydra asks it through the
+	// tunnel's public address to tell whether the tunnel sends its requests
+	// here at all.
+	TunnelCheckPath = "/__hydra/tunnel"
 )
 
 // Service is a baseline service the router knows.

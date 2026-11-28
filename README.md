@@ -717,7 +717,10 @@ worktree. A holder that runs no copy of its own gets main's, with its
 worktree header, so routed services downstream serve it. When the holder's
 copy is down, the request gets a 502 that says so, never main's answer.
 `hydra tunnel release` gives it back; so do `hydra down` in the holder, an
-idle stop, and removing it. `hydra tunnel` says who holds it; `hydra status`,
+idle stop, and removing it. `hydra tunnel` says who holds it, and checks
+through the public address that requests really come through the router (when
+the tunnel's target can't change, give the API another port and make `port`
+the one the tunnel sends to); `hydra status`,
 `status --json` (`tunnels`), the dashboard (`⇄`, key `t`) and the MCP
 `tunnel` tool show and move it.
 

@@ -34,6 +34,11 @@ func TestTunnelGoesToWhoHoldsIt(t *testing.T) {
 	if code, body, _ := call(); code != 200 || body != `api@one saw "1"` {
 		t.Errorf("worktree one holds it: %d %q", code, body)
 	}
+	// The check is answered by the router, not passed on to the api.
+	if code, body, h := get(t, g.url(port)+strings.TrimPrefix(TunnelCheckPath, "/")); code != 200 ||
+		h.Get(ServedByHeader) != "api@one" || !strings.Contains(body, "hydra-router: tunnel hooks reaches api@one") {
+		t.Errorf("the tunnel check: %d %q (%s)", code, body, h.Get(ServedByHeader))
+	}
 
 	set(Tunnel{Target: mainAPI, Label: "api@main for two", Tag: "2", Holder: "two"})
 	if code, body, _ := call(); code != 200 || body != `api@main saw "2"` {

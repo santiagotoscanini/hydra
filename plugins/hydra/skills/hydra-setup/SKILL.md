@@ -110,6 +110,9 @@ Rules that keep it right:
   listens. Tell the developer the one step hydra can't do: point the
   tunnel at `http://localhost:PORT` (for cloudflared, the public hostname's
   service in Cloudflare's dashboard) instead of the service's own port.
+  When they can't change it, turn it around: give `to` another port and
+  make the tunnel's `port` the one the tunnel already sends to. `hydra
+  tunnel` checks which it is.
 
 ## 3. Ignore hydra's files
 
